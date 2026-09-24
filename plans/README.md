@@ -30,7 +30,7 @@ Read the entire plan before implementation. Execute its milestones in order, ret
 
 | Milestone | Deliverable | Depends on | Status |
 | --- | --- | --- | --- |
-| M0 | Verify hardware, app surfaces, model feasibility, and setup facts | — | IN PROGRESS — Spark2 and Local Studio verified; model provisioning started |
+| M0 | Verify hardware, app surfaces, model feasibility, and setup facts | — | PARTIAL — six models downloaded/hash checked; two reasoning recipes passed initial probes; speech/app/concurrency proof remains |
 | M1 | Establish workspace, contracts, test harness, and configuration | M0 | TODO |
 | M2 | Pair PC/Spark; implement task policy, persistence, and cancellation | M1 | TODO |
 | M3 | Prove local speech, speaker enrollment, intent gating, and playback | M2 | TODO |
@@ -59,4 +59,4 @@ Specific home-light integration, multiple-Spark distribution, additional desktop
 
 ## Completion boundary
 
-The plan is written; the application is not implemented or deployed. The owner authorized model setup through Local Studio on `ssh spark2`; that target is reachable and model provisioning has started. The earlier failed `spark` alias is superseded. No Avesra microphone, enrollment, desktop-automation, or end-to-end performance proof exists. Downloads and inference probes alone cannot satisfy the owner workflows.
+The plan is written; the application is not implemented or deployed. The owner authorized model setup through Local Studio on `ssh spark2`; that target is reachable, all six selected model packages are downloaded and hash checked, and reasoning recipe verification is recorded in the setup evidence. The earlier failed `spark` alias is superseded. The owner chose dedicated local speech/speaker drivers alongside Local Studio. No Avesra microphone, enrollment, desktop-automation, or end-to-end performance proof exists. Downloads and inference probes alone cannot satisfy the owner workflows.
