@@ -6,11 +6,16 @@
 
 ## 1. Status and purpose
 
+### Execution override: specs and code only
+
+On 2026-09-24, during execution, the owner instructed: "no tests here either, just specs and code!" This overrides every instruction below to add or run tests, test fixtures, acceptance runners/report verifiers, or a test-first workflow. Do not create test infrastructure or run automated test suites. Implement the specifications and application code, using compilation, formatting/lint/type checks, and direct runtime/UI inspection for validation. Commands and milestone requirements below that refer to automated tests describe the original plan and are superseded for this execution. Missing automated tests do not block independent implementation work. Actual unavailable hardware, service, or application capabilities still limit the affected integration; do not claim live behavior from static checks. The approved designs remain mandatory for UI work, and the owner workflows and live performance requirements remain product requirements whose unverified status must be reported honestly.
+
 - Priority: P1.
 - Category: product/architecture implementation.
 - Effort: L; multiple separately verifiable milestones, not a one-session scaffold.
 - Risk: HIGH for identity, desktop actions, and learned routines; MED for UI and driver plumbing.
 - Planned at: `eb0189ff64b276b4f1e2d850ab3cff6979189ad9`, 2026-09-24.
+- Execution reconciliation: `f085d25cc4e8b4ee59da7c6d7e710ce5d9ecc5ae`, 2026-09-24. Changes since the planning baseline contain only these plans, Spark setup evidence, and the approved design references; no application source overlaps. The owner requested `/improve execute 001` and explicitly requires matching the designs. Historical statements that implementation was not yet authorized describe the planning session, not this execution request. M0 evidence remains required, with unresolved integrations scoped as described in section 18.
 - Repository: https://github.com/Medalink/avesra.
 - Intended Windows checkout: `E:\Dev\Avesra`.
 - Initial deployment: `ssh spark2` with Local Studio and one Windows desktop client; optional client GPU acceleration is in scope.
@@ -95,7 +100,7 @@ The `owner-workflows` live suite is a release requirement and must record actual
 - No always-elevated agent, UAC bypass, game injection, game input automation, or anti-cheat workaround.
 - No invisible email/post sending, autonomous code changes through external agents, or automatic AI API fallback.
 - No raw screen/audio archive, general keylogger, ambient unknown-speaker transcript archive, or training from captured credentials.
-- No multi-Spark sharding, 5090 inference, new Home Assistant installation, mobile companion, remote Internet control, or plugin marketplace in this release.
+- No multi-Spark sharding, client GPU inference outside an explicitly enabled and qualified Accelerated profile, new Home Assistant installation, mobile companion, remote Internet control, or plugin marketplace in this release. Single-Spark and Gaming profiles must not retain client inference allocations; optional acceleration follows sections 5 and 15 (M8).
 
 ## 4. Architecture and ownership
 
@@ -576,6 +581,7 @@ For changed behavior, write contract tests first, observe the expected failing c
 **In scope:** desktop UI/Tauri capabilities, Windows app registry and audio controls, controller launch/volume tools, UI tests, `desktop_controls.rs`.
 
 1. Implement the compact/expanded overlay and settings/onboarding from section 7. Show observed runtime state; every disabled/unavailable service has an explanation.
+   - Owner-required visual fidelity: read `design/README.md`, `design/tailwind/input.css`, `design/mockups/Overlay.dc.html`, `design/mockups/OverlayStates.dc.html`, `design/mockups/Main.dc.html`, and `design/mockups/Settings*.dc.html` before UI implementation. Port the approved component geometry, typography, spacing, controls, colors, and signal styles rather than substituting a new dashboard. The reference settings window is 880 x 640 with a 200-pixel sidebar and 44-pixel title bar; the compact overlay reference is 440 x 124. Adapt for accessibility and DPI without changing the visual direction. Bundle fonts locally. Prototype simulations and its missing Design Component runtime are not application dependencies. Compare rendered application screenshots against the references for every overlay state, expanded panel, and all six settings sections; record differences and corrections in redacted verification evidence. Static class-name checks do not establish visual parity, and fixture-rendered states do not establish live runtime behavior.
 2. Make tray/hotkeys and local safety controls available while minimized or disconnected. Test focus, mixed DPI, window dragging, multiple monitors, and closing/reopening settings.
 3. Implement app discovery/alias selection and native volume read/set. Resolve and remember a named app and verify its window. Bound numeric/relative volume changes to the valid device range.
 4. Complete the first real sequence: recognize owner -> accept "open [app]" -> launch/verify -> speak result; then adjust volume and restore its prior value.
