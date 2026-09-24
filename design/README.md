@@ -52,4 +52,4 @@ The build scans `../mockups` for class names and is deterministic.
 
   In the app these come from the Rust audio pipeline, the speaker-identity lane and planner telemetry.
 
-Plan 001 section 7 still specifies "restrained cyan/teal accents". These mockups follow the owner's later direction (Ruby accent, grey surfaces, square corners). Update the plan if this direction is adopted.
+Plan 001 section 7 adopts this direction and points here as the reference for the overlay and settings.

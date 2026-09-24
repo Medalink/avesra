@@ -6,7 +6,7 @@ Repository: https://github.com/Medalink/avesra
 
 Planning baseline: `eb0189ff64b276b4f1e2d850ab3cff6979189ad9` on `main`, inspected on 2026-09-24; at that baseline the repository contained only an MIT `LICENSE`. The owner subsequently requested publication of these planning documents. `E:\Dev\Avesra` is now the repository checkout; no application source has been implemented.
 
-Model provisioning evidence and remaining serving gaps: [Spark2 setup record](spark2-model-setup.md). The main plan includes the owner's later requests for optional client GPU acceleration and instrumentation throughout the pipeline.
+Model provisioning evidence and remaining serving gaps: [Spark2 setup record](spark2-model-setup.md). Approved UI direction and interactive mockups: [design](../design/README.md) (simulated prototype, not application code). The main plan includes the owner's later requests for optional client GPU acceleration and instrumentation throughout the pipeline.
 
 ## Owner-defined completion tests
 

@@ -60,7 +60,7 @@ Read-only PC GPU discovery on the same date reported NVIDIA GeForce RTX 5090, 32
 | Cloud AI | Avesra's inference stays local except optional Jev. Application typing does not become an assistant-side cloud model integration. |
 | Lights | Defer the specific integration until after voice and PC/browser control. |
 
-The Rust/Tauri/Svelte design below is the advisor's implementation recommendation, consistent with the requested Rust discussion and Tailwind mockups. Model selections and performance budgets are candidates to validate, not owner-supplied facts or measured promises.
+The Rust/Tauri/Svelte design below is the advisor's implementation recommendation, consistent with the requested Rust discussion and the approved Tailwind mockups in `design/`. Model selections and performance budgets are candidates to validate, not owner-supplied facts or measured promises.
 
 ### Initial workflows
 
@@ -248,9 +248,11 @@ Allow the owner to interrupt speaking. Stop local output first, cancel upstream 
 
 ## 7. Desktop interface and onboarding
 
-Implement a small borderless, draggable, optional always-on-top overlay with a system-tray entry. Use dark charcoal surfaces and restrained cyan/teal accents, clear typography and accessible contrast. This is Avesra's standalone design, not an Iris screen. Keep the interface compact; technical details belong in settings. Respect reduced motion and mixed-DPI/multi-monitor coordinates.
+Implement a small borderless, draggable, optional always-on-top overlay with a system-tray entry, following the approved mockups in `design/` (see `design/README.md`). Visual direction: dark only, neutral grey surfaces (`#121214` to `#26262a`), square corners, Geist and Geist Mono, a Ruby accent (`#E0115F`; filled controls `#960B3F` for readable white text), and accessible contrast. Reserve amber for input-off, unavailable and degraded states and red for stop, error and disconnected. This is Avesra's standalone design, not an Iris screen. Keep the interface compact; technical details belong in settings. Respect reduced motion and mixed-DPI/multi-monitor coordinates.
 
-The pill shows real microphone/playback levels, assistant state, mic/deafen/settings/minimize controls, and Stop while a task is active. Distinguish passive listening, recognizing, accepted request, thinking, speaking, working, muted, paused, and disconnected. Do not beep for every unknown speaker or fabricate numeric identity certainty.
+The compact overlay is transparent and built around one live signal bar driven by real microphone/playback levels and lane events, with three distinct renderings: human audio as a filled mirrored waveform colored by transient source classification (owner blue `#3A5DD8`, other people green `#8EDE4A`, background grey); thinking as a gamma-style trace fused with stepped digital activity; and Avesra's speech as a ribbon of synthetic strands, red to Ruby. Working, muted/deafened, paused, and disconnected use their own flat indicators. Source coloring is a live display only: it creates no retained record of unknown speakers and is neither an identity decision nor a permission. Provide a non-WebGL fallback and a static reduced-motion frame, and stop rendering while hidden.
+
+Distinguish passive listening, recognizing, accepted request, thinking, speaking, working, muted, paused, and disconnected, including for screen readers. Passive, recognizing, accepted, thinking, and speaking show no visible text; working, muted, deafened, paused, and disconnected show a short label. Mic/deafen/settings/minimize controls appear on hover or keyboard focus, or while switched on; Stop remains visible while a task is active. Do not beep for every unknown speaker or fabricate numeric identity certainty.
 
 Expansion shows the current request, concise streaming response, active task/progress, and recent meaningful events. It is not a required full chat dashboard. Clicking a learning/action event opens its short explanation and source. A local text input is useful when muted or recognition needs recovery.
 
@@ -477,6 +479,7 @@ docs/
   security.md / verification.md / operations.md / learning.md
 plans/
   README.md / 001-single-spark-assistant.md
+design/                  # Existing: approved UI mockups + Tailwind source (reference only, not shipped)
 ```
 
 Prefer concrete modules within these crates over a crate per conceptual lane. The contract crate has no Tauri, Windows, or model-runtime dependencies. The server/core must build on Linux ARM64 without desktop libraries; Windows modules are target-gated. The desktop shell calls typed Rust commands, not arbitrary frontend shell execution.
