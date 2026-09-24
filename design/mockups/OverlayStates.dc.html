@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Overlay states</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./avesra.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>body{margin:0;background:#121214}</style>
+</helmet>
+<div class="flex flex-col gap-12 bg-[#121214] font-sans text-zinc-100 antialiased" style="width: 1520px; height: 2300px; box-sizing: border-box; padding: 48px;">
+  <div class="flex items-end justify-between gap-8">
+    <div class="flex flex-col gap-2">
+      <span class="font-mono text-[11px] tracking-[0.12em] text-av-400 uppercase">Avesra · compact overlay</span>
+      <h1 class="m-0 text-[30px] font-semibold tracking-[-0.02em] uppercase font-mono text-zinc-50">Overlay states</h1>
+      <p class="m-0 max-w-[760px] text-[14px] leading-[21px] text-zinc-400">A transparent overlay built around one live signal. Three WebGL styles tell sources apart at a glance: human audio is a smooth filled waveform (blue for you, green for other people, grey for background), thinking fuses gamma-wave bursts with stepped digital compute, and Avesra’s speech is a twisting ribbon of synthetic strands, red to Ruby. Passive, recognizing, accepted, thinking and speaking show no text; small icon controls appear on hover, when switched on, or (Stop) while a task runs.</p>
+    </div>
+    <div class="flex items-center gap-4 text-[12px] text-zinc-400">
+      <span class="flex items-center gap-2"><span class="size-2 bg-[#3a5dd8]"></span>You</span>
+      <span class="flex items-center gap-2"><span class="size-2 bg-[#8ede4a]"></span>Other people</span>
+      <span class="flex items-center gap-2"><span class="size-2 bg-zinc-500"></span>Background</span>
+      <span class="flex items-center gap-2"><span class="size-2 bg-av-500"></span>Avesra</span>
+      <span class="flex items-center gap-2"><span class="size-2 bg-amber-300"></span>Input off</span>
+            <span class="flex items-center gap-2"><span class="size-2 ring-1 ring-red-500"></span>Disconnected</span>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-2 gap-x-10 gap-y-9">
+    <sc-for list="{{cells}}" as="c" hint-placeholder-count="8">
+      <div class="flex flex-col gap-3">
+        <div class="flex items-baseline gap-3">
+          <span class="font-mono text-[11px] text-zinc-400">{{c.n}}</span>
+          <span class="text-[14px] font-semibold text-zinc-50">{{c.name}}</span>
+          <span class="min-w-0 flex-1 text-[12.5px] leading-[18px] text-zinc-400">{{c.desc}}</span>
+        </div>
+        <div class="{{c.tile}}">
+          <dc-import name="Overlay" preset="{{c.preset}}" frozen="{{yes}}" embedded="{{yes}}" hint-size="440px,124px"></dc-import>
+        </div>
+      </div>
+    </sc-for>
+  </div>
+
+  <div class="flex flex-col gap-5">
+    <div class="flex items-baseline gap-4">
+      <h2 class="m-0 text-[20px] font-semibold tracking-[-0.01em] text-zinc-50">Expanded</h2>
+      <p class="m-0 text-[13px] text-zinc-400">Click the voice bar to open it: latest request, a short reply, the current task with real steps, and recent learning and action events you can open for their source.</p>
+    </div>
+    <div class="grid grid-cols-3 gap-10">
+      <sc-for list="{{expanded}}" as="e" hint-placeholder-count="3">
+        <div class="flex flex-col gap-3">
+          <div class="flex items-baseline gap-3">
+            <span class="text-[14px] font-semibold text-zinc-50">{{e.name}}</span>
+            <span class="text-[12.5px] text-zinc-400">{{e.desc}}</span>
+          </div>
+          <div class="av-grid-bg flex justify-center px-0 pt-6 pb-8 ring-1 ring-white/[0.06]" style="height: 740px; box-sizing: border-box;">
+            <dc-import name="Overlay" preset="{{e.preset}}" frozen="{{yes}}" embedded="{{yes}}" start-expanded="{{yes}}" hint-size="440px,560px"></dc-import>
+          </div>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1520,"height":2300}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const tile = 'av-grid-bg flex h-[160px] items-center justify-center ring-1 ring-white/[0.06]';
+    const defs = [
+      ['idle', 'Passive listening', 'Always on after enrollment, no wake word. Colors whoever it hears: you, other people or background. Nothing is kept.'],
+      ['recognizing', 'Recognizing', 'Your voice, not yet accepted: identity and intent are still being checked. Partial text can’t trigger actions.'],
+      ['accepted', 'Accepted', 'Clearly directed at Avesra by an enrolled voice. The Ruby centre line lights; the request is now a task.'],
+      ['thinking', 'Thinking', 'Planning. Gamma-wave bursts fused with a stepped digital signal and compute bits, in Ruby.'],
+      ['speaking', 'Speaking', 'Avesra’s synthetic voice: a twisting ribbon of strands, red to Ruby, whose width follows the reply.'],
+      ['working', 'Working', 'Running an authorized task. The bar splits into its five steps; a small Stop stays visible.'],
+      ['muted', 'Muted', 'Capture stopped and unaccepted speech discarded. Accepted tasks continue; type a request instead.'],
+      ['paused', 'Paused', 'Listening, observation and new actions on hold; the task waits at a safe boundary.'],
+      ['disconnected', 'Disconnected', 'Spark2 is unreachable. Local mute and Stop still work; nothing queued runs late.']
+    ];
+    return {
+      yes: true,
+      cells: defs.map((d, i) => ({ n: '0' + (i + 1), preset: d[0], name: d[1], desc: d[2], tile: tile })),
+      expanded: [
+        { preset: 'working', name: 'Working', desc: 'Reading message 6 of 10. Progress is per step.' },
+        { preset: 'speaking', name: 'Speaking', desc: 'The answer names its source message.' },
+        { preset: 'disconnected', name: 'Disconnected', desc: 'Says what didn’t happen, and what’s safe to repeat.' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

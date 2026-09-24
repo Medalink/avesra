@@ -1,0 +1,12 @@
+{
+  "name": "avesra-design-mockups",
+  "private": true,
+  "description": "Builds the shared stylesheet for the Avesra design mockups in ../mockups.",
+  "scripts": {
+    "build": "tailwindcss -i input.css -o ../mockups/avesra.css --minify"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "4.3.3",
+    "tailwindcss": "4.3.3"
+  }
+}

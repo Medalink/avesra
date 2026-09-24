@@ -1,0 +1,124 @@
+{
+  "v": 3,
+  "attachments": {},
+  "boards": {
+    "Main.dc.html": {
+      "h": 940,
+      "is_interactive": true,
+      "title": "Desktop showcase",
+      "w": 1440,
+      "x": 0,
+      "y": 0
+    },
+    "Overlay.dc.html": {
+      "h": 760,
+      "is_interactive": true,
+      "title": "Overlay component",
+      "w": 480,
+      "x": 1520,
+      "y": 0
+    },
+    "OverlayStates.dc.html": {
+      "h": 2300,
+      "title": "Overlay states",
+      "w": 1520,
+      "x": 0,
+      "y": 1360
+    },
+    "Settings.dc.html": {
+      "h": 640,
+      "is_interactive": true,
+      "title": "Settings · Audio & Voice",
+      "w": 880,
+      "x": 0,
+      "y": 4080
+    },
+    "SettingsAwareness.dc.html": {
+      "h": 640,
+      "is_interactive": true,
+      "title": "Settings · Observation & Actions",
+      "w": 880,
+      "x": 960,
+      "y": 4840
+    },
+    "SettingsMemory.dc.html": {
+      "h": 640,
+      "is_interactive": true,
+      "title": "Settings · Memory & Diagnostics",
+      "w": 880,
+      "x": 1920,
+      "y": 4840
+    },
+    "SettingsModels.dc.html": {
+      "h": 640,
+      "is_interactive": true,
+      "title": "Settings · Models & Drivers",
+      "w": 880,
+      "x": 960,
+      "y": 4080
+    },
+    "SettingsProfiles.dc.html": {
+      "h": 640,
+      "is_interactive": true,
+      "title": "Settings · Profiles & Machines",
+      "w": 880,
+      "x": 1920,
+      "y": 4080
+    },
+    "SettingsPeople.dc.html": {
+      "h": 640,
+      "is_interactive": true,
+      "title": "Settings · People & Voice ID",
+      "w": 880,
+      "x": 0,
+      "y": 4840
+    }
+  },
+  "createdOnFiles": {
+    "at": "2026-09-24T22:45:00Z",
+    "v": 1
+  },
+  "designSystems": [],
+  "launch": {
+    "view": "canvas"
+  },
+  "notes": {
+    "t_overlay": {
+      "kind": "title1",
+      "maxW": 1520,
+      "text": "Compact overlay",
+      "w": 240,
+      "x": 0,
+      "y": 1060
+    },
+    "t_settings": {
+      "kind": "title1",
+      "maxW": 2800,
+      "text": "Settings window",
+      "w": 240,
+      "x": 0,
+      "y": 3780
+    },
+    "t_showcase": {
+      "kind": "title1",
+      "maxW": 2000,
+      "text": "Avesra · desktop showcase",
+      "w": 240,
+      "x": 0,
+      "y": -300
+    }
+  },
+  "order": [
+    "Main.dc.html",
+    "Overlay.dc.html",
+    "OverlayStates.dc.html",
+    "Settings.dc.html",
+    "SettingsModels.dc.html",
+    "SettingsProfiles.dc.html",
+    "SettingsPeople.dc.html",
+    "SettingsAwareness.dc.html",
+    "SettingsMemory.dc.html"
+  ],
+  "pages": [],
+  "title": "Avesra Desktop Assistant"
+}

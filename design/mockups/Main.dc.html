@@ -1,0 +1,366 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Avesra desktop showcase</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./avesra.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>body{margin:0;background:#121214}</style>
+</helmet>
+<div class="{{rootCls}}" style="width: 1440px; height: 940px; box-sizing: border-box; padding: 20px 24px 24px;">
+
+  <!-- Showcase header -->
+  <div class="flex h-10 items-center justify-between">
+    <div class="flex items-center gap-3">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" class="text-av-400" aria-hidden="true"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.6"></circle><path d="M8.5 10v4M12 7.5v9M15.5 10v4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path></svg>
+      <span class="text-[15px] font-semibold tracking-[-0.01em] text-zinc-50">Avesra</span>
+      <span class="h-4 w-px bg-white/15"></span>
+      <span class="text-[13px] text-zinc-400">Desktop showcase · Owner workflow OW2: “Check my latest 10 emails…”</span>
+    </div>
+    <span class="font-mono text-[11px] text-zinc-400">Simulated · inference on Spark2 · no mic, capture, commands or AI</span>
+  </div>
+
+  <div class="mt-4 flex gap-6" style="height: 836px;">
+
+    <!-- Simulated desktop -->
+    <div class="av-grid-bg relative shrink-0 overflow-hidden ring-1 ring-white/10" style="width: 1064px; height: 836px;">
+
+      <sc-if value="{{isMail}}" hint-placeholder-val="{{ true }}">
+        <div class="absolute flex flex-col overflow-hidden bg-[#26262a] text-zinc-100 shadow-[0_18px_50px_-12px_rgba(0,0,0,0.8)] ring-1 ring-white/10" style="left: 28px; top: 24px; width: 1008px; height: 736px;">
+          <div class="flex h-9 shrink-0 items-center gap-2 bg-[#1c1c1f] px-3 text-[12px] text-zinc-400">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m3.5 6 8.5 7 8.5-7"></path></svg>
+            <span>Inbox — Brave (Personal)</span>
+            <span class="flex-1"></span>
+            <span class="flex items-center gap-5 pr-1 text-zinc-500" aria-hidden="true">
+              <svg width="10" height="10" viewBox="0 0 10 10"><path d="M1 5h8" stroke="currentColor" stroke-width="1.2"></path></svg>
+              <svg width="10" height="10" viewBox="0 0 10 10"><rect x="1" y="1" width="8" height="8" fill="none" stroke="currentColor" stroke-width="1.2"></rect></svg>
+              <svg width="10" height="10" viewBox="0 0 10 10"><path d="M1 1l8 8M9 1 1 9" stroke="currentColor" stroke-width="1.2"></path></svg>
+            </span>
+          </div>
+          <div class="flex min-h-0 flex-1">
+            <div class="flex w-[176px] shrink-0 flex-col gap-1 border-r border-white/[0.06] bg-[#232327] p-3 text-[13px]">
+              <span class="mb-2 inline-flex h-8 items-center justify-center bg-av-700 text-[12.5px] font-medium text-white">New message</span>
+              <span class="flex h-8 items-center justify-between bg-white/[0.06] px-2.5 font-semibold text-zinc-100">Inbox <span class="font-mono text-[12px] text-av-300">3</span></span>
+              <span class="flex h-8 items-center justify-between px-2.5 text-zinc-400">Drafts <span class="{{draftsCls}}">{{draftsCount}}</span></span>
+              <span class="flex h-8 items-center px-2.5 text-zinc-400">Sent</span>
+              <span class="flex h-8 items-center px-2.5 text-zinc-400">Archive</span>
+              <span class="flex h-8 items-center px-2.5 text-zinc-400">Junk</span>
+            </div>
+            <div class="flex w-[300px] shrink-0 flex-col border-r border-white/[0.06] bg-[#1e1e22]">
+              <div class="p-3"><span class="flex h-8 items-center bg-white/[0.04] px-3 text-[12.5px] text-zinc-500">Search mail</span></div>
+              <sc-for list="{{mails}}" as="m" hint-placeholder-count="6">
+                <div class="{{m.cls}}">
+                  <div class="flex items-baseline justify-between gap-2">
+                    <span class="{{m.fromCls}}">{{m.from}}</span>
+                    <span class="shrink-0 text-[11px] text-zinc-400">{{m.time}}</span>
+                  </div>
+                  <span class="{{m.subjCls}}">{{m.subject}}</span>
+                  <span class="truncate text-[12px] text-zinc-400">{{m.preview}}</span>
+                </div>
+              </sc-for>
+            </div>
+            <div class="flex min-w-0 flex-1 flex-col gap-5 p-8">
+              <div class="flex flex-col gap-2">
+                <h2 class="m-0 text-[20px] font-semibold tracking-[-0.01em] text-zinc-50">Delivered: your package was left at the front door</h2>
+                <div class="flex items-center gap-3 text-[12.5px] text-zinc-400">
+                  <span class="grid size-8 place-items-center bg-zinc-700 text-[12px] font-semibold text-zinc-200">NO</span>
+                  <div class="flex flex-col">
+                    <span class="font-medium text-zinc-100">Northwind Outfitters</span>
+                    <span>To: you · Today, 11:02 AM</span>
+                  </div>
+                </div>
+              </div>
+              <div class="flex max-w-[460px] flex-col gap-3.5 text-[14px] leading-[22px] text-zinc-300">
+                <p class="m-0">Your order #NW-40218 was delivered at 10:58 AM.</p>
+                <p class="m-0">Left at: front door. A photo of the delivery is available in your order history.</p>
+                <p class="m-0">Items: Trail pack 30L (1).</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{isEditor}}" hint-placeholder-val="{{ false }}">
+        <div class="absolute flex flex-col overflow-hidden bg-[#1f2023] shadow-[0_18px_50px_-12px_rgba(0,0,0,0.7)] ring-1 ring-white/10" style="left: 28px; top: 24px; width: 1008px; height: 736px;">
+          <div class="flex h-9 shrink-0 items-center gap-2 bg-[#18191b] px-3 text-[12px] text-zinc-400">
+            <span>lanes.rs — avesra-core</span>
+            <span class="flex-1"></span>
+            <span class="flex items-center gap-5 pr-1 text-zinc-500" aria-hidden="true">
+              <svg width="10" height="10" viewBox="0 0 10 10"><path d="M1 5h8" stroke="currentColor" stroke-width="1.2"></path></svg>
+              <svg width="10" height="10" viewBox="0 0 10 10"><rect x="1" y="1" width="8" height="8" fill="none" stroke="currentColor" stroke-width="1.2"></rect></svg>
+              <svg width="10" height="10" viewBox="0 0 10 10"><path d="M1 1l8 8M9 1 1 9" stroke="currentColor" stroke-width="1.2"></path></svg>
+            </span>
+          </div>
+          <div class="flex min-h-0 flex-1">
+            <div class="flex w-[200px] shrink-0 flex-col gap-1 border-r border-white/[0.06] bg-[#1a1b1d] p-3 font-mono text-[12px] text-zinc-400">
+              <span class="text-zinc-500">src/</span>
+              <span class="pl-3">drivers/</span>
+              <span class=" bg-white/[0.06] pl-3 text-zinc-100">lanes.rs</span>
+              <span class="pl-3">profiles.rs</span>
+              <span class="pl-3">overlay.rs</span>
+              <span class="pl-3">main.rs</span>
+            </div>
+            <div class="flex min-w-0 flex-1 gap-5 p-6 font-mono text-[13px] leading-[22px]">
+              <div class="flex flex-col text-right text-zinc-600" aria-hidden="true">
+                <span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span><span>10</span><span>11</span><span>12</span><span>13</span>
+              </div>
+              <div class="flex flex-col whitespace-pre text-zinc-300">
+                <span><span class="text-av-400">use</span> crate::drivers::{DriverId, Registry};</span>
+                <span> </span>
+                <span><span class="text-zinc-500">/// Assigns a driver, model and machine to one lane.</span></span>
+                <span><span class="text-red-400">#[tauri::command]</span></span>
+                <span><span class="text-av-400">pub async fn</span> <span class="text-av-300">set_lane</span>(</span>
+                <span>    state: State&lt;'_, Registry&gt;,</span>
+                <span>    lane: Lane,</span>
+                <span>    driver: DriverId,</span>
+                <span>) -&gt; Result&lt;LaneHealth, LaneError&gt; {</span>
+                <span>    <span class="text-av-400">let mut</span> reg = state.lock().<span class="text-av-400">await</span>;</span>
+                <span>    reg.check_compatible(lane, &amp;driver)?;</span>
+                <span>    reg.assign(lane, driver).<span class="text-av-400">await</span></span>
+                <span>}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- Settings window -->
+      <sc-if value="{{settingsOpen}}" hint-placeholder-val="{{ false }}">
+        <div class="absolute z-20 shadow-[0_30px_80px_-20px_rgba(0,0,0,0.8)]" style="left: 92px; top: 60px; width: 880px; height: 640px;">
+          <dc-import name="Settings" embedded="{{yes}}" section="{{section}}" sec-n="{{secN}}" on-close="{{closeSettings}}" reduced-motion="{{reduced}}" hint-size="880px,640px"></dc-import>
+        </div>
+      </sc-if>
+
+      <!-- Floating overlay -->
+      <div class="{{ovWrapCls}}" style="left: {{pos.x}}px; top: {{pos.y}}px;">
+        <dc-import name="Overlay" preset="idle" embedded="{{yes}}" hidden="{{minimized}}" command="{{cmd}}" on-event="{{onOverlay}}" reduced-motion="{{reduced}}" hint-size="440px,124px"></dc-import>
+      </div>
+
+      <!-- Taskbar -->
+      <div class="absolute inset-x-0 bottom-0 z-10 flex h-[52px] items-center gap-1.5 border-t border-white/[0.06] bg-[#151517]/95 px-3 backdrop-blur">
+        <span class="grid size-9 place-items-center text-zinc-300" aria-hidden="true">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="4"></rect></svg>
+        </span>
+        <span class="flex h-8 w-44 items-center gap-2 bg-white/[0.06] px-3 text-[12px] text-zinc-400">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>
+          Search
+        </span>
+        <span class="ml-2 flex items-center gap-1" aria-hidden="true">
+          <span class="{{mailTaskCls}}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m3.5 6 8.5 7 8.5-7"></path></svg></span>
+          <span class="grid size-9 place-items-center text-zinc-400"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg></span>
+          <span class="grid size-9 place-items-center text-zinc-400"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3c2.5 2.7 2.5 15.3 0 18M12 3c-2.5 2.7-2.5 15.3 0 18"></path></svg></span>
+          <span class="{{codeTaskCls}}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m8 7-5 5 5 5M16 7l5 5-5 5"></path></svg></span>
+        </span>
+        <span class="flex-1"></span>
+
+        <div class="relative flex items-center gap-1">
+          <sc-if value="{{minimized}}" hint-placeholder-val="{{ false }}">
+            <div class="av-rise absolute right-0 bottom-[46px] flex w-[248px] flex-col gap-0.5 bg-[#1f1f23] px-3 py-2.5 shadow-[0_12px_30px_-8px_rgba(0,0,0,0.7)] ring-1 ring-white/10">
+              <span class="text-[12.5px] font-medium text-zinc-100">Avesra is hidden, still {{trayState}}</span>
+              <span class="text-[11.5px] leading-4 text-zinc-400">Minimizing doesn’t change what it’s doing. Click the tray icon to show the overlay.</span>
+            </div>
+          </sc-if>
+          <button type="button" class="relative grid size-9 cursor-pointer place-items-center text-zinc-200 transition-colors hover:bg-white/[0.08] focus-visible:outline-2 focus-visible:outline-av-500" onClick="{{trayClick}}" aria-label="{{trayLabel}}" title="{{trayLabel}}">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.7"></circle><path d="M8.5 10v4M12 7.5v9M15.5 10v4" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"></path></svg>
+            <span class="{{trayDotCls}}"></span>
+          </button>
+          <span class="grid size-9 place-items-center text-zinc-400" aria-hidden="true"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M2 9a15 15 0 0 1 20 0M5.5 12.5a10 10 0 0 1 13 0M9 16a5 5 0 0 1 6 0"></path><circle cx="12" cy="19.5" r="0.8" fill="currentColor"></circle></svg></span>
+          <span class="grid size-9 place-items-center text-zinc-400" aria-hidden="true"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H3v6h3l5 4z"></path><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"></path></svg></span>
+          <span class="flex flex-col items-end px-2 text-[11.5px] leading-4 text-zinc-300"><span>2:16 PM</span><span class="text-zinc-400">9/24/2026</span></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Prototype controls (not part of the product) -->
+    <aside class="flex min-w-0 flex-1 flex-col gap-4 overflow-hidden border border-dashed border-white/[0.16] bg-[#18181a] p-4" aria-label="Prototype controls">
+      <div class="flex items-start justify-between gap-2">
+        <div class="flex flex-col gap-0.5">
+          <span class="font-mono text-[12.5px] font-medium text-zinc-100">Prototype controls</span>
+          <span class="text-[11.5px] leading-4 text-zinc-400">Drive the simulation. Not part of Avesra’s interface.</span>
+        </div>
+        <span class="av-chip bg-white/[0.04] font-mono text-zinc-300 ring-white/15">demo</span>
+      </div>
+
+      <div class="flex flex-col gap-2">
+        <span class="font-mono text-[10.5px] tracking-[0.08em] text-zinc-400 uppercase">Assistant state</span>
+        <div class="grid grid-cols-2 gap-1.5">
+          <sc-for list="{{states}}" as="st" hint-placeholder-count="8">
+            <button type="button" class="av-demo-btn justify-start" aria-pressed="{{st.on}}" onClick="{{st.pick}}">
+              <span class="{{st.dot}}"></span>{{st.label}}
+            </button>
+          </sc-for>
+        </div>
+      </div>
+
+      <div class="flex flex-col gap-1">
+        <span class="font-mono text-[10.5px] tracking-[0.08em] text-zinc-400 uppercase">Controls</span>
+        <sc-for list="{{toggles}}" as="tg" hint-placeholder-count="6">
+          <div class="flex h-8 items-center justify-between gap-2">
+            <span class="text-[12.5px] text-zinc-300">{{tg.label}}</span>
+            <button type="button" role="switch" class="av-switch group" aria-checked="{{tg.on}}" aria-label="{{tg.label}}" onClick="{{tg.toggle}}" disabled="{{tg.disabled}}"><span class="av-knob group-aria-checked:translate-x-[18px]"></span></button>
+          </div>
+        </sc-for>
+      </div>
+
+      <div class="flex flex-col gap-2">
+        <span class="font-mono text-[10.5px] tracking-[0.08em] text-zinc-400 uppercase">Task simulation</span>
+        <div class="grid grid-cols-2 gap-1.5">
+          <button type="button" class="av-demo-btn" onClick="{{startTask}}">Say OW2 request</button>
+          <button type="button" class="av-demo-btn" onClick="{{completeTask}}" disabled="{{cantComplete}}">Complete now</button>
+          <button type="button" class="av-demo-btn" onClick="{{dropConn}}" disabled="{{offline}}">Drop connection</button>
+          <button type="button" class="av-demo-btn" onClick="{{reconnect}}" disabled="{{online}}">Reconnect</button>
+        </div>
+        <button type="button" class="av-demo-btn" onClick="{{resetAll}}">Reset scenario</button>
+      </div>
+
+      <div class="flex flex-col gap-2">
+        <span class="font-mono text-[10.5px] tracking-[0.08em] text-zinc-400 uppercase">Open settings at</span>
+        <div class="grid grid-cols-3 gap-1.5">
+          <sc-for list="{{jumps}}" as="j" hint-placeholder-count="6">
+            <button type="button" class="av-demo-btn" aria-pressed="{{j.on}}" onClick="{{j.go}}">{{j.label}}</button>
+          </sc-for>
+        </div>
+      </div>
+
+      <div class="flex flex-col gap-2">
+        <span class="font-mono text-[10.5px] tracking-[0.08em] text-zinc-400 uppercase">Environment</span>
+        <div class="grid grid-cols-2 gap-1.5">
+          <button type="button" class="av-demo-btn" aria-pressed="{{isMail}}" onClick="{{setMail}}">Mail app</button>
+          <button type="button" class="av-demo-btn" aria-pressed="{{isEditor}}" onClick="{{setEditor}}">Code editor</button>
+        </div>
+        <div class="flex h-8 items-center justify-between gap-2">
+          <span class="text-[12.5px] text-zinc-300">Reduce motion</span>
+          <button type="button" role="switch" class="av-switch group" aria-checked="{{reduced}}" aria-label="Reduce motion" onClick="{{toggleReduced}}"><span class="av-knob group-aria-checked:translate-x-[18px]"></span></button>
+        </div>
+      </div>
+
+      <span class="flex-1"></span>
+      <p class="m-0 text-[11px] leading-4 text-zinc-400">Hover the overlay to reveal its controls. Drag the voice bar to move it; click it to expand. Everything here is simulated; nothing listens, watches or acts.</p>
+    </aside>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":940}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = {
+      cmd: { n: 0 },
+      snap: { disp: 'idle', activity: 'idle', muted: false, deafened: false, paused: false, connected: true, expanded: false, taskStatus: 'none' },
+      pos: { x: 596, y: 60 }, minimized: false, settingsOpen: false, section: 'audio', secN: 0,
+      backdrop: 'mail', reduced: false
+    };
+  }
+
+  send(type, value) {
+    this.setState({ cmd: { n: this.state.cmd.n + 1, type: type, value: value } });
+  }
+
+  openSettings(section) {
+    this.setState({ settingsOpen: true, section: section, secN: this.state.secN + 1 });
+  }
+
+  onOverlay(type, payload) {
+    if (type === 'state') this.setState({ snap: payload });
+    else if (type === 'move') {
+      const p = this.state.pos;
+      const x = Math.max(8, Math.min(1064 - 448, p.x + payload.dx));
+      const y = Math.max(8, Math.min(836 - 52 - 132, p.y + payload.dy));
+      this.setState({ pos: { x: x, y: y } });
+    }
+    else if (type === 'settings') this.openSettings('audio');
+    else if (type === 'minimize') this.setState({ minimized: true });
+  }
+
+  renderVals() {
+    const s = this.state;
+    const sn = s.snap;
+    const names = {
+      idle: 'passively listening', recognizing: 'recognizing', accepted: 'accepted', thinking: 'thinking', speaking: 'speaking', working: 'working',
+      muted: 'muted', deafened: 'deafened', paused: 'paused', disconnected: 'disconnected'
+    };
+    const dotTone = {
+      idle: 'bg-zinc-400', recognizing: 'bg-[#3a5dd8]', accepted: 'bg-av-500', thinking: 'bg-zinc-200', speaking: 'bg-red-500', working: 'bg-av-500',
+      muted: 'bg-amber-300', deafened: 'bg-amber-300', paused: 'bg-zinc-500', disconnected: 'bg-red-500'
+    };
+    const stateList = [
+      ['idle', 'Passive'], ['recognizing', 'Recognizing'], ['accepted', 'Accepted'], ['thinking', 'Thinking'], ['speaking', 'Speaking'],
+      ['working', 'Working'], ['muted', 'Muted'], ['paused', 'Paused'], ['disconnected', 'Disconnected']
+    ];
+    const states = stateList.map((x) => ({
+      label: x[1], on: sn.disp === x[0],
+      dot: 'mr-1 inline-block size-1.5 shrink-0 ' + dotTone[x[0]],
+      pick: () => this.send('preset', x[0])
+    }));
+    const toggles = [
+      { label: 'Mic muted', on: sn.muted || sn.deafened, disabled: false, toggle: () => this.send('mute') },
+      { label: 'Deafened', on: sn.deafened, disabled: false, toggle: () => this.send('deafen') },
+      { label: 'Assistant paused', on: sn.paused, disabled: !sn.connected, toggle: () => this.send('pause') },
+      { label: 'Overlay expanded', on: sn.expanded, disabled: false, toggle: () => this.send('expand', !sn.expanded) },
+      { label: 'Minimized to tray', on: s.minimized, disabled: false, toggle: () => this.setState({ minimized: !s.minimized }) },
+      { label: 'Settings window', on: s.settingsOpen, disabled: false, toggle: () => (s.settingsOpen ? this.setState({ settingsOpen: false }) : this.openSettings(s.section)) }
+    ];
+    const jumpList = [['audio', 'Audio'], ['models', 'Models'], ['profiles', 'Profiles'], ['people', 'People'], ['awareness', 'Observe'], ['memory', 'Memory']];
+    const jumps = jumpList.map((j) => ({ label: j[1], on: s.settingsOpen && s.section === j[0], go: () => this.openSettings(j[0]) }));
+
+    const mailsRaw = [
+      { from: 'Local Studio', subject: 'Download complete: Qwen3.8-27B-FP8', preview: 'Recipe avesra-quality is ready to load on spark2.', time: '11:40 AM', unread: true },
+      { from: 'Calendar', subject: 'Weekly review · Friday 4:00 PM', preview: 'Recurring · reminder 15 minutes before', time: '11:15 AM', unread: true },
+      { from: 'Northwind Outfitters', subject: 'Delivered: your package was left at the front door', preview: 'Your order #NW-40218 was delivered at 10:58 AM.', time: '11:02 AM', unread: true, sel: true },
+      { from: 'GitHub', subject: '[Medalink/avesra] Plans published', preview: 'plans/001-single-spark-assistant.md was added.', time: '10:31 AM' },
+      { from: 'Parcel tracking', subject: 'Shipped: arriving Friday', preview: 'Your second order is on its way.', time: '9:12 AM' },
+      { from: 'Marcus Lee', subject: 'Re: API rate limits', preview: 'Bumped the quota on staging. Let me know if it…', time: 'Yesterday' }
+    ];
+    const mails = mailsRaw.map((m) => ({
+      from: m.from, subject: m.subject, preview: m.preview, time: m.time,
+      cls: 'flex flex-col gap-0.5 border-b border-white/[0.05] px-4 py-3 ' + (m.sel ? 'bg-av-700/15 shadow-[inset_2px_0_0_var(--color-av-500)]' : ''),
+      fromCls: 'truncate text-[13px] ' + (m.unread ? 'font-semibold text-zinc-50' : 'text-zinc-400'),
+      subjCls: 'truncate text-[12.5px] ' + (m.unread ? 'font-medium text-av-300' : 'text-zinc-400')
+    }));
+
+    const drafts = sn.taskStatus === 'completed' ? '2' : '';
+    const rm = s.reduced ? ' av-rm' : '';
+    const trayState = names[sn.disp] || 'running';
+
+    return {
+      rootCls: 'font-sans antialiased text-zinc-100 bg-[#121214]' + rm,
+      yes: true,
+      isMail: s.backdrop === 'mail', isEditor: s.backdrop === 'editor',
+      mails: mails, draftsCount: drafts,
+      draftsCls: drafts ? 'bg-av-700 px-1.5 font-mono text-[11px] font-semibold text-white' : 'hidden',
+      mailTaskCls: 'grid size-9 place-items-center ' + (s.backdrop === 'mail' ? 'bg-white/[0.08] text-zinc-100 shadow-[inset_0_-2px_0_rgba(224,17,95,0.9)]' : 'text-zinc-400'),
+      codeTaskCls: 'grid size-9 place-items-center ' + (s.backdrop === 'editor' ? 'bg-white/[0.08] text-zinc-100 shadow-[inset_0_-2px_0_rgba(224,17,95,0.9)]' : 'text-zinc-400'),
+      settingsOpen: s.settingsOpen, section: s.section, secN: s.secN, reduced: s.reduced,
+      closeSettings: () => this.setState({ settingsOpen: false }),
+      cmd: s.cmd, pos: s.pos,
+      onOverlay: (type, payload) => this.onOverlay(type, payload),
+      ovWrapCls: 'absolute z-30' + (s.minimized ? ' hidden' : ''),
+      minimized: s.minimized, trayState: trayState,
+      trayLabel: 'Avesra · ' + trayState + (s.minimized ? ' · click to show overlay' : ' · click to hide overlay'),
+      trayDotCls: 'absolute right-1 bottom-1 size-2 ring-2 ring-[#151517] ' + (dotTone[sn.disp] || 'bg-zinc-400'),
+      trayClick: () => this.setState({ minimized: !s.minimized }),
+      states: states, toggles: toggles, jumps: jumps,
+      resetPos: () => this.setState({ pos: { x: 596, y: 60 }, minimized: false }),
+      startTask: () => this.send('preset', 'recognizing'),
+      completeTask: () => this.send('complete'),
+      cantComplete: !(sn.taskStatus === 'running' && sn.connected),
+      dropConn: () => this.send('disconnect'),
+      reconnect: () => this.send('reconnect'),
+      offline: !sn.connected, online: sn.connected,
+      resetAll: () => { this.send('reset'); this.setState({ pos: { x: 596, y: 60 }, minimized: false, settingsOpen: false }); },
+      setMail: () => this.setState({ backdrop: 'mail' }),
+      setEditor: () => this.setState({ backdrop: 'editor' }),
+      toggleReduced: () => this.setState({ reduced: !s.reduced })
+    };
+  }
+}
+</script>
+</body>
+</html>

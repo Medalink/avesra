@@ -1,0 +1,1907 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Avesra settings</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./avesra.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>body{margin:0}</style>
+</helmet>
+<div class="{{rootCls}}" style="width: 880px; height: 640px;">
+  <div class="flex h-full flex-col overflow-hidden bg-[#1f1f23] ring-1 ring-white/10">
+
+    <!-- Title bar -->
+    <div class="flex h-11 shrink-0 items-center gap-2.5 border-b border-white/[0.06] pr-2 pl-4">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" class="text-av-400" aria-hidden="true"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.8"></circle><path d="M8.5 10v4M12 7.5v9M15.5 10v4" stroke="currentColor" stroke-width="2" stroke-linecap="square"></path></svg>
+      <span class="text-[13px] font-medium text-zinc-100">Avesra Settings</span>
+      <span class="flex-1"></span>
+      <span class="av-chip bg-white/[0.04] text-zinc-300 ring-white/10">Spark2 · connected</span>
+      <span class="av-chip bg-white/[0.04] text-zinc-300 ring-white/10">Profile · {{activeProfileName}}</span>
+      <button type="button" class="av-iconbtn size-7" onClick="{{requestClose}}" aria-label="Close settings" title="Close">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg>
+      </button>
+    </div>
+
+    <div class="flex min-h-0 flex-1">
+      <!-- Section nav -->
+      <nav class="flex w-[200px] shrink-0 flex-col gap-0.5 border-r border-white/[0.06] bg-black/20 p-2.5" aria-label="Settings sections">
+        <sc-for list="{{nav}}" as="n" hint-placeholder-count="6">
+          <button type="button" class="av-nav-btn" aria-current="{{n.current}}" onClick="{{n.go}}">
+            <span class="grid size-5 place-items-center">
+              <sc-if value="{{n.is.audio}}" hint-placeholder-val="{{ false }}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="square" aria-hidden="true"><path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 11v2"></path></svg></sc-if>
+              <sc-if value="{{n.is.models}}" hint-placeholder-val="{{ false }}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="miter" aria-hidden="true"><path d="m12 3 9 5-9 5-9-5z"></path><path d="m3 13 9 5 9-5"></path></svg></sc-if>
+              <sc-if value="{{n.is.profiles}}" hint-placeholder-val="{{ false }}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="square" aria-hidden="true"><rect x="3" y="4" width="18" height="7"></rect><rect x="3" y="13" width="18" height="7"></rect><path d="M7 7.5h.01M7 16.5h.01"></path></svg></sc-if>
+              <sc-if value="{{n.is.people}}" hint-placeholder-val="{{ false }}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="square" aria-hidden="true"><circle cx="9" cy="8" r="3.5"></circle><path d="M2.5 20a6.5 6.5 0 0 1 13 0"></path><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14a6.5 6.5 0 0 1 3.5 6"></path></svg></sc-if>
+              <sc-if value="{{n.is.awareness}}" hint-placeholder-val="{{ false }}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"></path><circle cx="12" cy="12" r="3"></circle></svg></sc-if>
+              <sc-if value="{{n.is.memory}}" hint-placeholder-val="{{ false }}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"></ellipse><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"></path><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"></path></svg></sc-if>
+            </span>
+            <span class="flex-1">{{n.label}}</span>
+            <sc-if value="{{n.badge}}" hint-placeholder-val="{{ false }}"><span class="av-chip h-4 bg-amber-400/15 px-1 text-amber-200 ring-amber-400/40">{{n.badge}}</span></sc-if>
+            <sc-if value="{{n.err}}" hint-placeholder-val="{{ false }}"><span class="size-1.5 bg-red-400" title="Has issues to fix"></span></sc-if>
+          </button>
+        </sc-for>
+        <span class="flex-1"></span>
+        <div class="flex flex-col gap-0.5 px-2.5 pb-1">
+          <span class="font-mono text-[10.5px] text-zinc-400">Avesra 0.1 · prototype</span>
+          <span class="text-[10.5px] leading-[14px] text-zinc-400">All values are simulated.</span>
+        </div>
+      </nav>
+
+      <!-- Section content -->
+      <main class="av-scroll min-w-0 flex-1 overflow-y-auto">
+        <div class="flex flex-col gap-6 px-6 pt-5 pb-8">
+          <div class="flex flex-col gap-1">
+            <h1 class="m-0 text-[17px] font-semibold tracking-[-0.01em] text-zinc-50">{{title}}</h1>
+            <p class="m-0 text-[12.5px] leading-[18px] text-zinc-400">{{blurb}}</p>
+          </div>
+
+          <!-- ================= AUDIO & VOICE ================= -->
+          <sc-if value="{{is.audio}}" hint-placeholder-val="{{ true }}">
+            <section class="flex flex-col gap-3">
+              <span class="av-kicker">Devices</span>
+              <div class="grid grid-cols-2 gap-4">
+                <div class="flex flex-col gap-1.5">
+                  <label class="av-label" for="in-dev">Microphone</label>
+                  <div class="relative">
+                    <select id="in-dev" class="av-input av-select" value="{{inDev}}" onChange="{{setInDev}}">
+                      <option value="mv7">Shure MV7+ (USB)</option>
+                      <option value="realtek">Realtek HD Audio microphone</option>
+                      <option value="arctis">Arctis Nova Pro headset mic</option>
+                    </select>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" class="pointer-events-none absolute top-1/2 right-2.5 -translate-y-1/2 text-zinc-400" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <div class="relative flex h-2 flex-1 gap-[2px] overflow-hidden" role="meter" aria-label="Input level (simulated)" aria-valuemin="0" aria-valuemax="100" aria-valuenow="55">
+                      <sc-for list="{{meterSegs}}" as="m" hint-placeholder-count="24"><span class="{{m}}"></span></sc-for>
+                      <span class="av-level absolute inset-y-0 right-0 bg-[#1f1f23]" style="width: 45%;"></span>
+                    </div>
+                    <span class="font-mono text-[10.5px] text-zinc-400">simulated</span>
+                  </div>
+                </div>
+                <div class="flex flex-col gap-1.5">
+                  <label class="av-label" for="out-dev">Speakers</label>
+                  <div class="relative">
+                    <select id="out-dev" class="av-input av-select" value="{{outDev}}" onChange="{{setOutDev}}">
+                      <option value="scarlett">Speakers · Focusrite Scarlett 2i2</option>
+                      <option value="arctis">Arctis Nova Pro headset</option>
+                      <option value="hdmi">Display 1 · HDMI audio</option>
+                    </select>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" class="pointer-events-none absolute top-1/2 right-2.5 -translate-y-1/2 text-zinc-400" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <button type="button" class="av-btn av-btn-secondary av-btn-sm" onClick="{{playTone}}" disabled="{{tonePlaying}}">{{toneBtn}}</button>
+                    <span class="av-hint">{{toneNote}}</span>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section class="flex flex-col gap-3">
+              <span class="av-kicker">How Avesra listens</span>
+              <div class="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Listening mode">
+                <sc-for list="{{modes}}" as="m" hint-placeholder-count="3">
+                  <button type="button" role="radio" aria-checked="{{m.on}}" class="{{m.cls}}" onClick="{{m.pick}}">
+                    <span class="flex items-center justify-between gap-2">
+                      <span class="text-[12.5px] font-medium text-zinc-100">{{m.label}}</span>
+                      <span class="{{m.radio}}"></span>
+                    </span>
+                    <span class="text-[11.5px] leading-4 text-zinc-400">{{m.desc}}</span>
+                  </button>
+                </sc-for>
+              </div>
+              <sc-if value="{{modeCont}}" hint-placeholder-val="{{ true }}">
+                <div class="flex flex-col gap-2">
+                  <span class="av-hint">Avesra acts only on requests clearly directed at it by an enrolled voice. Other speech is ignored and never kept. Mute, deafen and pause always win.</span>
+                  <div class="flex items-center gap-3">
+                    <label class="av-label" for="follow">Short follow-ups for</label>
+                    <div class="relative w-[140px]">
+                      <select id="follow" class="av-input av-select" value="{{followUp}}" onChange="{{setFollowUp}}">
+                        <option value="5">5 seconds</option>
+                        <option value="8">8 seconds</option>
+                        <option value="15">15 seconds</option>
+                      </select>
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" class="pointer-events-none absolute top-1/2 right-2.5 -translate-y-1/2 text-zinc-400" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+                    </div>
+                    <span class="av-hint">after a reply. Follow-ups still need your voice.</span>
+                  </div>
+                </div>
+              </sc-if>
+              <sc-if value="{{modeWake}}" hint-placeholder-val="{{ false }}">
+                <div class="flex flex-col gap-1.5">
+                  <label class="av-label" for="wake">Wake phrase</label>
+                  <input id="wake" class="{{wakeCls}}" value="{{wake}}" onChange="{{setWake}}" aria-invalid="{{wakeInvalid}}" style="max-width: 280px;">
+                  <sc-if value="{{wakeErr}}" hint-placeholder-val="{{ false }}"><span class="text-[11.5px] text-red-400" role="alert">{{wakeErr}}</span></sc-if>
+                  <span class="av-hint">Optional. Speaker and intent checks still apply after the phrase.</span>
+                </div>
+              </sc-if>
+              <sc-if value="{{modePtt}}" hint-placeholder-val="{{ false }}">
+                <span class="av-hint">Optional. Hold the push-to-talk shortcut below while you speak.</span>
+              </sc-if>
+            </section>
+
+            <section class="flex flex-col gap-2">
+              <span class="av-kicker">Shortcuts</span>
+              <div class="av-card flex flex-col divide-y divide-white/[0.06]">
+                <sc-for list="{{audioShortcuts}}" as="r" hint-placeholder-count="4">
+                  <div class="flex flex-col gap-1 px-3.5 py-2.5">
+                    <div class="flex items-center gap-3">
+                      <div class="flex min-w-0 flex-1 flex-col">
+                        <span class="text-[12.5px] text-zinc-100">{{r.label}}</span>
+                        <span class="av-hint">{{r.desc}}</span>
+                      </div>
+                      <sc-if value="{{r.recording}}" hint-placeholder-val="{{ false }}">
+                        <button type="button" autoFocus="{{r.recording}}" class="inline-flex h-8 cursor-text items-center gap-2 bg-av-500/10 px-3 font-mono text-[11.5px] text-av-200 ring-1 ring-av-500 focus:outline-none" onKeyDown="{{r.onKey}}" aria-label="Press the new shortcut, or Escape to cancel">
+                          <span class="av-caret inline-block h-3 w-[2px] bg-av-500"></span> Press keys · Esc cancels
+                        </button>
+                        <button type="button" class="av-btn av-btn-ghost av-btn-sm" onClick="{{r.cancel}}">Cancel</button>
+                      </sc-if>
+                      <sc-if value="{{r.idle}}" hint-placeholder-val="{{ true }}">
+                        <span class="flex items-center gap-1">
+                          <sc-for list="{{r.keys}}" as="k" hint-placeholder-count="2"><span class="av-kbd">{{k}}</span></sc-for>
+                        </span>
+                        <button type="button" class="av-btn av-btn-secondary av-btn-sm" onClick="{{r.record}}">Change</button>
+                      </sc-if>
+                    </div>
+                    <sc-if value="{{r.err}}" hint-placeholder-val="{{ false }}"><span class="text-[11.5px] text-red-400" role="alert">{{r.err}}</span></sc-if>
+                  </div>
+                </sc-for>
+              </div>
+            </section>
+
+            <section class="flex flex-col gap-3">
+              <span class="av-kicker">Voice</span>
+              <div class="av-card flex items-center gap-3 p-3.5">
+                <div class="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <span class="text-[13px] font-medium text-zinc-50">{{voiceName}}</span>
+                  <span class="av-hint">{{voiceMeta}}</span>
+                </div>
+                <button type="button" class="av-btn av-btn-secondary av-btn-sm" onClick="{{playPreview}}" disabled="{{previewing}}">
+                  <svg width="10" height="10" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.5v15l12-7.5z" fill="currentColor"></path></svg>
+                  Preview
+                </button>
+                <button type="button" class="av-btn av-btn-ghost av-btn-sm" onClick="{{toggleDesigner}}" aria-expanded="{{designerOpen}}">{{designerBtn}}</button>
+              </div>
+              <div class="{{previewCls}}">
+                <sc-if value="{{previewing}}" hint-placeholder-val="{{ false }}">
+                  <span class="av-glow-r flex h-5 items-center gap-[2px]" aria-hidden="true">
+                    <sc-for list="{{previewBars}}" as="b" hint-placeholder-count="13"><span class="av-speak block w-[2px] bg-red-500" style="height: {{b.h}}px; animation-delay: {{b.del}}ms;"></span></sc-for>
+                  </span>
+                </sc-if>
+                <span class="min-w-0 flex-1 text-[12px] leading-[17px] text-zinc-300">“Yes. Message 3 of 10 says your package was delivered.”</span>
+                <span class="shrink-0 font-mono text-[10.5px] text-zinc-400">{{previewNote}}</span>
+              </div>
+              <sc-if value="{{designerOpen}}" hint-placeholder-val="{{ false }}">
+                <div class="av-rise av-card flex flex-col gap-2.5 p-3.5">
+                  <label class="av-label" for="vdesc">Describe the voice</label>
+                  <textarea id="vdesc" rows="3" class="{{descCls}}" value="{{voiceDesc}}" onChange="{{setDesc}}" aria-invalid="{{descInvalid}}"></textarea>
+                  <div class="flex items-center justify-between gap-3">
+                    <span class="{{descHintCls}}">{{descHint}}</span>
+                    <span class="{{descCountCls}}">{{descCount}}</span>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <span class="av-hint flex-1">{{designNote}}</span>
+                    <sc-if value="{{hasCandidate}}" hint-placeholder-val="{{ false }}">
+                      <button type="button" class="av-btn av-btn-ghost av-btn-sm" onClick="{{discardCandidate}}">Discard</button>
+                      <button type="button" class="av-btn av-btn-primary av-btn-sm" onClick="{{keepCandidate}}">Use this voice</button>
+                    </sc-if>
+                    <button type="button" class="av-btn av-btn-secondary av-btn-sm" onClick="{{generateVoice}}" disabled="{{cantGenerate}}">{{generateBtn}}</button>
+                  </div>
+                </div>
+              </sc-if>
+              <div class="grid grid-cols-2 gap-5">
+                <div class="flex flex-col gap-2">
+                  <div class="flex items-center justify-between"><label class="av-label" for="speed">Pace</label><span class="font-mono text-[11.5px] text-zinc-300">{{speedText}}</span></div>
+                  <input id="speed" type="range" min="0.8" max="1.5" step="0.05" class="av-range" value="{{speed}}" onChange="{{setSpeed}}">
+                </div>
+                <div class="flex flex-col gap-2">
+                  <div class="flex items-center justify-between"><label class="av-label" for="vol">Voice volume</label><span class="font-mono text-[11.5px] text-zinc-300">{{volume}}%</span></div>
+                  <input id="vol" type="range" min="0" max="100" step="1" class="av-range" value="{{volume}}" onChange="{{setVolume}}">
+                </div>
+              </div>
+            </section>
+
+            <section class="flex flex-col gap-2">
+              <span class="av-kicker">Chimes</span>
+              <div class="av-card flex flex-col divide-y divide-white/[0.06]">
+                <sc-for list="{{chimes}}" as="c" hint-placeholder-count="2">
+                  <div class="flex items-center gap-3 px-3.5 py-2.5">
+                    <div class="flex min-w-0 flex-1 flex-col">
+                      <span class="text-[12.5px] text-zinc-100">{{c.label}}</span>
+                      <span class="av-hint">{{c.desc}}</span>
+                    </div>
+                    <button type="button" class="av-btn av-btn-ghost av-btn-sm" onClick="{{c.preview}}">{{c.previewLabel}}</button>
+                    <button type="button" role="switch" class="av-switch group" aria-checked="{{c.on}}" aria-label="{{c.label}}" onClick="{{c.toggle}}"><span class="av-knob group-aria-checked:translate-x-[18px]"></span></button>
+                  </div>
+                </sc-for>
+                <div class="flex items-center gap-3 px-3.5 py-2.5">
+                  <label class="av-label w-[120px]" for="chimevol">Chime volume</label>
+                  <input id="chimevol" type="range" min="0" max="100" step="1" class="av-range flex-1" value="{{chimeVol}}" onChange="{{setChimeVol}}">
+                  <span class="w-10 text-right font-mono text-[11.5px] text-zinc-300">{{chimeVol}}%</span>
+                </div>
+              </div>
+              <span class="av-hint">No spoken advice in the background. Chimes follow committed learning or verified actions only, at most one learning chime a minute, and never while deafened or paused. Ask “What did you learn?” after a chime.</span>
+            </section>
+          </sc-if>
+
+          <!-- ================= MODELS & DRIVERS ================= -->
+          <sc-if value="{{is.models}}" hint-placeholder-val="{{ false }}">
+            <div class="av-card flex items-start gap-3 p-3.5">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="mt-0.5 shrink-0 text-av-400" aria-hidden="true"><path d="m12 3 9 5-9 5-9-5z"></path><path d="m3 13 9 5 9-5"></path></svg>
+              <p class="m-0 flex-1 text-[12.5px] leading-[18px] text-zinc-300">Each lane is one job. It uses a <span class="text-zinc-100">driver</span> (adapter), a <span class="text-zinc-100">model</span> and a <span class="text-zinc-100">machine</span>. Lanes on the same model and machine share one deployment. Local Studio on Spark2 serves one reasoning model at a time; speech and speaker lanes run in Avesra’s own local services beside it.</p>
+              <button type="button" class="av-btn av-btn-secondary av-btn-sm" onClick="{{testAll}}" disabled="{{anyTesting}}">Probe all</button>
+            </div>
+
+            <div class="flex flex-wrap items-center gap-x-2.5 gap-y-1.5" aria-label="Health legend">
+              <sc-for list="{{legend}}" as="h" hint-placeholder-count="7"><span class="{{h.cls}}">{{h.label}}</span></sc-for>
+            </div>
+
+            <sc-if value="{{pendingNote}}" hint-placeholder-val="{{ false }}">
+              <div class="flex items-center gap-2.5 bg-white/[0.04] px-3 py-2 text-[12px] text-zinc-200 ring-1 ring-white/10 ring-inset" role="status">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" class="av-spin shrink-0 text-av-400" aria-hidden="true"><path d="M12 3a9 9 0 1 1-9 9"></path></svg>
+                {{pendingNote}}
+              </div>
+            </sc-if>
+
+            <div class="flex flex-col gap-2">
+              <sc-for list="{{lanes}}" as="l" hint-placeholder-count="7">
+                <div class="{{l.cardCls}}">
+                  <div class="flex items-start gap-3">
+                    <div class="flex min-w-0 flex-1 flex-col">
+                      <div class="flex items-center gap-2">
+                        <span class="text-[13px] font-medium text-zinc-50">{{l.name}}</span>
+                        <sc-if value="{{l.shared}}" hint-placeholder-val="{{ false }}"><span class="av-chip bg-white/[0.04] text-zinc-300 ring-white/10" title="{{l.sharedTitle}}">{{l.sharedText}}</span></sc-if>
+                      </div>
+                      <span class="av-hint mt-0.5">{{l.desc}}</span>
+                    </div>
+                    <span class="{{l.healthCls}}">{{l.healthText}}</span>
+                  </div>
+                  <div class="mt-3 grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.4fr)_minmax(0,0.9fr)_auto] items-end gap-3">
+                    <div class="flex min-w-0 flex-col gap-0.5"><span class="text-[10.5px] text-zinc-400">Driver</span><span class="truncate text-[12.5px] text-zinc-200">{{l.driverName}}</span></div>
+                    <div class="flex min-w-0 flex-col gap-0.5"><span class="text-[10.5px] text-zinc-400">Model · limits</span><span class="truncate text-[12.5px] text-zinc-200" title="{{l.limits}}">{{l.modelName}}</span></div>
+                    <div class="flex min-w-0 flex-col gap-0.5">
+                      <span class="text-[10.5px] text-zinc-400">Machine</span>
+                      <span class="flex min-w-0 items-center gap-1.5">
+                        <span class="truncate text-[12.5px] text-zinc-200">{{l.machineName}}</span>
+                        <span class="{{l.locCls}}">{{l.locLabel}}</span>
+                      </span>
+                    </div>
+                    <div class="flex items-center gap-1">
+                      <button type="button" class="av-btn av-btn-ghost av-btn-sm" onClick="{{l.test}}" disabled="{{l.testing}}">{{l.testLabel}}</button>
+                      <button type="button" class="av-btn av-btn-secondary av-btn-sm" onClick="{{l.edit}}" aria-expanded="{{l.editing}}">{{l.editLabel}}</button>
+                    </div>
+                  </div>
+                  <span class="mt-1.5 block font-mono text-[10.5px] text-zinc-500">{{l.limits}}</span>
+                  <sc-if value="{{l.hasTest}}" hint-placeholder-val="{{ false }}">
+                    <div class="{{l.testCls}}" role="status">
+                      <sc-if value="{{l.testing}}" hint-placeholder-val="{{ false }}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" class="av-spin shrink-0" aria-hidden="true"><path d="M12 3a9 9 0 1 1-9 9"></path></svg></sc-if>
+                      <span>{{l.testMsg}}</span>
+                    </div>
+                  </sc-if>
+                  <sc-if value="{{l.editing}}" hint-placeholder-val="{{ false }}">
+                    <div class="av-rise mt-3 flex flex-col gap-3 bg-black/25 p-3 ring-1 ring-white/[0.06] ring-inset">
+                      <div class="grid grid-cols-3 gap-2.5">
+                        <div class="flex flex-col gap-1">
+                          <label class="text-[11px] text-zinc-400" for="{{l.idDriver}}">Driver</label>
+                          <div class="relative">
+                            <select id="{{l.idDriver}}" class="av-input av-select" value="{{l.draft.driver}}" onChange="{{l.onDriver}}">
+                              <sc-for list="{{driverOpts}}" as="o" hint-placeholder-count="5"><option value="{{o.v}}">{{o.label}}</option></sc-for>
+                            </select>
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" class="pointer-events-none absolute top-1/2 right-2.5 -translate-y-1/2 text-zinc-400" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+                          </div>
+                        </div>
+                        <div class="flex flex-col gap-1">
+                          <label class="text-[11px] text-zinc-400" for="{{l.idModel}}">Model</label>
+                          <div class="relative">
+                            <select id="{{l.idModel}}" class="av-input av-select" value="{{l.draft.model}}" onChange="{{l.onModel}}">
+                              <sc-for list="{{modelOpts}}" as="o" hint-placeholder-count="9"><option value="{{o.v}}">{{o.label}}</option></sc-for>
+                            </select>
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" class="pointer-events-none absolute top-1/2 right-2.5 -translate-y-1/2 text-zinc-400" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+                          </div>
+                        </div>
+                        <div class="flex flex-col gap-1">
+                          <label class="text-[11px] text-zinc-400" for="{{l.idMachine}}">Machine</label>
+                          <div class="relative">
+                            <select id="{{l.idMachine}}" class="av-input av-select" value="{{l.draft.machine}}" onChange="{{l.onMachine}}">
+                              <sc-for list="{{machineOpts}}" as="o" hint-placeholder-count="4"><option value="{{o.v}}">{{o.label}}</option></sc-for>
+                            </select>
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" class="pointer-events-none absolute top-1/2 right-2.5 -translate-y-1/2 text-zinc-400" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+                          </div>
+                        </div>
+                      </div>
+                      <div class="{{l.evCls}}" role="status">
+                        <span class="{{l.evChipCls}}">{{l.evLabel}}</span>
+                        <span class="min-w-0 flex-1 text-[12px] leading-[17px]">{{l.evMsg}}</span>
+                      </div>
+                      <div class="flex items-center justify-end gap-1.5">
+                        <button type="button" class="av-btn av-btn-ghost av-btn-sm" onClick="{{l.cancel}}">Cancel</button>
+                        <button type="button" class="av-btn av-btn-primary av-btn-sm" onClick="{{l.apply}}" disabled="{{l.cantApply}}">{{l.applyLabel}}</button>
+                      </div>
+                    </div>
+                  </sc-if>
+                </div>
+              </sc-for>
+            </div>
+
+            <section class="flex flex-col gap-2">
+              <span class="av-kicker">Deployments</span>
+              <div class="av-card flex flex-col divide-y divide-white/[0.06]">
+                <sc-for list="{{deployments}}" as="d" hint-placeholder-count="4">
+                  <div class="flex items-center gap-3 px-3.5 py-2.5">
+                    <div class="flex min-w-0 flex-1 flex-col">
+                      <span class="truncate text-[12.5px] text-zinc-100">{{d.model}} <span class="text-zinc-400">on {{d.machine}} · {{d.driver}}</span></span>
+                      <span class="truncate text-[11.5px] text-zinc-400">{{d.lanes}}</span>
+                    </div>
+                    <span class="{{d.chipCls}}">{{d.count}}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </section>
+          </sc-if>
+
+          <!-- ================= PROFILES & MACHINES ================= -->
+          <sc-if value="{{is.profiles}}" hint-placeholder-val="{{ false }}">
+            <section class="flex flex-col gap-2.5">
+              <div class="flex items-center justify-between">
+                <span class="av-kicker">Profiles</span>
+                <button type="button" class="av-btn av-btn-ghost av-btn-sm" onClick="{{duplicateProfile}}">Duplicate {{selProfileName}}</button>
+              </div>
+              <div class="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Profiles">
+                <sc-for list="{{profiles}}" as="p" hint-placeholder-count="3">
+                  <button type="button" role="radio" aria-checked="{{p.sel}}" class="{{p.cls}}" onClick="{{p.pick}}">
+                    <span class="flex items-center justify-between gap-2">
+                      <span class="truncate text-[13px] font-medium text-zinc-50">{{p.name}}</span>
+                      <span class="{{p.chipCls}}">{{p.statusText}}</span>
+                    </span>
+                    <span class="text-[11.5px] leading-4 text-zinc-400">{{p.desc}}</span>
+                  </button>
+                </sc-for>
+              </div>
+              <div class="flex items-center gap-3 px-0.5">
+                <span class="min-w-0 flex-1 text-[12.5px] text-zinc-200">Switch to Gaming when a game is fullscreen <span class="av-hint">· a manual choice always overrides this</span></span>
+                <button type="button" role="switch" class="av-switch group" aria-checked="{{autoGaming}}" aria-label="Automatic Gaming profile" onClick="{{toggleAutoGaming}}"><span class="av-knob group-aria-checked:translate-x-[18px]"></span></button>
+              </div>
+
+              <div class="av-card flex flex-col">
+                <div class="flex items-center gap-2 border-b border-white/[0.06] px-3.5 py-2.5">
+                  <span class="flex-1 text-[12.5px] font-medium text-zinc-100">Lane placement · {{selProfileName}}</span>
+                  <sc-if value="{{canSetUp}}" hint-placeholder-val="{{ false }}"><button type="button" class="av-btn av-btn-secondary av-btn-sm" onClick="{{setUpProfile}}">Set up from Single Spark</button></sc-if>
+                  <sc-if value="{{canEditAssign}}" hint-placeholder-val="{{ true }}"><button type="button" class="av-btn av-btn-secondary av-btn-sm" onClick="{{editAssignments}}">Edit placement</button></sc-if>
+                  <sc-if value="{{canActivate}}" hint-placeholder-val="{{ false }}"><button type="button" class="av-btn av-btn-primary av-btn-sm" onClick="{{activateProfile}}">Activate</button></sc-if>
+                </div>
+                <sc-if value="{{profileNotSet}}" hint-placeholder-val="{{ false }}">
+                  <div class="flex flex-col gap-1 px-3.5 py-4">
+                    <span class="text-[12.5px] text-zinc-200">Not set up yet.</span>
+                    <span class="av-hint">{{notSetHint}}</span>
+                  </div>
+                </sc-if>
+                <sc-if value="{{profileHasAssign}}" hint-placeholder-val="{{ true }}">
+                  <div class="flex flex-col divide-y divide-white/[0.05]">
+                    <sc-for list="{{assignRows}}" as="a" hint-placeholder-count="7">
+                      <div class="flex h-10 items-center gap-3 px-3.5">
+                        <span class="w-[210px] shrink-0 text-[12.5px] text-zinc-200">{{a.lane}}</span>
+                        <sc-if value="{{a.editing}}" hint-placeholder-val="{{ false }}">
+                          <div class="relative w-[200px]">
+                            <select class="av-input av-select h-7 text-[12.5px]" value="{{a.machine}}" onChange="{{a.onChange}}" aria-label="{{a.aria}}">
+                              <sc-for list="{{placeOpts}}" as="o" hint-placeholder-count="3"><option value="{{o.v}}">{{o.label}}</option></sc-for>
+                            </select>
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" class="pointer-events-none absolute top-1/2 right-2.5 -translate-y-1/2 text-zinc-400" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+                          </div>
+                        </sc-if>
+                        <sc-if value="{{a.viewing}}" hint-placeholder-val="{{ true }}"><span class="w-[200px] text-[12.5px] text-zinc-100">{{a.machineName}}</span></sc-if>
+                        <span class="{{a.noteCls}}">{{a.note}}</span>
+                      </div>
+                    </sc-for>
+                  </div>
+                </sc-if>
+                <sc-if value="{{profileMsg}}" hint-placeholder-val="{{ false }}"><div class="{{profileMsgCls}}" role="alert">{{profileMsg}}</div></sc-if>
+                <sc-if value="{{editAssign}}" hint-placeholder-val="{{ false }}">
+                  <div class="flex items-center justify-end gap-1.5 border-t border-white/[0.06] px-3.5 py-2.5">
+                    <button type="button" class="av-btn av-btn-ghost av-btn-sm" onClick="{{cancelAssign}}">Cancel</button>
+                    <button type="button" class="av-btn av-btn-primary av-btn-sm" onClick="{{saveAssign}}">Save placement</button>
+                  </div>
+                </sc-if>
+              </div>
+            </section>
+
+            <section class="flex flex-col gap-2.5">
+              <span class="av-kicker">Spark2 memory budget · simulated</span>
+              <div class="av-card flex flex-col gap-2.5 p-3.5">
+                <div class="flex h-3 w-full overflow-hidden bg-white/[0.06]">
+                  <sc-for list="{{budget}}" as="b" hint-placeholder-count="6"><span class="{{b.cls}}" style="width: {{b.w}}%;" title="{{b.label}}"></span></sc-for>
+                </div>
+                <div class="flex flex-wrap gap-x-4 gap-y-1">
+                  <sc-for list="{{budget}}" as="b" hint-placeholder-count="6"><span class="inline-flex items-center gap-1.5 text-[11.5px] text-zinc-300"><span class="{{b.dot}}"></span>{{b.label}} <span class="font-mono text-zinc-400">{{b.gib}}</span></span></sc-for>
+                </div>
+                <span class="av-hint">Reasoning uses 0.50 of GPU memory, leaving room for speech, the controller and ComfyUI. Background learning yields first under pressure.</span>
+              </div>
+            </section>
+
+            <section class="flex flex-col gap-2.5">
+              <div class="flex items-center justify-between">
+                <span class="av-kicker">Machines</span>
+                <button type="button" class="av-btn av-btn-ghost av-btn-sm" onClick="{{openPair}}" disabled="{{pairOpen}}">Pair a machine</button>
+              </div>
+
+              <div class="av-card flex flex-col gap-3 p-3.5">
+                <div class="flex items-center gap-2.5">
+                  <span class="relative flex size-2"><span class="av-ping absolute inline-flex size-full bg-av-500"></span><span class="relative inline-flex size-2 bg-av-500"></span></span>
+                  <span class="text-[13px] font-medium text-zinc-50">Spark2</span>
+                  <span class="text-[12px] text-zinc-400">DGX Spark · GB10 · inference host</span>
+                  <span class="flex-1"></span>
+                  <span class="{{sparkChipCls}}">{{sparkChip}}</span>
+                </div>
+                <div class="grid grid-cols-3 gap-3 text-[12px]">
+                  <div class="flex flex-col gap-0.5"><span class="text-[10.5px] text-zinc-400">Host</span><span class="font-mono text-[11.5px] text-zinc-200">spark2 · spark-c8bb</span></div>
+                  <div class="flex flex-col gap-0.5"><span class="text-[10.5px] text-zinc-400">System</span><span class="text-zinc-200">Ubuntu 24.04 · 121 GiB unified</span></div>
+                  <div class="flex flex-col gap-0.5"><span class="text-[10.5px] text-zinc-400">Local Studio</span><span class="text-zinc-200">d1abdef · API auth on</span></div>
+                </div>
+                <div class="flex items-center gap-2 bg-black/20 px-3 py-2">
+                  <span class="text-[10.5px] text-zinc-400">Fingerprint</span>
+                  <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-zinc-300">SHA256:q7Lx…c8bb</span>
+                  <sc-if value="{{confirmRevoke}}" hint-placeholder-val="{{ false }}">
+                    <span class="text-[11.5px] text-red-300">Revoke? Avesra stops working until you pair again.</span>
+                    <button type="button" class="av-btn av-btn-ghost av-btn-sm" onClick="{{cancelRevoke}}">Keep</button>
+                    <button type="button" class="av-btn av-btn-danger-soft av-btn-sm" onClick="{{doRevoke}}">Revoke</button>
+                  </sc-if>
+                  <sc-if value="{{canRevoke}}" hint-placeholder-val="{{ true }}">
+                    <button type="button" class="av-btn av-btn-ghost av-btn-sm" onClick="{{askRevoke}}">Revoke pairing</button>
+                  </sc-if>
+                </div>
+              </div>
+
+              <div class="av-card flex flex-col gap-3 p-3.5">
+                <div class="flex items-center gap-2.5">
+                  <span class="relative inline-flex size-2 bg-av-500"></span>
+                  <span class="text-[13px] font-medium text-zinc-50">Windows PC</span>
+                  <span class="text-[12px] text-zinc-400">This device · desktop client</span>
+                  <span class="flex-1"></span>
+                  <span class="av-chip bg-av-500/10 text-av-300 ring-av-500/40">Connected</span>
+                </div>
+                <div class="flex flex-wrap items-center gap-1.5">
+                  <span class="av-chip text-zinc-300 ring-white/15">Overlay</span>
+                  <span class="av-chip text-zinc-300 ring-white/15">Microphone</span>
+                  <span class="av-chip text-zinc-300 ring-white/15">Speakers</span>
+                  <span class="av-chip text-zinc-300 ring-white/15">Screen capture</span>
+                  <span class="av-chip text-zinc-300 ring-white/15">PC control</span>
+                  <span class="av-chip text-zinc-300 ring-white/15">Brave extension</span>
+                </div>
+                <div class="flex items-center gap-2.5 bg-black/20 px-3 py-2">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="shrink-0 text-zinc-400" aria-hidden="true"><rect x="2" y="7" width="20" height="10"></rect><path d="M6 17v3M18 17v3M7 12h.01M11 12h6"></path></svg>
+                  <span class="text-[12.5px] text-zinc-200">GeForce RTX 5090 · 32 GB</span>
+                  <span class="flex-1"></span>
+                  <span class="av-chip text-zinc-300 ring-white/20">{{gpuNote}}</span>
+                </div>
+              </div>
+
+              <div class="flex items-center gap-2.5 border border-dashed border-white/20 p-3.5">
+                <span class="inline-flex size-2 ring-1 ring-zinc-400"></span>
+                <span class="text-[13px] font-medium text-zinc-100">Second Spark</span>
+                <span class="text-[12px] text-zinc-400">DGX Spark · not enrolled</span>
+                <span class="flex-1"></span>
+                <span class="av-chip text-zinc-300 ring-white/20">Unconfigured · outside the first release</span>
+              </div>
+
+              <sc-for list="{{extraMachines}}" as="x" hint-placeholder-count="0">
+                <div class="flex items-center gap-2.5 border border-dashed border-white/20 p-3.5">
+                  <span class="inline-flex size-2 ring-1 ring-zinc-400"></span>
+                  <span class="text-[13px] font-medium text-zinc-100">{{x.host}}</span>
+                  <span class="flex-1"></span>
+                  <span class="av-chip text-zinc-300 ring-white/20">Not paired</span>
+                  <button type="button" class="av-btn av-btn-ghost av-btn-sm" onClick="{{x.remove}}">Remove</button>
+                </div>
+              </sc-for>
+
+              <sc-if value="{{pairOpen}}" hint-placeholder-val="{{ false }}">
+                <div class="av-rise av-card flex flex-col gap-3 p-3.5">
+                  <span class="text-[12.5px] font-medium text-zinc-100">Pair a machine</span>
+                  <span class="av-hint">Run the Avesra controller on the machine, then enter its address. You’ll confirm a one-time code and fingerprint shown on its setup screen.</span>
+                  <div class="flex items-end gap-2.5">
+                    <div class="flex flex-1 flex-col gap-1"><label class="text-[11px] text-zinc-400" for="pair-host">Hostname or IP</label><input id="pair-host" class="{{pairHostCls}}" placeholder="spark1.local" value="{{pairHost}}" onChange="{{setPairHost}}"></div>
+                    <sc-if value="{{pairAskCode}}" hint-placeholder-val="{{ false }}">
+                      <div class="flex w-[150px] flex-col gap-1"><label class="text-[11px] text-zinc-400" for="pair-code">One-time code</label><input id="pair-code" class="{{pairCodeCls}}" placeholder="000000" value="{{pairCode}}" onChange="{{setPairCode}}"></div>
+                    </sc-if>
+                  </div>
+                  <sc-if value="{{pairAskCode}}" hint-placeholder-val="{{ false }}"><span class="av-hint">Check that the machine shows fingerprint <span class="font-mono text-zinc-300">SHA256:n4Fe…91d0</span> before you continue.</span></sc-if>
+                  <div class="flex items-center gap-2">
+                    <span class="{{pairMsgCls}}">{{pairMsg}}</span>
+                    <button type="button" class="av-btn av-btn-ghost av-btn-sm" onClick="{{closePair}}">Cancel</button>
+                    <button type="button" class="av-btn av-btn-primary av-btn-sm" onClick="{{pairNext}}" disabled="{{pairBusy}}">{{pairBtn}}</button>
+                  </div>
+                </div>
+              </sc-if>
+
+              <div class="flex items-center gap-2.5 bg-sky-300/[0.05] p-3.5 ring-1 ring-sky-300/25 ring-inset">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" class="shrink-0 text-sky-200" aria-hidden="true"><path d="M7 18a4.5 4.5 0 0 1-.5-9 6 6 0 0 1 11.4 1.5A3.8 3.8 0 0 1 17.5 18z"></path></svg>
+                <div class="flex min-w-0 flex-1 flex-col">
+                  <span class="text-[13px] font-medium text-zinc-50">Jev <span class="font-normal text-sky-200">· Cloud — Jev · optional</span></span>
+                  <span class="av-hint">The only cloud AI allowed, for narrow typed decisions. Only a task category and action labels may leave; never audio, screens, memory, email or credentials. {{jevUse}}</span>
+                </div>
+                <span class="{{jevChipCls}}">{{jevChip}}</span>
+              </div>
+            </section>
+          </sc-if>
+
+          <!-- ================= PEOPLE & VOICE ID ================= -->
+          <sc-if value="{{is.people}}" hint-placeholder-val="{{ false }}">
+            <div class="flex items-center gap-3 bg-white/[0.03] px-3.5 py-3 ring-1 ring-white/10 ring-inset">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="shrink-0 text-zinc-300" aria-hidden="true"><rect x="5" y="11" width="14" height="10"></rect><path d="M8 11V8a4 4 0 0 1 8 0v3"></path></svg>
+              <span class="min-w-0 flex-1 text-[12.5px] leading-[18px] text-zinc-300">{{lockText}}</span>
+              <sc-if value="{{locked}}" hint-placeholder-val="{{ true }}">
+                <button type="button" class="av-btn av-btn-primary av-btn-sm" onClick="{{unlock}}" disabled="{{unlocking}}">{{unlockBtn}}</button>
+              </sc-if>
+              <sc-if value="{{unlocked}}" hint-placeholder-val="{{ false }}">
+                <button type="button" class="av-btn av-btn-ghost av-btn-sm" onClick="{{lock}}">Lock</button>
+              </sc-if>
+            </div>
+
+            <section class="flex flex-col gap-2.5">
+              <span class="av-kicker">Owner</span>
+              <div class="av-card flex flex-col gap-3 p-3.5">
+                <div class="flex items-center gap-3">
+                  <span class="grid size-9 shrink-0 place-items-center bg-[#3a5dd8]/25 font-mono text-[12px] font-medium text-[#b9c7f5]">YOU</span>
+                  <div class="flex min-w-0 flex-1 flex-col">
+                    <span class="text-[13px] font-medium text-zinc-50">You · owner</span>
+                    <span class="av-hint">Enrolled Sep 24, 2026 · ECAPA-TDNN rev 0f99f2d · enrollment quality good · held-out check 5 / 5 (simulated)</span>
+                  </div>
+                  <span class="av-chip bg-av-500/10 text-av-300 ring-av-500/40">Active</span>
+                </div>
+                <div class="flex items-center gap-2">
+                  <button type="button" class="av-btn av-btn-secondary av-btn-sm" onClick="{{testVoice}}" disabled="{{voiceTesting}}">{{testVoiceBtn}}</button>
+                  <button type="button" class="av-btn av-btn-ghost av-btn-sm" onClick="{{reenroll}}" disabled="{{locked}}">Re-enroll</button>
+                  <span class="{{voiceTestCls}}" role="status">{{voiceTestMsg}}</span>
+                </div>
+              </div>
+            </section>
+
+            <section class="flex flex-col gap-2.5">
+              <div class="flex items-center justify-between">
+                <span class="av-kicker">Other people</span>
+                <button type="button" class="av-btn av-btn-ghost av-btn-sm" onClick="{{addPerson}}" disabled="{{locked}}">Enroll a person</button>
+              </div>
+              <sc-for list="{{users}}" as="u" hint-placeholder-count="1">
+                <div class="av-card flex flex-col gap-2.5 p-3.5">
+                  <div class="flex items-center gap-3">
+                    <span class="grid size-9 shrink-0 place-items-center bg-[#8ede4a]/15 font-mono text-[12px] font-medium text-[#c6ef9e]">{{u.initials}}</span>
+                    <div class="flex min-w-0 flex-1 flex-col">
+                      <span class="text-[13px] font-medium text-zinc-50">{{u.name}}</span>
+                      <span class="av-hint">{{u.meta}}</span>
+                    </div>
+                    <button type="button" class="av-btn av-btn-ghost av-btn-sm" onClick="{{u.remove}}" disabled="{{locked}}">Delete voice profile</button>
+                  </div>
+                  <div class="flex flex-wrap gap-1.5" role="group" aria-label="{{u.aria}}">
+                    <sc-for list="{{u.grants}}" as="g" hint-placeholder-count="6">
+                      <button type="button" class="av-seg-btn ring-1 ring-white/10 ring-inset" aria-pressed="{{g.on}}" onClick="{{g.toggle}}" disabled="{{g.disabled}}" title="{{g.title}}">{{g.label}}</button>
+                    </sc-for>
+                  </div>
+                </div>
+              </sc-for>
+              <sc-if value="{{enrolling}}" hint-placeholder-val="{{ false }}">
+                <div class="av-rise av-card flex flex-col gap-2.5 p-3.5">
+                  <span class="text-[12.5px] font-medium text-zinc-100">Enroll a person</span>
+                  <div class="flex items-end gap-2.5">
+                    <div class="flex flex-1 flex-col gap-1"><label class="text-[11px] text-zinc-400" for="new-name">Name</label><input id="new-name" class="{{newNameCls}}" placeholder="Name" value="{{newName}}" onChange="{{setNewName}}"></div>
+                    <button type="button" class="av-btn av-btn-ghost av-btn-sm" onClick="{{cancelEnroll}}">Cancel</button>
+                    <button type="button" class="av-btn av-btn-primary av-btn-sm" onClick="{{startEnroll}}" disabled="{{enrollBusy}}">{{enrollBtn}}</button>
+                  </div>
+                  <span class="{{enrollMsgCls}}">{{enrollMsg}}</span>
+                </div>
+              </sc-if>
+            </section>
+
+            <section class="flex flex-col gap-2">
+              <span class="av-kicker">Rules that don’t change</span>
+              <div class="av-card flex flex-col divide-y divide-white/[0.06]">
+                <div class="px-3.5 py-2.5 text-[12.5px] text-zinc-300">Unknown voices are ignored. They are never enrolled automatically and their speech isn’t kept.</div>
+                <div class="px-3.5 py-2.5 text-[12.5px] text-zinc-300">A voice match never grants permissions or changes ownership. Those need Windows Hello here.</div>
+                <div class="px-3.5 py-2.5 text-[12.5px] text-zinc-300">Voice ID isn’t secure authentication: recordings, synthesis or illness can fool it. Consequential approvals also show here.</div>
+                <div class="px-3.5 py-2.5 text-[12.5px] text-zinc-300">Enrollment audio stays in memory only. A new speaker model means re-enrolling, not reusing old profiles.</div>
+              </div>
+            </section>
+          </sc-if>
+
+          <!-- ================= OBSERVATION & ACTIONS ================= -->
+          <sc-if value="{{is.awareness}}" hint-placeholder-val="{{ false }}">
+            <div class="{{obsCls}}">
+              <span class="relative flex size-2.5 shrink-0">
+                <sc-if value="{{obsLive}}" hint-placeholder-val="{{ true }}"><span class="av-ping absolute inline-flex size-full bg-av-500"></span></sc-if>
+                <span class="{{obsDotCls}}"></span>
+              </span>
+              <div class="flex min-w-0 flex-1 flex-col gap-0.5">
+                <span class="text-[13px] font-medium text-zinc-50">{{obsTitle}}</span>
+                <span class="text-[12px] leading-[17px] text-zinc-400">{{obsDetail}}</span>
+              </div>
+              <span class="flex items-center gap-2">
+                <span class="text-[12px] text-zinc-300">Observe screen</span>
+                <button type="button" role="switch" class="av-switch group" aria-checked="{{screenOn}}" aria-label="Continuous screen observation" onClick="{{toggleScreen}}"><span class="av-knob group-aria-checked:translate-x-[18px]"></span></button>
+              </span>
+            </div>
+
+            <section class="flex flex-col gap-2.5">
+              <span class="av-kicker">What Avesra may observe</span>
+              <div class="grid grid-cols-2 gap-2">
+                <sc-for list="{{displays}}" as="d" hint-placeholder-count="2">
+                  <button type="button" role="checkbox" aria-checked="{{d.on}}" class="{{d.cls}}" onClick="{{d.toggle}}" disabled="{{screenOff}}">
+                    <span class="{{d.box}}"><sc-if value="{{d.on}}" hint-placeholder-val="{{ false }}"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="square" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"></path></svg></sc-if></span>
+                    <span class="flex min-w-0 flex-col text-left"><span class="text-[12.5px] font-medium text-zinc-100">{{d.name}}</span><span class="av-hint">{{d.desc}}</span></span>
+                  </button>
+                </sc-for>
+              </div>
+              <sc-if value="{{displayErr}}" hint-placeholder-val="{{ false }}"><span class="text-[11.5px] text-red-400" role="alert">Choose at least one display, or turn observation off.</span></sc-if>
+              <div class="flex items-center gap-3">
+                <span class="av-label">Applications</span>
+                <div class="av-seg" role="group" aria-label="Application scope">
+                  <button type="button" class="av-seg-btn" aria-pressed="{{scopeAllowed}}" onClick="{{setScopeAllowed}}" disabled="{{screenOff}}">Only apps I allow</button>
+                  <button type="button" class="av-seg-btn" aria-pressed="{{scopeAll}}" onClick="{{setScopeAll}}" disabled="{{screenOff}}">All except excluded</button>
+                </div>
+              </div>
+              <div class="av-card flex flex-col divide-y divide-white/[0.06]">
+                <sc-for list="{{apps}}" as="a" hint-placeholder-count="7">
+                  <div class="flex h-11 items-center gap-3 px-3.5">
+                    <span class="grid size-6 shrink-0 place-items-center bg-white/[0.06] text-[10.5px] font-semibold text-zinc-300">{{a.initial}}</span>
+                    <span class="flex min-w-0 flex-1 flex-col"><span class="truncate text-[12.5px] text-zinc-100">{{a.name}}</span><sc-if value="{{a.note}}" hint-placeholder-val="{{ false }}"><span class="av-hint">{{a.note}}</span></sc-if></span>
+                    <div class="av-seg" role="group" aria-label="{{a.aria}}">
+                      <sc-for list="{{a.opts}}" as="o" hint-placeholder-count="3"><button type="button" class="av-seg-btn" aria-pressed="{{o.on}}" onClick="{{o.pick}}" disabled="{{o.disabled}}" title="{{o.title}}">{{o.label}}</button></sc-for>
+                    </div>
+                  </div>
+                </sc-for>
+              </div>
+              <span class="av-hint">Always excluded: password managers, sign-in and UAC screens, private windows. Frames stay in memory for at most 30 seconds and are never written to disk. Masking isn’t perfect, which is why nothing raw is kept.</span>
+            </section>
+
+            <section class="flex flex-col gap-2">
+              <div class="flex items-baseline justify-between gap-3">
+                <span class="av-kicker">Pending approvals</span>
+                <span class="av-hint">Approval binds to exactly what’s shown and expires if it changes.</span>
+              </div>
+              <sc-for list="{{approvals}}" as="p" hint-placeholder-count="1">
+                <div class="{{p.cls}}">
+                  <div class="flex items-start gap-3">
+                    <div class="flex min-w-0 flex-1 flex-col gap-0.5">
+                      <span class="text-[13px] font-medium text-zinc-50">{{p.title}}</span>
+                      <span class="av-hint">{{p.why}}</span>
+                    </div>
+                    <span class="{{p.chipCls}}">{{p.status}}</span>
+                  </div>
+                  <div class="mt-2.5 bg-black/30 px-3 py-2 font-mono text-[11px] leading-4 text-zinc-300">{{p.cmd}}</div>
+                  <div class="mt-2.5 grid grid-cols-3 gap-3 text-[11.5px] leading-4">
+                    <div class="flex flex-col gap-0.5"><span class="text-[10.5px] text-zinc-400">Expected effect</span><span class="text-zinc-200">{{p.effect}}</span></div>
+                    <div class="flex flex-col gap-0.5"><span class="text-[10.5px] text-zinc-400">Disruption</span><span class="text-zinc-200">{{p.disruption}}</span></div>
+                    <div class="flex flex-col gap-0.5"><span class="text-[10.5px] text-zinc-400">Rollback</span><span class="text-zinc-200">{{p.rollback}}</span></div>
+                  </div>
+                  <sc-if value="{{p.result}}" hint-placeholder-val="{{ false }}"><div class="{{p.resultCls}}" role="status">{{p.result}}</div></sc-if>
+                  <sc-if value="{{p.pending}}" hint-placeholder-val="{{ true }}">
+                    <div class="mt-3 flex items-center justify-end gap-1.5">
+                      <button type="button" class="av-btn av-btn-ghost av-btn-sm" onClick="{{p.decline}}">Decline</button>
+                      <button type="button" class="av-btn av-btn-primary av-btn-sm" onClick="{{p.approve}}">Approve once</button>
+                    </div>
+                  </sc-if>
+                </div>
+              </sc-for>
+            </section>
+
+            <section class="flex flex-col gap-2">
+              <span class="av-kicker">Learned names</span>
+              <div class="av-card flex flex-col divide-y divide-white/[0.06]">
+                <sc-for list="{{aliases}}" as="a" hint-placeholder-count="5">
+                  <div class="flex items-center gap-3 px-3.5 py-2.5">
+                    <span class="w-[120px] shrink-0 truncate font-mono text-[12px] text-av-300">“{{a.phrase}}”</span>
+                    <div class="flex min-w-0 flex-1 flex-col">
+                      <span class="truncate text-[12.5px] text-zinc-100">{{a.target}}</span>
+                      <span class="av-hint truncate">{{a.detail}}</span>
+                    </div>
+                    <span class="shrink-0 text-[11px] text-zinc-400">{{a.last}}</span>
+                    <button type="button" class="av-iconbtn size-7 hover:bg-red-500/10 hover:text-red-300" onClick="{{a.remove}}" aria-label="{{a.aria}}" title="Forget">
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"></path></svg>
+                    </button>
+                  </div>
+                </sc-for>
+              </div>
+            </section>
+
+            <section class="flex flex-col gap-2">
+              <div class="flex items-center justify-between">
+                <span class="av-kicker">Routines</span>
+                <button type="button" class="{{watchBtnCls}}" onClick="{{toggleWatch}}">{{watchBtn}}</button>
+              </div>
+              <sc-if value="{{watching}}" hint-placeholder-val="{{ false }}">
+                <div class="av-rise flex items-center gap-2.5 bg-av-500/10 px-3 py-2 text-[12px] text-av-200 ring-1 ring-av-500/40 ring-inset" role="status">
+                  <span class="relative flex size-2"><span class="av-ping absolute inline-flex size-full bg-av-500"></span><span class="relative inline-flex size-2 bg-av-500"></span></span>
+                  Watching and learning in the selected window. Passwords and MFA fields are skipped and marked as your steps.
+                </div>
+              </sc-if>
+              <div class="av-card flex flex-col divide-y divide-white/[0.06]">
+                <sc-for list="{{routines}}" as="r" hint-placeholder-count="4">
+                  <div class="flex items-center gap-3 px-3.5 py-2.5">
+                    <div class="flex min-w-0 flex-1 flex-col">
+                      <span class="truncate text-[12.5px] text-zinc-100">{{r.name}}</span>
+                      <span class="av-hint truncate">{{r.note}}</span>
+                    </div>
+                    <span class="{{r.chipCls}}">{{r.state}}</span>
+                    <button type="button" class="av-btn av-btn-ghost av-btn-sm" onClick="{{r.toggle}}">{{r.toggleLabel}}</button>
+                  </div>
+                </sc-for>
+              </div>
+              <span class="av-hint">A routine never gains permissions. Every replay re-checks each step against your current grants and a fresh look at the screen.</span>
+            </section>
+
+            <section class="flex flex-col gap-2">
+              <div class="flex items-baseline justify-between gap-3">
+                <span class="av-kicker">What needs your OK</span>
+                <span class="av-hint">Locked rules can only be made stricter.</span>
+              </div>
+              <div class="av-card flex flex-col divide-y divide-white/[0.06]">
+                <sc-for list="{{actions}}" as="a" hint-placeholder-count="8">
+                  <div class="flex min-h-11 items-center gap-3 px-3.5 py-1.5">
+                    <span class="flex min-w-0 flex-1 flex-col">
+                      <span class="text-[12.5px] text-zinc-100">{{a.name}}</span>
+                      <sc-if value="{{a.note}}" hint-placeholder-val="{{ false }}"><span class="inline-flex items-center gap-1 text-[11px] text-zinc-400"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="5" y="11" width="14" height="10"></rect><path d="M8 11V8a4 4 0 0 1 8 0v3"></path></svg>{{a.note}}</span></sc-if>
+                    </span>
+                    <div class="av-seg" role="group" aria-label="{{a.aria}}">
+                      <sc-for list="{{a.opts}}" as="o" hint-placeholder-count="3"><button type="button" class="av-seg-btn" aria-pressed="{{o.on}}" onClick="{{o.pick}}" disabled="{{o.disabled}}" title="{{o.title}}">{{o.label}}</button></sc-for>
+                    </div>
+                  </div>
+                </sc-for>
+              </div>
+            </section>
+
+            <section class="flex flex-col gap-2">
+              <span class="av-kicker">Global controls</span>
+              <div class="av-card flex flex-col divide-y divide-white/[0.06]">
+                <sc-for list="{{globalShortcuts}}" as="r" hint-placeholder-count="2">
+                  <div class="flex flex-col gap-1 px-3.5 py-2.5">
+                    <div class="flex items-center gap-3">
+                      <div class="flex min-w-0 flex-1 flex-col">
+                        <span class="text-[12.5px] text-zinc-100">{{r.label}}</span>
+                        <span class="av-hint">{{r.desc}}</span>
+                      </div>
+                      <sc-if value="{{r.recording}}" hint-placeholder-val="{{ false }}">
+                        <button type="button" autoFocus="{{r.recording}}" class="inline-flex h-8 cursor-text items-center gap-2 bg-av-500/10 px-3 font-mono text-[11.5px] text-av-200 ring-1 ring-av-500 focus:outline-none" onKeyDown="{{r.onKey}}" aria-label="Press the new shortcut, or Escape to cancel">
+                          <span class="av-caret inline-block h-3 w-[2px] bg-av-500"></span> Press keys · Esc cancels
+                        </button>
+                        <button type="button" class="av-btn av-btn-ghost av-btn-sm" onClick="{{r.cancel}}">Cancel</button>
+                      </sc-if>
+                      <sc-if value="{{r.idle}}" hint-placeholder-val="{{ true }}">
+                        <span class="flex items-center gap-1"><sc-for list="{{r.keys}}" as="k" hint-placeholder-count="3"><span class="av-kbd">{{k}}</span></sc-for></span>
+                        <button type="button" class="av-btn av-btn-secondary av-btn-sm" onClick="{{r.record}}">Change</button>
+                      </sc-if>
+                    </div>
+                    <sc-if value="{{r.err}}" hint-placeholder-val="{{ false }}"><span class="text-[11.5px] text-red-400" role="alert">{{r.err}}</span></sc-if>
+                  </div>
+                </sc-for>
+              </div>
+            </section>
+          </sc-if>
+
+          <!-- ================= MEMORY & DIAGNOSTICS ================= -->
+          <sc-if value="{{is.memory}}" hint-placeholder-val="{{ false }}">
+            <div class="av-seg self-start" role="tablist" aria-label="Memory and diagnostics">
+              <sc-for list="{{memTabs}}" as="t" hint-placeholder-count="4">
+                <button type="button" role="tab" class="av-seg-btn px-3.5" aria-pressed="{{t.on}}" aria-selected="{{t.on}}" onClick="{{t.pick}}">{{t.label}}</button>
+              </sc-for>
+            </div>
+
+            <sc-if value="{{tab.memory}}" hint-placeholder-val="{{ true }}">
+              <div class="flex items-center gap-2">
+                <div class="relative flex-1">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" class="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-zinc-400" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>
+                  <label class="sr-only" for="mem-q">Search memory</label>
+                  <input id="mem-q" type="search" class="av-input pl-8" placeholder="Search facts and preferences" value="{{q}}" onChange="{{setQ}}">
+                </div>
+                <div class="av-seg" role="group" aria-label="Filter">
+                  <sc-for list="{{memFilters}}" as="f" hint-placeholder-count="3"><button type="button" class="av-seg-btn" aria-pressed="{{f.on}}" onClick="{{f.pick}}">{{f.label}} <span class="font-mono text-[10.5px] text-zinc-400">{{f.count}}</span></button></sc-for>
+                </div>
+                <button type="button" class="av-btn av-btn-secondary" onClick="{{addMem}}">Add</button>
+              </div>
+              <div class="flex items-center gap-4 text-[11.5px] text-zinc-400">
+                <span class="inline-flex items-center gap-1.5"><span class="av-chip bg-av-500/10 text-av-300 ring-av-500/40">Stated</span>you told Avesra directly</span>
+                <span class="inline-flex items-center gap-1.5"><span class="av-chip border border-dashed border-white/30 text-zinc-300 ring-0">Inferred</span>a pattern Avesra noticed, not confirmed</span>
+              </div>
+              <sc-if value="{{deletedText}}" hint-placeholder-val="{{ false }}">
+                <div class="av-rise flex items-center gap-2 bg-white/[0.05] px-3 py-2 text-[12px] text-zinc-200" role="status">
+                  <span class="min-w-0 flex-1 truncate">Deleted “{{deletedText}}”, including search copies</span>
+                  <button type="button" class="av-btn av-btn-ghost av-btn-sm" onClick="{{undoDelete}}">Undo</button>
+                </div>
+              </sc-if>
+              <div class="flex flex-col gap-2">
+                <sc-for list="{{memView}}" as="m" hint-placeholder-count="6">
+                  <div class="{{m.cls}}">
+                    <div class="flex items-start gap-3">
+                      <span class="{{m.chipCls}}">{{m.typeLabel}}</span>
+                      <div class="flex min-w-0 flex-1 flex-col gap-1">
+                        <sc-if value="{{m.editing}}" hint-placeholder-val="{{ false }}">
+                          <label class="sr-only" for="{{m.inputId}}">Edit preference</label>
+                          <input id="{{m.inputId}}" class="{{m.inputCls}}" value="{{memDraft}}" onChange="{{setMemDraft}}" autoFocus="{{m.editing}}">
+                          <sc-if value="{{memDraftEmpty}}" hint-placeholder-val="{{ false }}"><span class="text-[11.5px] text-red-400" role="alert">A preference can’t be empty.</span></sc-if>
+                        </sc-if>
+                        <sc-if value="{{m.viewing}}" hint-placeholder-val="{{ true }}"><span class="{{m.textCls}}">{{m.text}}</span></sc-if>
+                        <span class="text-[11px] text-zinc-400">{{m.source}} · {{m.date}}</span>
+                      </div>
+                      <div class="flex shrink-0 items-center gap-0.5">
+                        <sc-if value="{{m.editing}}" hint-placeholder-val="{{ false }}">
+                          <button type="button" class="av-btn av-btn-ghost av-btn-sm" onClick="{{cancelMem}}">Cancel</button>
+                          <button type="button" class="av-btn av-btn-primary av-btn-sm" onClick="{{saveMem}}" disabled="{{memDraftEmpty}}">Save</button>
+                        </sc-if>
+                        <sc-if value="{{m.canConfirm}}" hint-placeholder-val="{{ false }}"><button type="button" class="av-btn av-btn-ghost av-btn-sm" onClick="{{m.confirm}}">Keep as preference</button></sc-if>
+                        <sc-if value="{{m.canEdit}}" hint-placeholder-val="{{ false }}">
+                          <button type="button" class="av-iconbtn size-7" onClick="{{m.edit}}" aria-label="{{m.editAria}}" title="Edit"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"></path><path d="m13.5 6.5 4 4"></path></svg></button>
+                        </sc-if>
+                        <sc-if value="{{m.viewing}}" hint-placeholder-val="{{ true }}">
+                          <button type="button" class="av-iconbtn size-7 hover:bg-red-500/10 hover:text-red-300" onClick="{{m.remove}}" aria-label="{{m.deleteAria}}" title="Delete"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"></path></svg></button>
+                        </sc-if>
+                      </div>
+                    </div>
+                  </div>
+                </sc-for>
+                <sc-if value="{{memEmpty}}" hint-placeholder-val="{{ false }}"><div class="border border-dashed border-white/15 px-4 py-6 text-center text-[12.5px] text-zinc-400">No memories match “{{q}}”.</div></sc-if>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{tab.history}}" hint-placeholder-val="{{ false }}">
+              <div class="flex items-center gap-2">
+                <span class="av-hint flex-1">Accepted requests and tasks are kept until you delete them. Raw audio and screenshots are never stored; unknown voices and rejected speech aren’t recorded.</span>
+                <button type="button" class="av-btn av-btn-secondary av-btn-sm" onClick="{{exportHistory}}">{{exportLabel}}</button>
+              </div>
+              <div class="av-card flex flex-col divide-y divide-white/[0.06]">
+                <sc-for list="{{history}}" as="h" hint-placeholder-count="5">
+                  <div class="flex items-center gap-3 px-3.5 py-2.5">
+                    <span class="w-[76px] shrink-0 font-mono text-[11px] text-zinc-400">{{h.when}}</span>
+                    <div class="flex min-w-0 flex-1 flex-col">
+                      <span class="truncate text-[12.5px] text-zinc-100">“{{h.req}}”</span>
+                      <span class="av-hint truncate">{{h.outcome}}</span>
+                    </div>
+                    <span class="{{h.chipCls}}">{{h.status}}</span>
+                    <button type="button" class="av-iconbtn size-7 hover:bg-red-500/10 hover:text-red-300" onClick="{{h.remove}}" aria-label="{{h.aria}}" title="Delete"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"></path></svg></button>
+                  </div>
+                </sc-for>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{tab.perf}}" hint-placeholder-val="{{ false }}">
+              <div class="flex items-center gap-3 bg-amber-400/[0.06] px-3 py-2 ring-1 ring-amber-400/25 ring-inset">
+                <span class="av-chip bg-amber-400/15 text-amber-200 ring-amber-400/40">SIMULATED</span>
+                <span class="flex-1 text-[12px] text-amber-100/90">Sample numbers. Real values come from per-stage traces once Avesra runs on Spark2.</span>
+              </div>
+              <div class="grid grid-cols-3 gap-2">
+                <sc-for list="{{e2e}}" as="e" hint-placeholder-count="3">
+                  <div class="av-card flex flex-col gap-1 p-3">
+                    <span class="text-[11px] text-zinc-400">{{e.label}}</span>
+                    <span class="font-mono text-[18px] text-zinc-50">{{e.p50}} <span class="text-[11px] text-zinc-400">p50</span></span>
+                    <span class="font-mono text-[11.5px] text-zinc-300">p95 {{e.p95}} · n {{e.n}}</span>
+                    <span class="{{e.gateCls}}">{{e.gate}}</span>
+                  </div>
+                </sc-for>
+              </div>
+              <div class="av-card flex flex-col">
+                <div class="grid grid-cols-[minmax(0,1.2fr)_minmax(0,1.1fr)_52px_52px_52px_52px_40px] gap-2 border-b border-white/[0.06] px-3.5 py-2 text-[10.5px] text-zinc-400">
+                  <span>Stage</span><span>Model · device</span><span class="text-right">p50</span><span class="text-right">p95</span><span class="text-right">p99</span><span class="text-right">max</span><span class="text-right">err</span>
+                </div>
+                <sc-for list="{{perfRows}}" as="r" hint-placeholder-count="7">
+                  <div class="{{r.cls}}">
+                    <span class="truncate text-zinc-100">{{r.stage}}</span>
+                    <span class="truncate text-zinc-400">{{r.model}}</span>
+                    <span class="text-right font-mono text-zinc-200">{{r.p50}}</span>
+                    <span class="text-right font-mono text-zinc-200">{{r.p95}}</span>
+                    <span class="text-right font-mono text-zinc-300">{{r.p99}}</span>
+                    <span class="text-right font-mono text-zinc-400">{{r.max}}</span>
+                    <span class="text-right font-mono text-zinc-400">{{r.err}}</span>
+                  </div>
+                </sc-for>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="av-hint flex-1">Largest contributor to delay: <span class="text-zinc-200">planning (first token under speech load)</span>. Queue 0 · Spark2 headroom 31 GiB · last 24 h · failures and timeouts included.</span>
+                <button type="button" class="av-btn av-btn-secondary av-btn-sm" onClick="{{runCompare}}" disabled="{{comparing}}">{{compareBtn}}</button>
+              </div>
+              <sc-if value="{{compareResult}}" hint-placeholder-val="{{ false }}"><div class="av-rise bg-white/[0.04] px-3 py-2 text-[12px] leading-[17px] text-zinc-200 ring-1 ring-white/10 ring-inset" role="status">{{compareResult}}</div></sc-if>
+            </sc-if>
+
+            <sc-if value="{{tab.health}}" hint-placeholder-val="{{ false }}">
+              <section class="flex flex-col gap-2">
+                <div class="flex items-center justify-between">
+                  <span class="av-kicker">Connections</span>
+                  <div class="flex items-center gap-1.5">
+                    <button type="button" class="av-btn av-btn-ghost av-btn-sm" onClick="{{exportBundle}}">{{bundleLabel}}</button>
+                    <button type="button" class="av-btn av-btn-secondary av-btn-sm" onClick="{{runHealth}}" disabled="{{healthRunning}}">{{healthBtn}}</button>
+                  </div>
+                </div>
+                <sc-if value="{{healthDone}}" hint-placeholder-val="{{ false }}"><span class="av-hint" role="status">{{healthResult}}</span></sc-if>
+                <div class="av-card flex flex-col divide-y divide-white/[0.06]">
+                  <sc-for list="{{connections}}" as="c" hint-placeholder-count="5">
+                    <div class="flex h-12 items-center gap-3 px-3.5">
+                      <span class="{{c.dot}}"></span>
+                      <span class="flex min-w-0 flex-1 flex-col"><span class="text-[12.5px] text-zinc-100">{{c.name}}</span><span class="av-hint truncate">{{c.detail}}</span></span>
+                      <span class="{{c.valueCls}}">{{c.value}}</span>
+                    </div>
+                  </sc-for>
+                </div>
+              </section>
+              <section class="flex flex-col gap-2">
+                <span class="av-kicker">Recent failures</span>
+                <div class="av-card flex flex-col divide-y divide-white/[0.06]">
+                  <sc-for list="{{failures}}" as="f" hint-placeholder-count="3">
+                    <div class="flex items-start gap-3 px-3.5 py-2.5">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" class="mt-0.5 shrink-0 text-red-400" aria-hidden="true"><path d="M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"></path><path d="M12 9v4M12 17h.01"></path></svg>
+                      <span class="flex min-w-0 flex-1 flex-col gap-0.5"><span class="text-[12.5px] text-zinc-100">{{f.what}}</span><span class="text-[11.5px] leading-4 text-zinc-400">{{f.detail}}</span></span>
+                      <span class="flex shrink-0 flex-col items-end gap-1"><span class="{{f.chipCls}}">{{f.status}}</span><span class="text-[11px] text-zinc-400">{{f.when}}</span></span>
+                    </div>
+                  </sc-for>
+                </div>
+              </section>
+            </sc-if>
+          </sc-if>
+        </div>
+      </main>
+    </div>
+
+    <!-- Footer -->
+    <div class="flex h-[52px] shrink-0 items-center gap-2 border-t border-white/[0.06] bg-black/20 px-4">
+      <sc-if value="{{confirmClose}}" hint-placeholder-val="{{ false }}">
+        <span class="flex flex-1 items-center gap-2 text-[12.5px] text-amber-100"><span class="size-1.5 bg-amber-400"></span>Close without saving? Your changes will be lost.</span>
+        <button type="button" class="av-btn av-btn-ghost" onClick="{{keepEditing}}">Keep editing</button>
+        <button type="button" class="av-btn av-btn-danger-soft" onClick="{{discardClose}}">Discard and close</button>
+      </sc-if>
+      <sc-if value="{{footerNormal}}" hint-placeholder-val="{{ true }}">
+        <span class="flex min-w-0 flex-1 items-center gap-2 text-[12.5px]">
+          <sc-if value="{{st.error}}" hint-placeholder-val="{{ false }}">
+            <span class="text-red-300" role="alert">{{errorSummary}}</span>
+            <sc-for list="{{errorLinks}}" as="e" hint-placeholder-count="1">
+              <button type="button" class="cursor-pointer text-[12.5px] text-red-200 underline decoration-red-500/60 underline-offset-2 focus-visible:outline-1 focus-visible:outline-av-400" onClick="{{e.go}}">{{e.label}}</button>
+            </sc-for>
+          </sc-if>
+          <sc-if value="{{st.dirty}}" hint-placeholder-val="{{ false }}"><span class="size-1.5 bg-amber-400"></span><span class="text-zinc-300">Unsaved changes</span></sc-if>
+          <sc-if value="{{st.saving}}" hint-placeholder-val="{{ false }}"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" class="av-spin text-av-400" aria-hidden="true"><path d="M12 3a9 9 0 1 1-9 9"></path></svg><span class="text-zinc-300">Saving…</span></sc-if>
+          <sc-if value="{{st.saved}}" hint-placeholder-val="{{ false }}"><span class="text-zinc-300" role="status">Saved at {{savedAt}} · applied at the next turn boundary</span></sc-if>
+          <sc-if value="{{st.clean}}" hint-placeholder-val="{{ true }}"><span class="text-zinc-400">No unsaved changes</span></sc-if>
+        </span>
+        <button type="button" class="av-btn av-btn-ghost" onClick="{{discard}}" disabled="{{notDirty}}">Discard</button>
+        <button type="button" class="av-btn av-btn-primary" onClick="{{save}}" disabled="{{cantSave}}">Save changes</button>
+      </sc-if>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"section":{"editor":"enum","options":["audio","models","profiles","people","awareness","memory"],"default":"audio"},"secN":{"editor":null},"onClose":{"editor":null},"embedded":{"editor":null},"reducedMotion":{"editor":null},"$preview":{"width":880,"height":640}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    const base = this.settingsDefaults();
+    this.saved = JSON.parse(JSON.stringify(base));
+    this.timers = [];
+    this.state = Object.assign({
+      section: props.section || 'audio',
+      dirty: false, saveState: 'idle', savedAt: '', confirmClose: false,
+      recording: null, shortcutErr: {}, tone: 'idle', previewing: false, designing: false, candidate: false,
+      editing: null, draft: null, tests: {}, load: { tts: { pct: 62, rate: 1 } },
+      selProfile: 'single', editAssign: false, assignDraft: null, profileMsg: '', profileMsgTone: 'err',
+      pairOpen: false, pairHost: '', pairCode: '', pairStage: 'host', pairTried: false,
+      confirmRevoke: false, revoked: false,
+      unlocked: false, unlocking: false, voiceTest: 'idle', enrolling: false, newName: '', enrollState: 'idle', enrollTried: false,
+      watching: false,
+      memTab: 'memory', q: '', memFilter: 'all', editMem: null, memDraft: '', deleted: null,
+      exported: false, health: 'idle', bundle: false, comparing: false, compared: false
+    }, base);
+  }
+
+  settingsDefaults() {
+    const all = (m) => ({ asr: m, spk: m, chat: m, screen: m, tts: m, judge: m, mem: m });
+    return {
+      inDev: 'mv7', outDev: 'scarlett', mode: 'continuous', wake: 'Avesra', followUp: '8',
+      shortcuts: { ptt: 'Ctrl + Space', mute: 'Ctrl + Shift + M', deafen: 'Ctrl + Shift + D', overlay: 'Ctrl + Shift + A', pause: 'Ctrl + Alt + P', stop: 'Ctrl + Alt + Backspace' },
+      voiceName: 'Avesra v1', voiceDate: 'Sep 24, 2026', speed: 1, volume: 72,
+      designerOpen: false, voiceDesc: 'Calm, low-mid voice with an even, unhurried pace. Warm but precise; no vocal fry.',
+      chimeLearn: true, chimeAction: true, chimeVol: 35,
+      lanes: [
+        { id: 'asr', name: 'Speech activity & transcription', desc: 'Finds speech and streams partial and final text. Partials can’t authorize anything.', driver: 'asrsvc', model: 'nemotron', machine: 'spark2', health: 'ready', limits: '16 kHz mono · streaming · cancellable' },
+        { id: 'spk', name: 'Speaker identity', desc: 'Matches voices to enrolled people, or says unknown. Never grants permissions.', driver: 'spksvc', model: 'ecapa', machine: 'spark2', health: 'ready', limits: '≥ 1.5 s of speech per decision · overlap → abstain' },
+        { id: 'chat', name: 'Conversation & planning', desc: 'Understands accepted requests and proposes typed actions.', driver: 'ls', model: 'q36', machine: 'spark2', health: 'ready', limits: '16,384 context · 2 sequences · recipe avesra-fast' },
+        { id: 'screen', name: 'Screen understanding', desc: 'Reads fresh, scoped screenshots and UI for grounding.', driver: 'ls', model: 'q36', machine: 'spark2', health: 'ready', limits: '1 image per request · no video' },
+        { id: 'tts', name: 'Speech generation', desc: 'Speaks approved text with your saved voice preset.', driver: 'ttssvc', model: 'tts06', machine: 'spark2', health: 'loading', limits: 'Chunked audio · interruptible' },
+        { id: 'judge', name: 'Decision evaluation', desc: 'Answers narrow typed questions. Never acts.', driver: 'ls', model: 'q36', machine: 'spark2', health: 'ready', limits: 'Typed schema output only' },
+        { id: 'mem', name: 'Memory processing', desc: 'Proposes facts, names and routines with sources. The controller decides what’s saved.', driver: 'ls', model: 'q36', machine: 'spark2', health: 'degraded', limits: 'Background priority · yields to speech' }
+      ],
+      profiles: [
+        { id: 'single', name: 'Single Spark', status: 'active', desc: 'Baseline. All inference on Spark2; this PC does voice, screen and control only.', assign: all('spark2') },
+        { id: 'accel', name: 'Accelerated', status: 'notset', desc: 'Eligible speech lanes on the RTX 5090, only where measured faster.', assign: null },
+        { id: 'gaming', name: 'Gaming', status: 'ready', desc: 'Frees the RTX 5090 for games. Everything runs on Spark2.', assign: all('spark2') }
+      ],
+      autoGaming: true,
+      extraMachines: [],
+      users: [
+        { id: 'jordan', name: 'Jordan', enrolled: 'Sep 20, 2026', grants: { apps: true, volume: true, media: true, browser: false, email: false, diag: false } }
+      ],
+      screenOn: true, displays: { d1: true, d2: false }, scope: 'allowed',
+      apps: [
+        { id: 'claude', name: 'Claude', level: 'act' }, { id: 'brave', name: 'Brave · Personal profile', level: 'act' },
+        { id: 'chrome', name: 'Chrome', level: 'act' }, { id: 'code', name: 'VS Code', level: 'observe' },
+        { id: 'explorer', name: 'File Explorer', level: 'act' }, { id: 'vpn', name: 'Cisco Secure Client', level: 'act' },
+        { id: 'onepw', name: '1Password', level: 'blocked', locked: true, note: 'Password managers are never observed' }
+      ],
+      aliases: [
+        { phrase: 'Claude', target: 'Claude · desktop app', detail: 'Anthropic · verified publisher · you picked it over the website', last: '1:58 PM' },
+        { phrase: 'IRIS', target: 'Project “IRIS” in Claude', detail: 'Project name only; Avesra doesn’t touch its files', last: '1:58 PM' },
+        { phrase: 'my email', target: 'Gmail · Brave (Personal) · Inbox', detail: 'Latest = newest first, read and unread, no Spam or Trash', last: '2:14 PM' },
+        { phrase: 'X', target: 'x.com · Brave (Personal)', detail: 'Website; opening it never posts', last: '1:40 PM' },
+        { phrase: 'work VPN', target: 'Cisco Secure Client · profile “Work”', detail: 'Existing profile; MFA is always your step', last: 'Sep 23' }
+      ],
+      routines: [
+        { name: 'Connect work VPN', state: 'validated', note: '6 steps · pauses for MFA · watched Sep 18 · last run Sep 23' },
+        { name: 'Open Claude for a project', state: 'validated', note: '4 steps · learned from successful tasks · used 12 times' },
+        { name: 'Export the weekly report', state: 'candidate', note: 'Noticed while observing Sep 22 · never run · needs your review' },
+        { name: 'Set Slack status to focus', state: 'stale', note: 'Slack changed Sep 21 · will look again before using it' }
+      ],
+      actions: [
+        { id: 'launch', name: 'Open apps and sites, read what you asked about, change volume', mode: 'auto', lock: [], note: '' },
+        { id: 'prompt', name: 'Type a prompt into the named app and project', mode: 'auto', lock: [], note: 'Never clears text that’s already there' },
+        { id: 'submit', name: 'Submit a Claude or Codex prompt', mode: 'start', lock: ['auto', 'ask'], note: 'Only when you say “start” or “run”' },
+        { id: 'diag', name: 'Run read-only diagnostics from the reviewed catalog', mode: 'auto', lock: [], note: '' },
+        { id: 'vpn', name: 'Connect an existing VPN profile', mode: 'auto', lock: [], note: 'Pauses for MFA' },
+        { id: 'fix', name: 'Change system or network settings; run new scripts', mode: 'ask', lock: ['auto'], note: 'Always shows exact commands first' },
+        { id: 'send', name: 'Send, publish, delete, spend, or change permissions', mode: 'ask', lock: ['auto'], note: 'Always asks' },
+        { id: 'owner', name: 'Change people, ownership or grants', mode: 'hello', lock: ['auto', 'ask'], note: 'Windows Hello in Settings only; never by voice' }
+      ],
+      mems: [
+        { id: 1, type: 'stated', text: 'Use Brave with my Personal profile for Gmail and X.', source: 'You said, by voice', date: 'Sep 24, 2026' },
+        { id: 2, type: 'stated', text: 'When I say “latest emails”, use Inbox, newest first, read and unread. Skip Spam and Trash.', source: 'Confirmed during setup', date: 'Sep 24, 2026' },
+        { id: 3, type: 'stated', text: 'If I don’t say how much, change volume by 10%.', source: 'Added in Settings', date: 'Sep 24, 2026' },
+        { id: 4, type: 'inferred', text: 'Opens Claude with the IRIS project most weekday mornings.', source: 'Seen 9 times', date: 'Sep 8–24' },
+        { id: 5, type: 'inferred', text: 'Mutes Avesra during voice calls.', source: 'Seen 6 times', date: 'Sep 10–23' },
+        { id: 6, type: 'inferred', text: 'Prefers short spoken answers, with detail on screen.', source: 'From 31 conversations', date: 'Since Sep 2' }
+      ],
+      history: [
+        { id: 1, when: 'Today 2:14', req: 'Check my latest 10 emails and see if I got my package delivered', outcome: 'Delivered · message 3 of 10 (Northwind Outfitters) · nothing changed', status: 'Completed' },
+        { id: 2, when: 'Today 1:58', req: 'Open Claude for the IRIS project and type 123 into a new chat', outcome: 'Draft “123” in a new IRIS chat · not submitted', status: 'Completed' },
+        { id: 3, when: 'Today 1:40', req: 'Open X so I can post about my new app', outcome: 'X ready in Brave (Personal) · nothing posted', status: 'Completed' },
+        { id: 4, when: 'Today 12:31', req: 'Connect my work VPN', outcome: 'Waiting for your MFA code in Cisco Secure Client', status: 'Needs input' },
+        { id: 5, when: 'Yday 6:40', req: 'Why is my download slow?', outcome: 'Slow DNS lookups found · fix proposed, waiting for approval', status: 'Awaiting OK' }
+      ]
+    };
+  }
+
+  catalog() {
+    return {
+      drivers: {
+        asrsvc: { name: 'Avesra speech service', kind: 'local', caps: ['asr'] },
+        spksvc: { name: 'Avesra speaker service', kind: 'local', caps: ['spk'] },
+        ls: { name: 'Local Studio (vLLM)', kind: 'local', caps: ['chat', 'screen', 'judge', 'mem'] },
+        ttssvc: { name: 'Avesra TTS service', kind: 'local', caps: ['tts'] },
+        jev: { name: 'Jev API', kind: 'cloud', caps: ['judge'] }
+      },
+      models: {
+        nemotron: { name: 'Nemotron Speech Streaming EN 0.6B', driver: 'asrsvc', caps: ['asr'], size: '2.4 GB' },
+        ecapa: { name: 'ECAPA-TDNN · SpeechBrain', driver: 'spksvc', caps: ['spk'], size: '0.1 GB' },
+        q36: { name: 'Qwen3.6-35B-A3B FP8 · avesra-fast', driver: 'ls', caps: ['chat', 'screen', 'judge', 'mem'], size: '≈ 38 GB' },
+        q38: { name: 'Qwen3.8-27B FP8 · avesra-quality', driver: 'ls', caps: ['chat', 'screen', 'judge', 'mem'], size: '≈ 30 GB' },
+        uitars: { name: 'UI-TARS-1.5 7B · not downloaded', driver: 'ls', caps: ['screen'], missing: true },
+        tts06: { name: 'Qwen3-TTS 0.6B Base · your preset', driver: 'ttssvc', caps: ['tts'], size: '1.8 GB' },
+        tts17: { name: 'Qwen3-TTS 1.7B VoiceDesign', driver: 'ttssvc', caps: ['ttsdesign'], size: '4.2 GB' },
+        jevdec: { name: 'Jev typed decisions', driver: 'jev', caps: ['judge'] }
+      },
+      machines: {
+        spark2: { name: 'Spark2', opt: 'Spark2 · DGX Spark (GB10)', kind: 'local' },
+        rtx: { name: 'RTX 5090', opt: 'Windows PC · RTX 5090', kind: 'local' },
+        spark1: { name: 'Second Spark', opt: 'Second Spark · not enrolled', kind: 'local' },
+        jevcloud: { name: 'Jev Cloud', opt: 'Jev Cloud · Cloud — Jev', kind: 'cloud' }
+      }
+    };
+  }
+
+  componentDidMount() { this.loader = setInterval(() => this.loadTick(), 400); }
+  componentWillUnmount() { clearInterval(this.loader); this.timers.forEach((t) => clearTimeout(t)); }
+  componentDidUpdate(prev) {
+    if (this.props.secN !== prev.secN && this.props.section) this.setState({ section: this.props.section });
+  }
+  later(fn, ms) { this.timers.push(setTimeout(fn, ms)); }
+
+  loadTick() {
+    const load = Object.assign({}, this.state.load);
+    this.state.lanes.forEach((l) => { if (l.health === 'loading' && !load[l.id]) load[l.id] = { pct: 0, rate: 5 }; });
+    const ids = Object.keys(load);
+    if (!ids.length) return;
+    const next = {};
+    let lanes = this.state.lanes;
+    let changed = false;
+    ids.forEach((id) => {
+      const pct = Math.min(100, load[id].pct + load[id].rate);
+      if (pct >= 100) {
+        lanes = lanes.map((l) => (l.id === id && l.health === 'loading' ? Object.assign({}, l, { health: 'ready' }) : l));
+        changed = true;
+      } else next[id] = { pct: pct, rate: load[id].rate };
+    });
+    const p = { load: next };
+    if (changed) p.lanes = lanes;
+    this.setState(p);
+  }
+
+  edit(patch) { this.setState(Object.assign({ dirty: true, saveState: 'idle', confirmClose: false }, patch)); }
+
+  // ---------- validation ----------
+  shortcutMeta() {
+    return {
+      ptt: { label: 'Push to talk', desc: 'Only when push-to-talk is on', section: 'audio' },
+      mute: { label: 'Mute microphone', desc: 'Stops capture now; accepted tasks continue', section: 'audio' },
+      deafen: { label: 'Deafen', desc: 'Mute plus silence Avesra and chimes', section: 'audio' },
+      overlay: { label: 'Show or hide overlay', desc: 'Hiding doesn’t change what Avesra is doing', section: 'audio' },
+      pause: { label: 'Pause assistant', desc: 'Stops listening, observation and new actions; the task waits at a safe step', section: 'awareness' },
+      stop: { label: 'Stop current task', desc: 'Cancels remaining steps; shows what already happened', section: 'awareness' }
+    };
+  }
+
+  errors() {
+    const s = this.state;
+    const out = [];
+    if (s.mode === 'wake') {
+      const w = (s.wake || '').trim();
+      const words = w ? w.split(/\s+/).length : 0;
+      if (!w) out.push({ section: 'audio', field: 'wake', msg: 'Enter a wake phrase.' });
+      else if (words > 4) out.push({ section: 'audio', field: 'wake', msg: 'Keep the wake phrase to 1–4 words.' });
+      else if (w.length < 4) out.push({ section: 'audio', field: 'wake', msg: 'Too short. Short phrases trigger by accident.' });
+    }
+    if ((s.voiceDesc || '').length > 280) out.push({ section: 'audio', field: 'desc', msg: 'Voice description is over 280 characters.' });
+    const sc = s.shortcuts;
+    const meta = this.shortcutMeta();
+    Object.keys(sc).forEach((k) => {
+      const dup = Object.keys(sc).find((o) => o !== k && sc[o] === sc[k]);
+      if (dup) out.push({ section: meta[k].section, field: 'sc-' + k, msg: 'Same shortcut as “' + meta[dup].label + '”.' });
+    });
+    if (s.screenOn && !s.displays.d1 && !s.displays.d2) out.push({ section: 'awareness', field: 'displays', msg: 'Choose a display to observe.' });
+    return out;
+  }
+
+  keyCombo(e) {
+    const k = e.key;
+    if (['Control', 'Shift', 'Alt', 'Meta'].indexOf(k) >= 0) return null;
+    const parts = [];
+    if (e.ctrlKey) parts.push('Ctrl');
+    if (e.altKey) parts.push('Alt');
+    if (e.shiftKey) parts.push('Shift');
+    if (e.metaKey) parts.push('Win');
+    const name = k === ' ' ? 'Space' : k === 'Escape' ? 'Esc' : k.length === 1 ? k.toUpperCase() : k;
+    parts.push(name);
+    return { combo: parts.join(' + '), mods: parts.length - 1, key: name };
+  }
+
+  onShortcutKey(id, e) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.key === 'Escape' && !e.ctrlKey && !e.altKey && !e.shiftKey) { this.setState({ recording: null }); return; }
+    const c = this.keyCombo(e);
+    if (!c) return;
+    const errs = Object.assign({}, this.state.shortcutErr);
+    const reserved = { 'Ctrl + Alt + Delete': 'Windows security screen', 'Ctrl + Shift + Esc': 'Task Manager', 'Win + L': 'Lock screen', 'Alt + F4': 'Close window', 'Alt + Tab': 'Switch windows' };
+    if (reserved[c.combo]) { errs[id] = c.combo + ' is reserved by Windows (' + reserved[c.combo] + '). Try another.'; this.setState({ shortcutErr: errs, recording: null }); return; }
+    if (c.mods === 0 && !/^F\d+$/.test(c.key)) { errs[id] = 'Add Ctrl, Alt or Shift so normal typing doesn’t trigger it.'; this.setState({ shortcutErr: errs, recording: null }); return; }
+    delete errs[id];
+    const sc = Object.assign({}, this.state.shortcuts);
+    sc[id] = c.combo;
+    this.edit({ shortcuts: sc, shortcutErr: errs, recording: null });
+  }
+
+  shortcutRows(section, errList) {
+    const meta = this.shortcutMeta();
+    const s = this.state;
+    return Object.keys(meta).filter((k) => meta[k].section === section).map((k) => {
+      const dup = errList.find((e) => e.field === 'sc-' + k);
+      return {
+        label: meta[k].label, desc: meta[k].desc, keys: s.shortcuts[k].split(' + '),
+        recording: s.recording === k, idle: s.recording !== k,
+        err: s.shortcutErr[k] || (dup ? dup.msg : ''),
+        record: () => this.setState({ recording: k }),
+        cancel: () => this.setState({ recording: null }),
+        onKey: (e) => this.onShortcutKey(k, e)
+      };
+    });
+  }
+
+  // ---------- lanes ----------
+  evaluate(laneId, draft, lanes) {
+    const c = this.catalog();
+    const dr = c.drivers[draft.driver];
+    const mo = c.models[draft.model];
+    const cur = lanes.find((l) => l.id === laneId);
+    const laneName = cur.name;
+    if (dr.caps.indexOf(laneId) < 0) return { health: 'incompatible', msg: dr.name + ' can’t serve ' + laneName.toLowerCase() + '.' + (draft.driver === 'jev' ? ' Jev is only allowed for decision evaluation.' : '') };
+    if (mo.driver !== draft.driver) return { health: 'incompatible', msg: mo.name + ' runs on ' + c.drivers[mo.driver].name + ', not ' + dr.name + '.' };
+    if (mo.caps.indexOf(laneId) < 0) {
+      if (draft.model === 'tts17') return { health: 'incompatible', msg: 'VoiceDesign creates voices during setup. Everyday speech uses the 0.6B Base model with your saved preset.' };
+      return { health: 'incompatible', msg: mo.name + ' can’t do ' + laneName.toLowerCase() + '.' };
+    }
+    if (dr.kind === 'cloud' && draft.machine !== 'jevcloud') return { health: 'incompatible', msg: 'The Jev API driver only runs on Jev Cloud.' };
+    if (dr.kind === 'local' && draft.machine === 'jevcloud') return { health: 'incompatible', msg: 'Local drivers can’t run on Jev Cloud. Only the Jev adapter may leave your network.' };
+    if (mo.missing) return { health: 'unavailable', msg: 'Not downloaded. Add it in Local Studio only if the main model fails grounding tests.' };
+    if (draft.machine === 'spark1') return { health: 'unavailable', msg: 'The second Spark isn’t enrolled; it’s outside the first release.' };
+    if (draft.machine === 'rtx') {
+      if (draft.driver === 'ls') return { health: 'unavailable', msg: 'Local Studio runs on Spark2. Client GPU lanes use Avesra’s speech services in the Accelerated profile.' };
+      return { health: 'unavailable', msg: 'The RTX 5090 is used only by the Accelerated profile, and only after it measures faster. Set that up in Profiles & Machines.' };
+    }
+    if (dr.kind === 'cloud') return { health: 'configured', cloud: true, msg: 'Cloud — Jev: only the task category and action labels leave the network. No audio, screen, memory or email. Avesra must still work if Jev is off.' };
+    if (cur.model === draft.model && cur.machine === draft.machine && cur.driver === draft.driver) return { health: cur.health, same: true, msg: 'No change from the current assignment.' };
+    if (draft.driver === 'ls') {
+      const others = lanes.filter((l) => l.id !== laneId && l.driver === 'ls' && l.machine === draft.machine);
+      if (others.length && others.some((l) => l.model !== draft.model)) {
+        return { health: 'configured', group: true, msg: 'Local Studio serves one active model, so this switches all ' + (others.length + 1) + ' Local Studio lanes to ' + mo.name + '. Requests drain at the next turn, then there’s a pause while it loads. If it fails, avesra-fast reloads.' };
+      }
+    }
+    const sharing = lanes.filter((l) => l.id !== laneId && l.model === draft.model && l.machine === draft.machine);
+    if (sharing.length) return { health: 'ready', share: true, msg: 'Already running on Spark2; this lane will share that deployment.' };
+    return { health: 'configured', msg: mo.name + ' (' + mo.size + ') will load on Spark2. Other lanes keep running.' };
+  }
+
+  startEdit(l) {
+    if (this.state.editing === l.id) { this.setState({ editing: null, draft: null }); return; }
+    this.setState({ editing: l.id, draft: { driver: l.driver, model: l.model, machine: l.machine } });
+  }
+  setDraft(key, val) {
+    const d = Object.assign({}, this.state.draft);
+    d[key] = val;
+    if (key === 'driver') {
+      const c = this.catalog();
+      const laneId = this.state.editing;
+      const first = Object.keys(c.models).find((m) => c.models[m].driver === val && c.models[m].caps.indexOf(laneId) >= 0 && !c.models[m].missing)
+        || Object.keys(c.models).find((m) => c.models[m].driver === val);
+      if (first) d.model = first;
+      if (c.drivers[val].kind === 'cloud') d.machine = 'jevcloud';
+      else if (d.machine === 'jevcloud') d.machine = 'spark2';
+    }
+    this.setState({ draft: d });
+  }
+  applyLane() {
+    const s = this.state;
+    const id = s.editing;
+    const ev = this.evaluate(id, s.draft, s.lanes);
+    if (ev.health === 'incompatible' || ev.health === 'unavailable') return;
+    if (ev.same) { this.setState({ editing: null, draft: null }); return; }
+    const load = Object.assign({}, s.load);
+    const tests = Object.assign({}, s.tests);
+    let lanes;
+    if (ev.group) {
+      lanes = s.lanes.map((l) => (l.driver === 'ls' || l.id === id ? Object.assign({}, l, { driver: 'ls', model: s.draft.model, machine: s.draft.machine, health: 'loading' }) : l));
+      lanes.forEach((l) => { if (l.driver === 'ls') { load[l.id] = { pct: 0, rate: 4 }; delete tests[l.id]; } });
+      this.edit({ lanes: lanes, load: load, tests: tests, editing: null, draft: null, pending: 'Switching Local Studio to ' + this.catalog().models[s.draft.model].name + ' · drained 1 request · loading (simulated)' });
+      return;
+    }
+    const willLoad = ev.health === 'configured' && !ev.cloud;
+    lanes = s.lanes.map((l) => (l.id === id ? Object.assign({}, l, s.draft, { health: willLoad ? 'loading' : ev.health }) : l));
+    if (willLoad) load[id] = { pct: 0, rate: 6 }; else delete load[id];
+    delete tests[id];
+    this.edit({ lanes: lanes, load: load, tests: tests, editing: null, draft: null });
+  }
+  testLane(id) {
+    const tests = Object.assign({}, this.state.tests);
+    tests[id] = { state: 'testing' };
+    this.setState({ tests: tests });
+    this.later(() => {
+      const s = this.state;
+      const l = s.lanes.find((x) => x.id === id);
+      const t = Object.assign({}, s.tests);
+      const ok = {
+        asr: 'Probe passed · streaming partials, endpointing, cancel · first partial 180 ms',
+        spk: 'Probe passed · owner profile compatible with this model revision · 42 ms',
+        chat: 'Probe passed · tool schema, cancellation · first token 38 ms',
+        screen: 'Probe passed · image input and grounding fixture · 310 ms per frame',
+        tts: 'Probe passed · chunked audio, interruption · first audio 212 ms',
+        judge: 'Probe passed · typed schema · 41 ms',
+        mem: 'Probe passed · currently deferred while speech is active'
+      }[id];
+      let lanes = s.lanes;
+      if (l.health === 'loading') t[id] = { state: 'fail', msg: 'Still loading (' + Math.round((s.load[id] || { pct: 0 }).pct) + '%). A responding port isn’t proof the model is ready.' };
+      else if (l.driver === 'jev') t[id] = { state: 'fail', msg: 'No Jev API key set. Jev is optional; the local model can handle this lane.' };
+      else {
+        t[id] = { state: 'ok', msg: ok + ' (simulated)' };
+        if (l.health === 'configured' || l.health === 'starting') lanes = lanes.map((x) => (x.id === id ? Object.assign({}, x, { health: 'ready' }) : x));
+      }
+      this.setState({ tests: t, lanes: lanes });
+    }, 1000 + Math.round(Math.random() * 500));
+  }
+
+  // ---------- profiles ----------
+  profileIssue(p, assign) {
+    const a = assign || p.assign;
+    if (!a) return 'No lanes are placed yet.';
+    const lanes = this.state.lanes;
+    const bad = Object.keys(a).find((k) => a[k] === 'rtx' && (p.id !== 'accel' || ['asr', 'spk', 'tts'].indexOf(k) < 0));
+    if (bad) {
+      const ln = lanes.find((l) => l.id === bad).name;
+      return p.id === 'accel'
+        ? ln + ' can’t run on the RTX 5090: Local Studio lanes stay on Spark2.'
+        : p.name + ' uses no client inference, so ' + ln + ' must stay on Spark2.';
+    }
+    return '';
+  }
+
+  memSave() {
+    const s = this.state;
+    const txt = s.memDraft.trim();
+    if (!txt) return;
+    const mems = s.mems.map((m) => (m.id === s.editMem ? Object.assign({}, m, { text: txt, type: 'stated', source: 'Edited by you', date: 'Today' }) : m));
+    this.setState({ mems: mems, editMem: null, memDraft: '' });
+  }
+
+  renderVals() {
+    const s = this.state;
+    const c = this.catalog();
+    const errs = this.errors();
+    const errSections = {};
+    errs.forEach((e) => { errSections[e.section] = true; });
+    const sec = s.section;
+    const is = { audio: sec === 'audio', models: sec === 'models', profiles: sec === 'profiles', people: sec === 'people', awareness: sec === 'awareness', memory: sec === 'memory' };
+    const meta = {
+      audio: ['Audio & Voice', 'Devices, how Avesra listens, shortcuts, its voice, and the small chimes it uses.'],
+      models: ['Models & Drivers', 'What runs each part of Avesra and where. Everything is local unless marked Cloud — Jev.'],
+      profiles: ['Profiles & Machines', 'Where each lane runs, resource budgets, and the machines Avesra is paired with.'],
+      people: ['People & Voice ID', 'Who Avesra recognizes and what each person may ask it to do.'],
+      awareness: ['Observation & Actions', 'What Avesra may see, what it has learned, and what always needs your OK.'],
+      memory: ['Memory & Diagnostics', 'What Avesra remembers, your request history, and how its machines and models are doing.']
+    };
+    const pendingApprovals = s.approvalState === 'pending' || !s.approvalState ? 1 : 0;
+    const navItems = [['audio', 'Audio & Voice'], ['models', 'Models & Drivers'], ['profiles', 'Profiles & Machines'], ['people', 'People & Voice ID'], ['awareness', 'Observation & Actions'], ['memory', 'Memory & Diagnostics']];
+    const nav = navItems.map((n) => {
+      const isMap = { audio: false, models: false, profiles: false, people: false, awareness: false, memory: false };
+      isMap[n[0]] = true;
+      return {
+        label: n[1], is: isMap, current: sec === n[0] ? 'page' : 'false', err: !!errSections[n[0]],
+        badge: n[0] === 'awareness' && pendingApprovals ? '1' : '',
+        go: () => this.setState({ section: n[0], recording: null })
+      };
+    });
+
+    // ----- audio -----
+    const meterSegs = [];
+    for (let i = 0; i < 24; i++) meterSegs.push('block h-2 flex-1 ' + (i < 16 ? 'bg-av-500' : i < 21 ? 'bg-amber-400' : 'bg-red-500'));
+    const modeDefs = [
+      ['continuous', 'Continuous', 'Default. No wake word needed after enrollment'],
+      ['wake', 'Wake phrase', 'Optional. Say “Avesra” first'],
+      ['ptt', 'Push to talk', 'Optional. Hold a shortcut while you speak']
+    ];
+    const modes = modeDefs.map((m) => {
+      const on = s.mode === m[0];
+      return {
+        label: m[1], desc: m[2], on: on,
+        cls: 'flex cursor-pointer flex-col gap-1 p-3 text-left ring-1 ring-inset transition-colors focus-visible:outline-1 focus-visible:outline-offset-2 focus-visible:outline-av-400 ' + (on ? 'bg-white/[0.06] ring-av-500 shadow-[inset_0_-2px_0_var(--color-av-500)]' : 'bg-white/[0.02] ring-white/[0.08] hover:bg-white/[0.04] hover:ring-white/15'),
+        radio: 'grid size-3.5 shrink-0 place-items-center ring-1 ring-inset ' + (on ? 'bg-av-500 ring-av-500 shadow-[inset_0_0_0_3px_#1f1f23]' : 'ring-zinc-500'),
+        pick: () => this.edit({ mode: m[0] })
+      };
+    });
+    const wakeErrObj = errs.find((e) => e.field === 'wake');
+    const descLen = (s.voiceDesc || '').length;
+    const chimes = [
+      { key: 'learn', label: 'Learning chime', desc: 'After Avesra commits something useful it learned', on: s.chimeLearn, toggle: () => this.edit({ chimeLearn: !s.chimeLearn }) },
+      { key: 'action', label: 'Action chime', desc: 'After a requested action is verified done', on: s.chimeAction, toggle: () => this.edit({ chimeAction: !s.chimeAction }) }
+    ].map((x) => Object.assign(x, {
+      previewLabel: s.chimePlaying === x.key ? 'Playing…' : 'Preview',
+      preview: () => { this.setState({ chimePlaying: x.key }); this.later(() => this.setState({ chimePlaying: null }), 900); }
+    }));
+
+    // ----- lanes -----
+    const counts = {};
+    s.lanes.forEach((l) => { const k = l.model + '@' + l.machine; counts[k] = (counts[k] || 0) + 1; });
+    const hStyle = {
+      ready: ['Ready', 'bg-av-500/10 text-av-300 ring-av-500/40'],
+      starting: ['Starting', 'text-zinc-200 ring-white/25'],
+      loading: ['Loading', 'bg-white/[0.05] text-zinc-200 ring-white/20'],
+      configured: ['Configured', 'border border-dashed border-white/30 text-zinc-300 ring-0'],
+      degraded: ['Degraded', 'bg-amber-400/10 text-amber-200 ring-amber-400/40'],
+      unavailable: ['Unavailable', 'text-zinc-400 ring-zinc-500/60'],
+      incompatible: ['Incompatible', 'bg-red-500/10 text-red-300 ring-red-500/40']
+    };
+    const legend = Object.keys(hStyle).map((k) => ({ label: hStyle[k][0], cls: 'av-chip ' + hStyle[k][1] }));
+    const lanes = s.lanes.map((l) => {
+      const dr = c.drivers[l.driver];
+      const k = l.model + '@' + l.machine;
+      const shareWith = s.lanes.filter((o) => o.id !== l.id && o.model + '@' + o.machine === k).map((o) => o.name);
+      const t = s.tests[l.id];
+      const editing = s.editing === l.id;
+      const ev = editing ? this.evaluate(l.id, s.draft, s.lanes) : null;
+      const loadPct = s.load[l.id] ? Math.round(s.load[l.id].pct) : 0;
+      const tone = ev ? (ev.health === 'incompatible' ? 'red' : ev.health === 'unavailable' ? 'zinc' : ev.cloud ? 'sky' : 'av') : 'av';
+      let healthText = hStyle[l.health][0];
+      if (l.health === 'loading') healthText = 'Loading ' + loadPct + '%';
+      else if (l.health === 'configured') healthText = 'Configured · not probed';
+      else if (l.health === 'degraded') healthText = 'Degraded · deferred';
+      const cloud = dr.kind === 'cloud';
+      return {
+        name: l.name, desc: l.desc, limits: l.limits,
+        cardCls: 'av-card p-3.5 ' + (editing ? 'ring-white/20' : ''),
+        driverName: dr.name, modelName: c.models[l.model].name, machineName: c.machines[l.machine].name,
+        locLabel: cloud ? 'Cloud — Jev' : 'Local',
+        locCls: 'av-chip h-[18px] px-1.5 ' + (cloud ? 'bg-sky-300/[0.08] text-sky-200 ring-sky-300/40' : 'text-zinc-300 ring-white/15'),
+        shared: counts[k] > 1, sharedText: 'Shared · ' + counts[k] + ' lanes',
+        sharedTitle: shareWith.length ? 'One deployment also serves ' + shareWith.join(', ') : '',
+        healthText: healthText, healthCls: 'av-chip ' + hStyle[l.health][1],
+        testing: !!(t && t.state === 'testing'), hasTest: !!t,
+        testMsg: t ? (t.state === 'testing' ? 'Running capability probe on ' + c.machines[l.machine].name + '…' : t.msg) : '',
+        testCls: 'mt-2 flex items-center gap-2 text-[12px] ' + (t && t.state === 'ok' ? 'text-av-300' : t && t.state === 'fail' ? 'text-red-300' : 'text-zinc-300'),
+        testLabel: t && t.state === 'testing' ? 'Probing…' : 'Probe',
+        test: () => this.testLane(l.id),
+        editing: editing, editLabel: editing ? 'Close' : 'Change',
+        edit: () => this.startEdit(l),
+        idDriver: 'drv-' + l.id, idModel: 'mdl-' + l.id, idMachine: 'mch-' + l.id,
+        draft: editing ? s.draft : { driver: l.driver, model: l.model, machine: l.machine },
+        onDriver: (e) => this.setDraft('driver', e.target.value),
+        onModel: (e) => this.setDraft('model', e.target.value),
+        onMachine: (e) => this.setDraft('machine', e.target.value),
+        evLabel: ev ? (ev.cloud ? 'Cloud — Jev' : ev.group ? 'Switches 4 lanes' : ev.share ? 'Ready · shared' : hStyle[ev.health][0]) : '',
+        evMsg: ev ? ev.msg : '',
+        evCls: 'flex items-start gap-2.5 px-2.5 py-2 ' + ({ red: 'bg-red-500/[0.08] text-red-200', zinc: 'bg-white/[0.04] text-zinc-300', sky: 'bg-sky-300/[0.07] text-sky-100', av: 'bg-av-500/[0.06] text-zinc-200' }[tone]),
+        evChipCls: 'av-chip ' + ({ red: 'text-red-300 ring-red-500/40', zinc: 'text-zinc-300 ring-zinc-500/60', sky: 'text-sky-200 ring-sky-300/40', av: 'text-av-300 ring-av-500/40' }[tone]),
+        cantApply: !ev || ev.health === 'incompatible' || ev.health === 'unavailable',
+        applyLabel: ev && ev.group ? 'Switch all 4' : 'Apply to lane',
+        cancel: () => this.setState({ editing: null, draft: null }),
+        apply: () => this.applyLane()
+      };
+    });
+    const driverOpts = Object.keys(c.drivers).map((k) => ({ v: k, label: c.drivers[k].name + (c.drivers[k].kind === 'cloud' ? ' · Cloud — Jev' : ' · Local') }));
+    const modelOpts = Object.keys(c.models).map((k) => ({ v: k, label: c.models[k].name }));
+    const machineOpts = Object.keys(c.machines).map((k) => ({ v: k, label: c.machines[k].opt }));
+    const depMap = {};
+    s.lanes.forEach((l) => {
+      const k = l.model + '@' + l.machine;
+      if (!depMap[k]) depMap[k] = { model: c.models[l.model].name, machine: c.machines[l.machine].name, driver: c.drivers[l.driver].name, lanes: [], cloud: c.drivers[l.driver].kind === 'cloud' };
+      depMap[k].lanes.push(l.name);
+    });
+    const deployments = Object.keys(depMap).map((k) => {
+      const d = depMap[k];
+      return {
+        model: d.model, machine: d.machine, driver: d.driver, lanes: 'Serves ' + d.lanes.join(', '),
+        count: d.lanes.length === 1 ? '1 lane' : d.lanes.length + ' lanes',
+        chipCls: 'av-chip ' + (d.cloud ? 'text-sky-200 ring-sky-300/40' : d.lanes.length > 1 ? 'bg-av-500/10 text-av-300 ring-av-500/40' : 'text-zinc-300 ring-white/15')
+      };
+    });
+    const loadingLS = s.lanes.some((l) => l.driver === 'ls' && l.health === 'loading');
+    const jevLanes = s.lanes.filter((l) => l.machine === 'jevcloud');
+
+    // ----- profiles -----
+    const selP = s.profiles.find((p) => p.id === s.selProfile) || s.profiles[0];
+    const activeP = s.profiles.find((p) => p.status === 'active');
+    const assignSrc = s.editAssign ? s.assignDraft : selP.assign;
+    const statusText = { active: 'Active', notset: 'Not set up', draft: 'Draft', ready: 'Ready' };
+    const profiles = s.profiles.map((p) => {
+      const sel = p.id === s.selProfile;
+      return {
+        name: p.name, desc: p.desc, sel: sel, statusText: statusText[p.status],
+        chipCls: 'av-chip ' + (p.status === 'active' ? 'bg-av-500/10 text-av-300 ring-av-500/40' : p.status === 'notset' ? 'border border-dashed border-white/25 text-zinc-400 ring-0' : 'text-zinc-200 ring-white/20'),
+        cls: 'flex cursor-pointer flex-col gap-1.5 p-3 text-left ring-1 ring-inset transition-colors focus-visible:outline-1 focus-visible:outline-offset-2 focus-visible:outline-av-400 ' + (sel ? 'bg-white/[0.06] ring-av-500 shadow-[inset_0_-2px_0_var(--color-av-500)]' : 'bg-white/[0.02] ring-white/[0.08] hover:bg-white/[0.04]'),
+        pick: () => this.setState({ selProfile: p.id, editAssign: false, assignDraft: null, profileMsg: '' })
+      };
+    });
+    const placeOpts = [['spark2', 'Spark2'], ['rtx', 'RTX 5090 (this PC)']].map((o) => ({ v: o[0], label: o[1] }));
+    const assignRows = assignSrc ? s.lanes.map((l) => {
+      const m = assignSrc[l.id];
+      let note = selP.status === 'active' ? 'Running' : 'Available';
+      let tone = selP.status === 'active' ? 'text-av-300' : 'text-zinc-300';
+      if (m === 'rtx') {
+        if (selP.id === 'accel' && ['asr', 'spk', 'tts'].indexOf(l.id) >= 0) { note = 'Client GPU · needs measured benefit'; tone = 'text-amber-200'; }
+        else { note = 'Not allowed in this profile'; tone = 'text-red-300'; }
+      }
+      return {
+        lane: l.name, machine: m, machineName: m === 'rtx' ? 'RTX 5090 (this PC)' : 'Spark2', note: note,
+        noteCls: 'flex-1 text-right text-[11.5px] ' + tone,
+        editing: s.editAssign, viewing: !s.editAssign, aria: 'Where ' + l.name + ' runs',
+        onChange: (e) => { const d = Object.assign({}, this.state.assignDraft); d[l.id] = e.target.value; this.setState({ assignDraft: d, profileMsg: '' }); }
+      };
+    }) : [];
+    const budgetRaw = [
+      ['Reasoning · Local Studio', 60, 'bg-av-500'], ['Speech + speaker services', 8, 'bg-[#3a5dd8]'], ['Voice (TTS)', 6, 'bg-red-500'],
+      ['Controller + OS reserve', 16, 'bg-zinc-400'], ['Other workloads (ComfyUI)', 8, 'bg-zinc-600'], ['Free headroom', 23, 'bg-transparent']
+    ];
+    const budget = budgetRaw.map((b) => ({ label: b[0], gib: b[1] + ' GiB', w: (b[1] / 121 * 100).toFixed(1), cls: 'block h-full ' + b[2], dot: 'size-2 ' + (b[2] === 'bg-transparent' ? 'ring-1 ring-white/30' : b[2]) }));
+    const hostOk = /^([a-z0-9-]+(\.[a-z0-9-]+)*|\d{1,3}(\.\d{1,3}){3})$/i.test(s.pairHost.trim());
+    const codeOk = /^\d{6}$/.test(s.pairCode.trim());
+    let pairMsg = s.pairStage === 'code' ? 'Codes expire after 5 minutes.' : 'Nothing is shared until you confirm the code.';
+    let pairErr = false;
+    if (s.pairStage === 'connecting') pairMsg = 'Checking code and fingerprint…';
+    else if (s.pairStage === 'failed') { pairMsg = 'Pairing failed: the code was rejected or has expired. Get a new code on that machine.'; pairErr = true; }
+    else if (s.pairTried && s.pairStage === 'host' && !hostOk) { pairMsg = s.pairHost.trim() ? '“' + s.pairHost.trim() + '” isn’t a valid hostname or IP address.' : 'Enter a hostname or IP address.'; pairErr = true; }
+    else if (s.pairTried && s.pairStage === 'code' && !codeOk) { pairMsg = 'Enter the 6-digit code shown on the machine.'; pairErr = true; }
+
+    // ----- people -----
+    const grantDefs = [['apps', 'Open apps'], ['volume', 'Volume'], ['media', 'Media'], ['browser', 'Browser tasks'], ['email', 'Owner’s email'], ['diag', 'Diagnostics']];
+    const users = s.users.map((u) => ({
+      name: u.name, initials: u.name.slice(0, 2).toUpperCase(),
+      meta: 'Enrolled ' + u.enrolled + ' · has no access to your email, history or memories unless granted',
+      aria: 'Permissions for ' + u.name,
+      remove: () => this.edit({ users: this.state.users.filter((x) => x.id !== u.id) }),
+      grants: grantDefs.map((g) => ({
+        label: g[1], on: !!u.grants[g[0]],
+        disabled: !s.unlocked || g[0] === 'email',
+        title: g[0] === 'email' ? 'Owner’s email stays owner-only' : (!s.unlocked ? 'Unlock with Windows Hello to change' : ''),
+        toggle: () => this.edit({ users: this.state.users.map((x) => (x.id === u.id ? Object.assign({}, x, { grants: Object.assign({}, x.grants, { [g[0]]: !x.grants[g[0]] }) }) : x)) })
+      }))
+    }));
+    let enrollMsg = 'They’ll read a few prompted phrases, then talk naturally for about a minute. New people start with no permissions.';
+    let enrollErr = false;
+    if (s.enrollState === 'listening') enrollMsg = 'Listening to prompted phrases… (simulated, no microphone is used)';
+    else if (s.enrollState === 'retry') { enrollMsg = 'Too much overlapping speech to build a reliable profile. Try again somewhere quieter.'; enrollErr = true; }
+    else if (s.enrollTried && !s.newName.trim()) { enrollMsg = 'Enter their name first.'; enrollErr = true; }
+
+    // ----- awareness -----
+    const displaysOn = s.displays.d1 || s.displays.d2;
+    let obsTitle = 'Observing ' + (s.displays.d1 && s.displays.d2 ? 'Displays 1 and 2' : s.displays.d1 ? 'Display 1' : 'Display 2') + (s.scope === 'allowed' ? ' · allowed apps only' : ' · all except excluded');
+    let obsDetail = 'Changed frames only, up to one every 2 seconds while idle. Read on Spark2; kept in memory ≤ 30 s. Stops on lock and pause.';
+    let obsTone = 'av';
+    if (!s.screenOn) { obsTitle = 'Screen observation is off'; obsDetail = 'Avesra only looks at the screen during a task you asked for. Voice requests still work.'; obsTone = 'off'; }
+    else if (!displaysOn) { obsTitle = 'Not observing: no display selected'; obsDetail = 'Choose a display below, or turn observation off.'; obsTone = 'amber'; }
+    const displays = [['d1', 'Display 1', '2560 × 1440 · primary'], ['d2', 'Display 2', '1920 × 1080 · right']].map((d) => {
+      const on = s.displays[d[0]];
+      return {
+        name: d[1], desc: d[2], on: on,
+        cls: 'flex cursor-pointer items-center gap-3 p-3 ring-1 ring-inset transition-colors disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-1 focus-visible:outline-offset-2 focus-visible:outline-av-400 ' + (on ? 'bg-white/[0.06] ring-av-500/60' : 'bg-white/[0.02] ring-white/[0.08] hover:bg-white/[0.04]'),
+        box: 'grid size-4 shrink-0 place-items-center ' + (on ? 'bg-av-600 text-white' : 'ring-1 ring-inset ring-zinc-500'),
+        toggle: () => { const ds = Object.assign({}, this.state.displays); ds[d[0]] = !ds[d[0]]; this.edit({ displays: ds }); }
+      };
+    });
+    const levelDefs = [['blocked', 'Excluded'], ['observe', 'Observe'], ['act', 'Observe + act']];
+    const apps = s.apps.map((a) => ({
+      name: a.name, initial: a.name.charAt(0) === '1' ? '1P' : a.name.charAt(0), note: a.note || '', aria: 'Permission for ' + a.name,
+      opts: levelDefs.map((o) => ({
+        label: o[1], on: a.level === o[0], disabled: !!a.locked && o[0] !== a.level, title: a.locked && o[0] !== a.level ? a.note : '',
+        pick: () => this.edit({ apps: this.state.apps.map((x) => (x.id === a.id ? Object.assign({}, x, { level: o[0] }) : x)) })
+      }))
+    }));
+    const apState = s.approvalState || 'pending';
+    const approvals = [{
+      title: 'Change Wi-Fi DNS to 1.1.1.1 and 1.0.0.1',
+      why: 'From “Why is my download slow?” yesterday: DNS lookups averaged 480 ms (simulated); the download itself ran at full speed once connected.',
+      cmd: 'Set-DnsClientServerAddress -InterfaceAlias "Wi-Fi" -ServerAddresses 1.1.1.1,1.0.0.1',
+      effect: 'Faster name lookups for new connections', disruption: 'Open connections may drop once', rollback: 'Restore automatic (DHCP) DNS',
+      status: { pending: 'Waiting for you', applying: 'Applying…', done: 'Applied · verified', declined: 'Declined' }[apState],
+      chipCls: 'av-chip ' + ({ pending: 'bg-amber-400/10 text-amber-200 ring-amber-400/40', applying: 'text-zinc-200 ring-white/20', done: 'bg-av-500/10 text-av-300 ring-av-500/40', declined: 'text-zinc-400 ring-zinc-500/60' }[apState]),
+      cls: 'p-3.5 ring-1 ring-inset ' + (apState === 'pending' ? 'bg-amber-400/[0.04] ring-amber-400/30' : 'bg-white/[0.025] ring-white/[0.08]'),
+      pending: apState === 'pending',
+      result: apState === 'done' ? 'Ran once under your account. Verified: lookups now 22 ms (simulated). Rollback is one click in History.' : apState === 'declined' ? 'Declined. Nothing was changed.' : apState === 'applying' ? 'Running the approved command…' : '',
+      resultCls: 'mt-2.5 text-[12px] ' + (apState === 'done' ? 'text-av-300' : 'text-zinc-300'),
+      approve: () => { this.setState({ approvalState: 'applying' }); this.later(() => this.setState({ approvalState: 'done' }), 1500); },
+      decline: () => this.setState({ approvalState: 'declined' })
+    }];
+    const aliases = s.aliases.map((a) => ({
+      phrase: a.phrase, target: a.target, detail: a.detail, last: a.last, aria: 'Forget “' + a.phrase + '”',
+      remove: () => this.edit({ aliases: this.state.aliases.filter((x) => x.phrase !== a.phrase) })
+    }));
+    const rStyle = { validated: 'bg-av-500/10 text-av-300 ring-av-500/40', candidate: 'border border-dashed border-white/30 text-zinc-300 ring-0', stale: 'bg-amber-400/10 text-amber-200 ring-amber-400/40', disabled: 'text-zinc-400 ring-zinc-500/60' };
+    const routines = s.routines.map((r) => ({
+      name: r.name, note: r.note, state: r.state.charAt(0).toUpperCase() + r.state.slice(1), chipCls: 'av-chip ' + rStyle[r.state],
+      toggleLabel: r.state === 'disabled' ? 'Enable' : 'Disable',
+      toggle: () => this.edit({ routines: this.state.routines.map((x) => (x.name === r.name ? Object.assign({}, x, { state: x.state === 'disabled' ? (x.prev || 'candidate') : 'disabled', prev: x.state }) : x)) })
+    }));
+    const modeLabels = { auto: 'Immediate', ask: 'Ask first', never: 'Never', start: 'On “start/run”', hello: 'Windows Hello' };
+    const actions = s.actions.map((a) => {
+      const optKeys = a.mode === 'start' ? ['start', 'never'] : a.mode === 'hello' ? ['hello'] : ['auto', 'ask', 'never'];
+      return {
+        name: a.name, note: a.note || '', aria: 'When Avesra may: ' + a.name,
+        opts: optKeys.map((k) => ({
+          label: modeLabels[k], on: a.mode === k || (a.mode === 'start' && k === 'start' && false), disabled: a.lock.indexOf(k) >= 0, title: a.lock.indexOf(k) >= 0 ? a.note : '',
+          pick: () => this.edit({ actions: this.state.actions.map((x) => (x.id === a.id ? Object.assign({}, x, { mode: k }) : x)) })
+        }))
+      };
+    });
+
+    // ----- memory & diagnostics -----
+    const q = s.q.trim().toLowerCase();
+    const filtered = s.mems.filter((m) => (s.memFilter === 'all' || m.type === s.memFilter) && (!q || m.text.toLowerCase().indexOf(q) >= 0 || m.source.toLowerCase().indexOf(q) >= 0));
+    const memView = filtered.map((m) => {
+      const editing = s.editMem === m.id;
+      const stated = m.type === 'stated';
+      return {
+        text: m.text, source: m.source, date: m.date, editing: editing, viewing: !editing, inputId: 'mem-' + m.id,
+        inputCls: 'av-input' + (s.memDraft.trim() ? '' : ' av-invalid'),
+        typeLabel: stated ? 'Stated' : 'Inferred',
+        chipCls: 'av-chip mt-px ' + (stated ? 'bg-av-500/10 text-av-300 ring-av-500/40' : 'border border-dashed border-white/30 text-zinc-300 ring-0'),
+        cls: 'px-3.5 py-3 ' + (stated ? 'bg-white/[0.03] ring-1 ring-inset ring-white/[0.07]' : 'border border-dashed border-white/[0.14]'),
+        textCls: 'text-[13px] leading-[19px] ' + (stated ? 'text-zinc-100' : 'text-zinc-300'),
+        canEdit: stated && !editing, canConfirm: !stated && !editing,
+        editAria: 'Edit “' + m.text + '”', deleteAria: 'Delete “' + m.text + '”',
+        edit: () => this.setState({ editMem: m.id, memDraft: m.text }),
+        confirm: () => this.setState({ mems: this.state.mems.map((x) => (x.id === m.id ? Object.assign({}, x, { type: 'stated', source: 'Confirmed by you', date: 'Today' }) : x)) }),
+        remove: () => {
+          const idx = this.state.mems.findIndex((x) => x.id === m.id);
+          this.setState({ mems: this.state.mems.filter((x) => x.id !== m.id), deleted: { item: m, idx: idx }, editMem: null });
+        }
+      };
+    });
+    const nStated = s.mems.filter((m) => m.type === 'stated').length;
+    const memFilters = [['all', 'All', s.mems.length], ['stated', 'Stated', nStated], ['inferred', 'Inferred', s.mems.length - nStated]].map((f) => ({
+      label: f[1], count: f[2], on: s.memFilter === f[0], pick: () => this.setState({ memFilter: f[0] })
+    }));
+    const memTabs = [['memory', 'Memory'], ['history', 'History'], ['perf', 'Performance'], ['health', 'Health']].map((t) => ({
+      label: t[1], on: s.memTab === t[0], pick: () => this.setState({ memTab: t[0] })
+    }));
+    const hStyleH = { 'Completed': 'bg-av-500/10 text-av-300 ring-av-500/40', 'Needs input': 'bg-amber-400/10 text-amber-200 ring-amber-400/40', 'Awaiting OK': 'bg-amber-400/10 text-amber-200 ring-amber-400/40' };
+    const history = s.history.map((h) => ({
+      when: h.when, req: h.req, outcome: h.outcome, status: h.status, chipCls: 'av-chip ' + (hStyleH[h.status] || 'text-zinc-300 ring-white/15'),
+      aria: 'Delete “' + h.req + '” from history',
+      remove: () => this.setState({ history: this.state.history.filter((x) => x.id !== h.id) })
+    }));
+    const e2e = [
+      ['Speech end → first useful reply', '1.2 s', '2.4 s', 214, 'Gate ≤ 1.5 s / ≤ 3 s · passing', true],
+      ['Speech end → first verified action', '2.9 s', '5.1 s', 96, 'No gate yet · tracked', true],
+      ['Speech end → verified completion', '11.8 s', '24 s', 96, 'Approval waits counted separately', true]
+    ].map((e) => ({ label: e[0], p50: e[1], p95: e[2], n: e[3], gate: e[4], gateCls: 'text-[11px] ' + (e[5] ? 'text-av-300' : 'text-amber-200') }));
+    const perfRows = [
+      ['Capture → Spark2', 'Windows PC → Spark2', '9 ms', '18 ms', '31 ms', '88 ms', '0'],
+      ['Transcription (final)', 'Nemotron 0.6B · Spark2', '160', '290', '410', '720', '0'],
+      ['Speaker + intent gate', 'ECAPA · Qwen3.6 · Spark2', '48', '95', '140', '260', '3 abst.'],
+      ['Planning (first token)', 'Qwen3.6-35B-A3B · Spark2', '380', '910', '1.4 s', '2.1 s', '1'],
+      ['Screen grounding', 'Qwen3.6-35B-A3B · Spark2', '310', '520', '780', '1.1 s', '2'],
+      ['Speech (first audio)', 'Qwen3-TTS 0.6B · Spark2', '212', '340', '480', '640', '0'],
+      ['Tool verification', 'Brave extension · PC', '140', '420', '900', '2.6 s', '1 unk.']
+    ].map((r, i) => ({ stage: r[0], model: r[1], p50: r[2], p95: r[3], p99: r[4], max: r[5], err: r[6], cls: 'grid h-9 grid-cols-[minmax(0,1.2fr)_minmax(0,1.1fr)_52px_52px_52px_52px_40px] items-center gap-2 px-3.5 text-[12px] ' + (i === 3 ? 'bg-av-500/[0.06]' : '') }));
+    const ttsLoading = s.lanes.some((l) => l.id === 'tts' && l.health === 'loading');
+    const connections = [
+      { name: 'Windows PC ↔ Spark2', detail: 'Paired · TLS · connected since 9:02 AM', value: s.revoked ? 'Revoked' : '1.8 ms', tone: s.revoked ? 'red' : 'av' },
+      { name: 'Local Studio · spark2:8080', detail: 'avesra-fast active · API auth on', value: loadingLS ? 'Loading' : 'Healthy', tone: loadingLS ? 'zinc' : 'av' },
+      { name: 'Avesra speech + speaker services', detail: 'Nemotron ASR, ECAPA · pinned revisions', value: 'Healthy', tone: 'av' },
+      { name: 'Avesra TTS service', detail: 'Qwen3-TTS 0.6B · your voice preset', value: ttsLoading ? 'Loading' : 'Healthy', tone: ttsLoading ? 'zinc' : 'av' },
+      { name: 'Jev (optional)', detail: jevLanes.length ? 'Assigned to a lane · no API key' : 'Off · no lanes use it', value: jevLanes.length ? 'Not connected' : 'Off', tone: jevLanes.length ? 'red' : 'off' }
+    ].map((x) => ({
+      name: x.name, detail: x.detail, value: x.value,
+      dot: 'size-2 shrink-0 ' + ({ av: 'bg-av-500', zinc: 'bg-zinc-300', red: 'bg-red-500', off: 'ring-1 ring-zinc-500' }[x.tone]),
+      valueCls: 'font-mono text-[11.5px] ' + ({ av: 'text-av-300', zinc: 'text-zinc-200', red: 'text-red-300', off: 'text-zinc-400' }[x.tone])
+    }));
+    const failures = [
+      { what: 'Speech generation · slow warm-up after restart', detail: 'Qwen3-TTS took 41 s to become ready. Replies were shown as text meanwhile.', status: ttsLoading ? 'Loading' : 'Recovered', when: '2:09 PM' },
+      { what: 'Connection · Spark2 unreachable for 42 s', detail: 'Wi-Fi drop. One read-only task stopped at message 6 of 10; nothing queued ran late.', status: 'Resolved', when: 'Yesterday 6:02 PM' },
+      { what: 'Tool · focus changed during typing', detail: 'You switched windows while Avesra was typing into Claude. It stopped and asked instead of typing elsewhere.', status: 'Handled', when: 'Sep 23' }
+    ].map((f) => Object.assign(f, { chipCls: 'av-chip ' + (f.status === 'Loading' ? 'text-zinc-200 ring-white/20' : 'text-zinc-300 ring-white/15') }));
+
+    // ----- footer -----
+    const st = {
+      error: s.saveState === 'error' && errs.length > 0, saving: s.saveState === 'saving', saved: s.saveState === 'saved',
+      dirty: s.dirty && s.saveState !== 'saving' && !(s.saveState === 'error' && errs.length > 0), clean: false
+    };
+    st.clean = !st.error && !st.saving && !st.saved && !st.dirty;
+    const secNames = { audio: 'Audio & Voice', models: 'Models & Drivers', profiles: 'Profiles & Machines', people: 'People & Voice ID', awareness: 'Observation & Actions', memory: 'Memory & Diagnostics' };
+    const errorLinks = Object.keys(errSections).filter((x) => x !== sec).map((x) => ({ label: 'Go to ' + secNames[x], go: () => this.setState({ section: x }) }));
+
+    return {
+      rootCls: 'font-sans antialiased text-zinc-100' + (this.props.reducedMotion ? ' av-rm' : ''),
+      activeProfileName: activeP ? activeP.name : 'None',
+      requestClose: () => { if (this.state.dirty) this.setState({ confirmClose: true }); else if (this.props.onClose) this.props.onClose(); },
+      nav: nav, is: is, title: meta[sec][0], blurb: meta[sec][1],
+
+      // audio
+      inDev: s.inDev, outDev: s.outDev,
+      setInDev: (e) => this.edit({ inDev: e.target.value }), setOutDev: (e) => this.edit({ outDev: e.target.value, tone: 'idle' }),
+      meterSegs: meterSegs,
+      tonePlaying: s.tone === 'playing', toneBtn: s.tone === 'playing' ? 'Playing…' : 'Play test sound',
+      toneNote: s.tone === 'done' ? 'Played on ' + { scarlett: 'Scarlett 2i2', arctis: 'Arctis Nova Pro', hdmi: 'Display 1' }[s.outDev] + ' · simulated' : s.tone === 'playing' ? 'Simulated · no audio plays' : '',
+      playTone: () => { this.setState({ tone: 'playing' }); this.later(() => this.setState({ tone: 'done' }), 1600); },
+      modes: modes, modeCont: s.mode === 'continuous', modeWake: s.mode === 'wake', modePtt: s.mode === 'ptt',
+      followUp: s.followUp, setFollowUp: (e) => this.edit({ followUp: e.target.value }),
+      wake: s.wake, setWake: (e) => this.edit({ wake: e.target.value }),
+      wakeErr: wakeErrObj ? wakeErrObj.msg : '', wakeInvalid: !!wakeErrObj, wakeCls: 'av-input' + (wakeErrObj ? ' av-invalid' : ''),
+      audioShortcuts: this.shortcutRows('audio', errs),
+      voiceName: s.voiceName,
+      voiceMeta: 'Designed ' + s.voiceDate + ' with Qwen3-TTS VoiceDesign · spoken by Qwen3-TTS 0.6B on Spark2',
+      previewing: s.previewing,
+      previewBars: [5, 8, 12, 15, 18, 20, 21, 20, 18, 15, 12, 8, 5].map((h, i) => ({ h: h, del: -(i * 95) })),
+      previewCls: 'flex h-11 items-center gap-3 px-3 ring-1 ring-inset transition-colors ' + (s.previewing ? 'bg-red-500/[0.06] ring-red-500/30' : 'bg-black/20 ring-white/[0.06]'),
+      previewNote: s.previewing ? 'playing · simulated' : (s.candidate ? 'candidate' : s.voiceName) + ' · ' + s.speed.toFixed(2) + '×',
+      playPreview: () => { this.setState({ previewing: true }); this.later(() => this.setState({ previewing: false }), 3000); },
+      designerOpen: s.designerOpen, designerBtn: s.designerOpen ? 'Close designer' : 'Design a new voice',
+      toggleDesigner: () => this.setState({ designerOpen: !s.designerOpen }),
+      voiceDesc: s.voiceDesc, setDesc: (e) => this.setState({ voiceDesc: e.target.value }),
+      descCls: 'av-input av-textarea resize-none' + (descLen > 280 ? ' av-invalid' : ''), descInvalid: descLen > 280,
+      descHint: descLen > 280 ? 'Shorten the description to 280 characters or fewer.' : 'Used once to generate a voice. The saved preset is reused for every reply.',
+      descHintCls: 'text-[11.5px] leading-4 ' + (descLen > 280 ? 'text-red-400' : 'text-zinc-400'),
+      descCount: descLen + ' / 280', descCountCls: 'shrink-0 font-mono text-[10.5px] ' + (descLen > 280 ? 'text-red-400' : 'text-zinc-400'),
+      designNote: s.designing ? 'Generating with Qwen3-TTS VoiceDesign 1.7B on Spark2… (simulated)' : s.candidate ? 'Candidate ready. Preview it, then keep or discard.' : 'Runs VoiceDesign once; nothing is spoken until you keep it.',
+      hasCandidate: !!s.candidate && !s.designing,
+      cantGenerate: s.designing || descLen === 0 || descLen > 280,
+      generateBtn: s.designing ? 'Generating…' : s.candidate ? 'Generate again' : 'Generate voice',
+      generateVoice: () => { this.setState({ designing: true }); this.later(() => this.setState({ designing: false, candidate: true }), 2400); },
+      keepCandidate: () => this.edit({ voiceName: 'Avesra v2', voiceDate: 'today', candidate: false, designerOpen: false }),
+      discardCandidate: () => this.setState({ candidate: false }),
+      speed: s.speed, speedText: s.speed.toFixed(2) + '×', setSpeed: (e) => this.edit({ speed: parseFloat(e.target.value) }),
+      volume: s.volume, setVolume: (e) => this.edit({ volume: parseInt(e.target.value, 10) }),
+      chimes: chimes, chimeVol: s.chimeVol, setChimeVol: (e) => this.edit({ chimeVol: parseInt(e.target.value, 10) }),
+
+      // models
+      legend: legend, lanes: lanes, driverOpts: driverOpts, modelOpts: modelOpts, machineOpts: machineOpts, deployments: deployments,
+      pendingNote: loadingLS && s.pending ? s.pending : '',
+      anyTesting: Object.keys(s.tests).some((k) => s.tests[k].state === 'testing'),
+      testAll: () => s.lanes.forEach((l, i) => this.later(() => this.testLane(l.id), i * 140)),
+
+      // profiles
+      profiles: profiles, selProfileName: selP.name, autoGaming: s.autoGaming,
+      toggleAutoGaming: () => this.edit({ autoGaming: !s.autoGaming }),
+      canSetUp: selP.status === 'notset' && !s.editAssign,
+      canEditAssign: selP.status !== 'notset' && !s.editAssign,
+      canActivate: selP.status !== 'active' && selP.status !== 'notset' && !s.editAssign,
+      notSetHint: selP.id === 'accel' ? 'Start from Single Spark, move eligible speech lanes to the RTX 5090, then Avesra measures before and after. It won’t activate unless it’s actually faster.' : 'Start from Single Spark and change what you need.',
+      profileNotSet: !assignSrc, profileHasAssign: !!assignSrc, assignRows: assignRows, editAssign: s.editAssign, placeOpts: placeOpts,
+      profileMsg: s.profileMsg, profileMsgCls: 'border-t border-white/[0.06] px-3.5 py-2.5 text-[12px] ' + (s.profileMsgTone === 'ok' ? 'text-av-300' : 'text-red-300'),
+      duplicateProfile: () => {
+        const n = this.state.profiles.filter((p) => p.name.indexOf(selP.name + ' copy') === 0).length;
+        const id = 'p' + Date.now();
+        const copy = { id: id, name: selP.name + ' copy' + (n ? ' ' + (n + 1) : ''), status: selP.assign ? 'draft' : 'notset', desc: 'Copy of ' + selP.name + '.', assign: selP.assign ? Object.assign({}, selP.assign) : null };
+        this.edit({ profiles: this.state.profiles.concat([copy]), selProfile: id, editAssign: false, profileMsg: '' });
+      },
+      setUpProfile: () => {
+        const single = this.state.profiles.find((p) => p.id === 'single');
+        this.setState({ editAssign: true, assignDraft: Object.assign({}, single.assign), profileMsg: '' });
+      },
+      editAssignments: () => this.setState({ editAssign: true, assignDraft: Object.assign({}, selP.assign), profileMsg: '' }),
+      cancelAssign: () => this.setState({ editAssign: false, assignDraft: null, profileMsg: '' }),
+      saveAssign: () => {
+        const st2 = this.state;
+        const issue = this.profileIssue(selP, st2.assignDraft);
+        if (issue) { this.setState({ profileMsg: issue, profileMsgTone: 'err' }); return; }
+        const needsMeasure = selP.id === 'accel' && Object.keys(st2.assignDraft).some((k) => st2.assignDraft[k] === 'rtx');
+        this.edit({
+          profiles: st2.profiles.map((p) => (p.id === selP.id ? Object.assign({}, p, { assign: st2.assignDraft, status: p.status === 'notset' ? 'draft' : p.status }) : p)),
+          editAssign: false, assignDraft: null,
+          profileMsg: needsMeasure ? 'Saved as a draft. Avesra will benchmark the RTX 5090 placement against Single Spark before it can be activated.' : 'Placement saved.',
+          profileMsgTone: 'ok'
+        });
+      },
+      activateProfile: () => {
+        const issue = this.profileIssue(selP);
+        if (issue) { this.setState({ profileMsg: issue, profileMsgTone: 'err' }); return; }
+        if (selP.id === 'accel') { this.setState({ profileMsg: 'Can’t activate yet: no benchmark shows the RTX 5090 placement is faster (simulated).', profileMsgTone: 'err' }); return; }
+        this.edit({
+          profiles: this.state.profiles.map((p) => (p.id === selP.id ? Object.assign({}, p, { status: 'active' }) : p.status === 'active' ? Object.assign({}, p, { status: 'ready' }) : p)),
+          profileMsg: selP.name + ' becomes active at the next turn boundary after you save. Running tasks keep going.', profileMsgTone: 'ok'
+        });
+      },
+      budget: budget,
+      sparkChip: s.revoked ? 'Pairing revoked' : 'Paired · connected',
+      sparkChipCls: 'av-chip ' + (s.revoked ? 'bg-red-500/10 text-red-300 ring-red-500/40' : 'bg-av-500/10 text-av-300 ring-av-500/40'),
+      confirmRevoke: s.confirmRevoke && !s.revoked, canRevoke: !s.confirmRevoke && !s.revoked,
+      askRevoke: () => this.setState({ confirmRevoke: true }), cancelRevoke: () => this.setState({ confirmRevoke: false }),
+      doRevoke: () => this.setState({ revoked: true, confirmRevoke: false }),
+      gpuNote: activeP && activeP.id === 'accel' ? 'Used by Accelerated' : 'Not used for inference',
+      extraMachines: s.extraMachines.map((m) => ({ host: m.host, remove: () => this.edit({ extraMachines: this.state.extraMachines.filter((x) => x.host !== m.host) }) })),
+      pairOpen: s.pairOpen, pairHost: s.pairHost, pairCode: s.pairCode,
+      pairAskCode: s.pairStage === 'code' || s.pairStage === 'connecting' || s.pairStage === 'failed',
+      pairBusy: s.pairStage === 'connecting',
+      pairBtn: s.pairStage === 'host' ? 'Get code' : s.pairStage === 'connecting' ? 'Pairing…' : s.pairStage === 'failed' ? 'Try again' : 'Pair',
+      pairMsg: pairMsg, pairMsgCls: 'flex-1 text-[11.5px] ' + (pairErr ? 'text-red-400' : 'text-zinc-400'),
+      pairHostCls: 'av-input font-mono text-[12px]' + (s.pairTried && s.pairStage === 'host' && !hostOk ? ' av-invalid' : ''),
+      pairCodeCls: 'av-input font-mono text-[12px] tracking-[0.3em]' + (s.pairTried && s.pairStage === 'code' && !codeOk ? ' av-invalid' : ''),
+      setPairHost: (e) => this.setState({ pairHost: e.target.value }), setPairCode: (e) => this.setState({ pairCode: e.target.value }),
+      openPair: () => this.setState({ pairOpen: true, pairStage: 'host', pairTried: false, pairHost: '', pairCode: '' }),
+      closePair: () => this.setState({ pairOpen: false, pairTried: false }),
+      pairNext: () => {
+        const st2 = this.state;
+        if (st2.pairStage === 'host') { if (!hostOk) { this.setState({ pairTried: true }); return; } this.setState({ pairStage: 'code', pairTried: false }); return; }
+        if (st2.pairStage === 'failed') { this.setState({ pairStage: 'code', pairCode: '', pairTried: false }); return; }
+        if (!codeOk) { this.setState({ pairTried: true }); return; }
+        this.setState({ pairStage: 'connecting' });
+        this.later(() => this.setState({ pairStage: 'failed' }), 1800);
+      },
+      jevUse: jevLanes.length ? 'Assigned to ' + jevLanes.map((l) => l.name).join(', ') + '.' : 'Off; no lanes use it.',
+      jevChip: jevLanes.length ? 'No API key' : 'Off',
+      jevChipCls: 'av-chip ' + (jevLanes.length ? 'bg-red-500/10 text-red-300 ring-red-500/40' : 'text-zinc-300 ring-white/15'),
+
+      // people
+      locked: !s.unlocked, unlocked: s.unlocked, unlocking: s.unlocking,
+      lockText: s.unlocked ? 'Unlocked with Windows Hello (simulated). You can change people and permissions. Locks again when you close Settings.' : 'Changing people, permissions or ownership needs Windows Hello. A voice match is never enough.',
+      unlockBtn: s.unlocking ? 'Waiting for Windows Hello…' : 'Unlock with Windows Hello',
+      unlock: () => { this.setState({ unlocking: true }); this.later(() => this.setState({ unlocking: false, unlocked: true }), 1300); },
+      lock: () => this.setState({ unlocked: false }),
+      voiceTesting: s.voiceTest === 'listening',
+      testVoiceBtn: s.voiceTest === 'listening' ? 'Listening…' : 'Test my voice',
+      voiceTestMsg: s.voiceTest === 'listening' ? 'Say anything for a few seconds (simulated; no microphone is used).' : s.voiceTest === 'done' ? 'Matched: you (owner). Evidence quality good. This is a match, not a permission.' : '',
+      voiceTestCls: 'flex-1 text-[11.5px] ' + (s.voiceTest === 'done' ? 'text-av-300' : 'text-zinc-400'),
+      testVoice: () => { this.setState({ voiceTest: 'listening' }); this.later(() => this.setState({ voiceTest: 'done' }), 2000); },
+      reenroll: () => this.setState({ voiceTest: 'idle', enrolling: true, newName: 'You (owner)', enrollState: 'idle' }),
+      users: users,
+      addPerson: () => this.setState({ enrolling: true, newName: '', enrollState: 'idle', enrollTried: false }),
+      enrolling: s.enrolling, newName: s.newName, setNewName: (e) => this.setState({ newName: e.target.value }),
+      newNameCls: 'av-input' + (s.enrollTried && !s.newName.trim() ? ' av-invalid' : ''),
+      enrollBusy: s.enrollState === 'listening',
+      enrollBtn: s.enrollState === 'listening' ? 'Enrolling…' : s.enrollState === 'retry' ? 'Try again' : 'Start enrollment',
+      enrollMsg: enrollMsg, enrollMsgCls: 'text-[11.5px] leading-4 ' + (enrollErr ? 'text-red-400' : 'text-zinc-400'),
+      cancelEnroll: () => this.setState({ enrolling: false, enrollState: 'idle', enrollTried: false }),
+      startEnroll: () => {
+        if (!this.state.newName.trim()) { this.setState({ enrollTried: true }); return; }
+        this.setState({ enrollState: 'listening' });
+        this.later(() => this.setState({ enrollState: 'retry' }), 2200);
+      },
+
+      // awareness
+      obsCls: 'flex items-center gap-3 p-3.5 ring-1 ring-inset ' + ({ av: 'bg-av-500/[0.05] ring-av-500/30', amber: 'bg-amber-400/[0.06] ring-amber-400/35', off: 'bg-white/[0.03] ring-white/10' }[obsTone]),
+      obsDotCls: 'relative inline-flex size-2.5 ' + ({ av: 'bg-av-500', amber: 'bg-amber-400', off: 'ring-1 ring-zinc-500' }[obsTone]),
+      obsLive: obsTone === 'av', obsTitle: obsTitle, obsDetail: obsDetail,
+      screenOn: s.screenOn, screenOff: !s.screenOn, toggleScreen: () => this.edit({ screenOn: !s.screenOn }),
+      displays: displays, displayErr: s.screenOn && !displaysOn,
+      scopeAllowed: s.scope === 'allowed', scopeAll: s.scope === 'all',
+      setScopeAllowed: () => this.edit({ scope: 'allowed' }), setScopeAll: () => this.edit({ scope: 'all' }),
+      apps: apps, approvals: approvals, aliases: aliases, routines: routines, actions: actions,
+      watching: s.watching, watchBtn: s.watching ? 'Stop watching' : 'Watch and learn',
+      watchBtnCls: 'av-btn av-btn-sm ' + (s.watching ? 'av-btn-danger-soft' : 'av-btn-ghost'),
+      toggleWatch: () => this.setState({ watching: !s.watching }),
+      globalShortcuts: this.shortcutRows('awareness', errs),
+
+      // memory & diagnostics
+      memTabs: memTabs, tab: { memory: s.memTab === 'memory', history: s.memTab === 'history', perf: s.memTab === 'perf', health: s.memTab === 'health' },
+      q: s.q, setQ: (e) => this.setState({ q: e.target.value }),
+      memFilters: memFilters, memView: memView, memEmpty: memView.length === 0,
+      memDraft: s.memDraft, memDraftEmpty: !s.memDraft.trim(),
+      setMemDraft: (e) => this.setState({ memDraft: e.target.value }),
+      saveMem: () => this.memSave(),
+      cancelMem: () => {
+        const st2 = this.state;
+        const cur = st2.mems.find((m) => m.id === st2.editMem);
+        this.setState({ editMem: null, memDraft: '', mems: cur && !cur.text ? st2.mems.filter((m) => m.id !== cur.id) : st2.mems });
+      },
+      addMem: () => {
+        const id = Date.now();
+        this.setState({ mems: [{ id: id, type: 'stated', text: '', source: 'Added in Settings', date: 'Today' }].concat(this.state.mems), editMem: id, memDraft: '', memFilter: 'all', q: '' });
+      },
+      deletedText: s.deleted ? s.deleted.item.text : '',
+      undoDelete: () => {
+        const d = this.state.deleted;
+        if (!d) return;
+        const mems = this.state.mems.slice();
+        mems.splice(d.idx, 0, d.item);
+        this.setState({ mems: mems, deleted: null });
+      },
+      history: history,
+      exportLabel: s.exported ? 'Exported (simulated)' : 'Export locally',
+      exportHistory: () => { this.setState({ exported: true }); this.later(() => this.setState({ exported: false }), 2000); },
+      e2e: e2e, perfRows: perfRows,
+      comparing: s.comparing, compareBtn: s.comparing ? 'Comparing…' : 'Compare with avesra-quality',
+      compareResult: s.compared ? 'Baseline avesra-fast vs candidate avesra-quality on the same 30-run scenarios (simulated): first token +140 ms slower, grounding accuracy +4 points, OW1–OW3 all pass. Not promoted automatically; switch it in Models & Drivers if you want it.' : '',
+      runCompare: () => { this.setState({ comparing: true, compared: false }); this.later(() => this.setState({ comparing: false, compared: true }), 2000); },
+      connections: connections, failures: failures,
+      healthRunning: s.health === 'running', healthDone: s.health === 'done',
+      healthBtn: s.health === 'running' ? 'Checking…' : 'Run health check',
+      healthResult: 'Probed 7 lanes at 2:16 PM · ' + (ttsLoading || loadingLS ? 'some still loading' : 'all ready') + ' · simulated',
+      runHealth: () => { this.setState({ health: 'running' }); this.later(() => this.setState({ health: 'done' }), 1500); },
+      bundleLabel: s.bundle ? 'Saved (simulated)' : 'Redacted support bundle',
+      exportBundle: () => { this.setState({ bundle: true }); this.later(() => this.setState({ bundle: false }), 2000); },
+
+      // footer
+      confirmClose: s.confirmClose, footerNormal: !s.confirmClose, st: st, savedAt: s.savedAt,
+      errorSummary: errs.length === 1 ? errs[0].msg : errs.length + ' issues to fix before saving.',
+      errorLinks: errorLinks,
+      notDirty: !s.dirty || s.saveState === 'saving', cantSave: !s.dirty || s.saveState === 'saving',
+      keepEditing: () => this.setState({ confirmClose: false }),
+      discardClose: () => {
+        this.setState(Object.assign(JSON.parse(JSON.stringify(this.saved)), { dirty: false, confirmClose: false, saveState: 'idle', unlocked: false }));
+        if (this.props.onClose) this.props.onClose();
+      },
+      discard: () => this.setState(Object.assign(JSON.parse(JSON.stringify(this.saved)), { dirty: false, saveState: 'idle', editing: null, draft: null, editAssign: false, profileMsg: '', shortcutErr: {}, recording: null })),
+      save: () => {
+        if (this.errors().length) { this.setState({ saveState: 'error' }); return; }
+        this.setState({ saveState: 'saving' });
+        this.later(() => {
+          const cur = this.state;
+          const snap = {};
+          Object.keys(this.settingsDefaults()).forEach((k) => { snap[k] = cur[k]; });
+          this.saved = JSON.parse(JSON.stringify(snap));
+          this.setState({ saveState: 'saved', dirty: false, savedAt: '2:16 PM' });
+        }, 900);
+      }
+    };
+  }
+}
+</script>
+</body>
+</html>
