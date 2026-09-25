@@ -60,8 +60,7 @@
   }
   async function hide() {
     if (native) {
-      if (settingsWindow) await command("cancel_setup");
-      await getCurrentWindow().hide();
+      await command("hide_window");
     }
   }
   async function showSettings() {

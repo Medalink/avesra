@@ -119,6 +119,22 @@ fn runtime_snapshot(state: tauri::State<'_, Runtime>) -> Result<LocalState, Stri
         .map_err(|_| "Local state unavailable")?
         .clone())
 }
+fn invalidate_settings(app: &tauri::AppHandle) {
+    app.state::<Runtime>().catalog.invalidate();
+    setup::cancel_native(app);
+    let _ = app.emit("settings-hidden", ());
+}
+#[tauri::command]
+fn hide_window(window: tauri::WebviewWindow) -> Result<(), String> {
+    match window.label() {
+        "settings" => invalidate_settings(window.app_handle()),
+        "overlay" => {}
+        _ => return Err("Unknown Avesra window".into()),
+    }
+    window
+        .hide()
+        .map_err(|_| "Window could not be hidden".into())
+}
 #[tauri::command]
 async fn audio_devices() -> Result<Vec<avesra_windows::AudioDevice>, String> {
     tauri::async_runtime::spawn_blocking(|| {
@@ -592,14 +608,14 @@ fn main() {
             }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() == "settings" {
-                    window.app_handle().state::<Runtime>().catalog.invalidate();
-                    setup::cancel_native(window.app_handle());
+                    invalidate_settings(window.app_handle());
                 }
                 api.prevent_close();
                 let _ = window.hide();
             }
         })
         .invoke_handler(tauri::generate_handler![
+            hide_window,
             catalog::open_app_catalog,
             catalog::close_app_catalog,
             catalog::scan_app_catalog,

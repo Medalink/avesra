@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { listen } from "@tauri-apps/api/event";
   import SetupLock from "./SetupLock.svelte";
   import { command, native, type Runtime } from "./runtime";
   let { runtime }: { runtime: Runtime | null } = $props();
@@ -17,12 +18,13 @@
   let mounted = false;
   let generation = 0;
   let context = "";
+  function invalidate() { generation++; panel = null; aliases = null; scan = null; selected = ""; }
   const candidate = $derived(scan?.candidates.find(v => v.id === selected));
   const enabled = $derived(native && runtime?.connected && !runtime.locked);
   $effect(() => {
     const next = `${runtime?.connected}:${runtime?.locked}`;
     if (next !== context) {
-      context = next; generation++; panel = null; aliases = null; scan = null; selected = "";
+      context = next; invalidate();
     }
   });
   async function run(work: (current: number) => Promise<void>, mutation = false) {
@@ -72,9 +74,15 @@
   }, true); }
   onMount(() => {
     mounted = true;
-    if (native && runtime?.connected && !runtime.locked) void refresh();
+    let unlisten: (() => void) | undefined;
+    if (native) void (async () => {
+      const stop = await listen("settings-hidden", invalidate);
+      if (!mounted) { stop(); return; }
+      unlisten = stop;
+      if (runtime?.connected && !runtime.locked) await refresh();
+    })().catch(e => { if (mounted) error = String(e); });
     return () => {
-      mounted = false; generation++;
+      mounted = false; generation++; unlisten?.();
       if (panel) void command("close_app_catalog", { panel }).catch(() => {});
     };
   });
