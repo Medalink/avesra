@@ -36,12 +36,33 @@ def main():
         if not 0 < length <= 4096:
             raise RuntimeError("Invalid administration response")
         response = json.loads(read_exact(connection, length))
-        allowed = {"version", "lane", "model_revision", "state", "streaming", "cancellation", "permission_authority", "busy", "successful_inferences", "last_inference_ms", "error"}
-        if not isinstance(response, dict) or set(response) - allowed:
+        allowed = {"version", "lane", "model_revision", "state", "streaming", "cancellation", "permission_authority", "busy", "successful_inferences", "last_inference_ms"}
+        if not isinstance(response, dict):
             raise RuntimeError("Unexpected administration response")
-        print(json.dumps(response))
         if "error" in response:
+            if set(response) != {"error"} or not isinstance(response["error"], str) or len(response["error"]) > 64:
+                raise RuntimeError("Invalid administration error")
+            print("Audio operation failed.")
             raise SystemExit(1)
+        if args.operation == "load":
+            if response != {"state": "loaded_unqualified"}:
+                raise RuntimeError("Model load was not acknowledged")
+        else:
+            if set(response) != allowed or type(response["version"]) is not int or response["version"] != 1:
+                raise RuntimeError("Invalid health schema")
+            if response["lane"] not in {"speaker", "asr", "tts", "voice-design"} or response["state"] not in {"unavailable", "loading", "loaded_unqualified", "termination_pending"}:
+                raise RuntimeError("Invalid health state")
+            revision = response["model_revision"]
+            if not isinstance(revision, str) or len(revision) != 40 or any(c not in "0123456789abcdef" for c in revision):
+                raise RuntimeError("Invalid model revision")
+            if response["streaming"] is not False or response["permission_authority"] is not False or type(response["busy"]) is not bool or response["cancellation"] != "terminate_process":
+                raise RuntimeError("Unexpected service capabilities")
+            if type(response["successful_inferences"]) is not int or response["successful_inferences"] < 0:
+                raise RuntimeError("Invalid inference count")
+            duration = response["last_inference_ms"]
+            if duration is not None and (type(duration) not in (int, float) or not 0 <= duration <= 30_000):
+                raise RuntimeError("Invalid inference duration")
+        print(json.dumps(response))
 
 
 if __name__ == "__main__":
