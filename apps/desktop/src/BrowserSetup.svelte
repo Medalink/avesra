@@ -12,14 +12,17 @@
   let expanded = $state(false), busy = $state(false), error = $state("");
   let status = $state<Status | null>(null), aliases = $state<Alias[] | null>(null), saved = $state<Saved[] | null>(null);
   let phrase = $state(""), panel = $state<string | null>(null);
+  let ownedAttempt = $state<string | null>(null);
   let mounted = false, generation = 0, refreshing = false, context = "";
   const enabled = $derived(native && !!runtime?.connected && !runtime.locked);
-  const active = $derived(!!status?.attempt && ["preparing", "waiting_for_extension", "awaiting_owner", "saving", "awaiting_persistence_proof", "authenticating", "authenticated_no_scopes", "closing"].includes(status.state));
+  const active = $derived(!!ownedAttempt || (!!status?.attempt && ["preparing", "waiting_for_extension", "awaiting_owner", "saving", "awaiting_persistence_proof", "authenticating", "authenticated_no_scopes", "closing"].includes(status.state)));
   const stateLabel = $derived(status?.state === "authenticated_no_scopes" ? "Paired · no scopes" : active ? "Pairing session" : status?.state === "unavailable_refresh_saved_pairings" ? "Unavailable" : "Not connected");
   function invalidate() {
+    const attempt = ownedAttempt; ownedAttempt = null;
     generation++; status = null; aliases = null; saved = null; phrase = "";
     const owned = panel; panel = null;
     if (native && owned) void command("close_app_catalog", { panel: owned }).catch(() => {});
+    if (native && attempt) void command("cancel_browser_pairing", { attempt }).catch(() => {});
   }
   $effect(() => {
     const next = `${runtime?.connected}:${runtime?.locked}`;
@@ -63,6 +66,7 @@
     saved = null;
     const attempt = await command<string>("begin_browser_pairing", { phrase });
     if (!mounted || current !== generation) { void command("cancel_browser_pairing", { attempt }).catch(() => {}); return; }
+    ownedAttempt = attempt;
     const next = await command<Status>("browser_pairing_status");
     if (mounted && current === generation) status = next;
   }); }
@@ -74,8 +78,9 @@
     if (mounted && current === generation) status = next;
   }); }
   function cancel() { return run(async current => {
-    if (status?.attempt) await command("cancel_browser_pairing", { attempt: status.attempt });
-    if (mounted && current === generation) status = null;
+    const attempt = ownedAttempt ?? status?.attempt;
+    if (attempt) await command("cancel_browser_pairing", { attempt });
+    if (mounted && current === generation) { status = null; ownedAttempt = null; }
   }); }
   function revoke(record: Saved) { return run(async current => {
     await command("revoke_browser_pairing", { pairing: record.pairing });
@@ -88,11 +93,10 @@
   }
   onMount(() => {
     mounted = true; let unlisten: (() => void) | undefined;
-    if (native) void listen("settings-hidden", () => { expanded = false; invalidate(); }).then(value => { if (mounted) unlisten = value; else value(); });
+    if (native) void listen("settings-hidden", () => { expanded = false; invalidate(); }).then(value => { if (mounted) unlisten = value; else value(); }).catch(() => { if (mounted) { error = "Settings lifetime notifications are unavailable; browser setup is closed."; expanded = false; invalidate(); } });
     const timer = setInterval(() => void refreshStatus(), 1000);
     return () => {
-      const attempt = status?.attempt; mounted = false; clearInterval(timer); unlisten?.(); invalidate();
-      if (native && attempt) void command("cancel_browser_pairing", { attempt }).catch(() => {});
+      mounted = false; clearInterval(timer); unlisten?.(); invalidate();
     };
   });
 </script>
