@@ -188,6 +188,11 @@ class Service:
                 return {"error": "unknown_request"}
             stopped = await self.stop(self.generation)
             return {"outcome": "cancelled" if stopped else "termination_pending"}
+        if self.stream is not None and operation == "stream" and (key, request["request_id"]) == (self.stream["session"], self.stream["id"]):
+            expected = (self.stream["epoch"], self.stream["expires"], self.stream["next"])
+            if self.active is not None or (request["capture_epoch"], request["expires_at_ms"], request["chunk_sequence"]) != expected:
+                await self.stop(self.generation)
+                return {"error": "stream_discontinuity"}
         if self.active is not None:
             return {"error": "busy"}
         if self.stream is not None and (operation != "stream" or (key, request["request_id"], request["capture_epoch"], request["expires_at_ms"], request.get("chunk_sequence")) != (self.stream["session"], self.stream["id"], self.stream["epoch"], self.stream["expires"], self.stream["next"])):
