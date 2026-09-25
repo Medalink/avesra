@@ -21,6 +21,9 @@ use std::{
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use uuid::Uuid;
 #[cfg(unix)]
+#[path = "voice_preview.rs"]
+mod voice_preview;
+#[cfg(unix)]
 #[path = "voice_setup.rs"]
 mod voice_setup;
 #[cfg(unix)]
@@ -106,6 +109,7 @@ pub fn router(auth: AuthStore, directory: &std::path::Path) -> Result<Router, St
         .route("/speaker", get(speaker_health).post(speaker_infer))
         .route("/voice-analysis", post(voice_analysis))
         .route("/voice-stream", get(voice_stream_upgrade))
+        .route("/voice-preview", get(voice_preview_upgrade))
         .route(
             "/voices",
             post(voice_operations).layer(DefaultBodyLimit::max(4096)),
@@ -146,6 +150,21 @@ async fn voice_operations(
     #[cfg(not(unix))]
     {
         let _ = (auth, headers, body);
+        Err(StatusCode::SERVICE_UNAVAILABLE)
+    }
+}
+async fn voice_preview_upgrade(
+    State(auth): State<Shared>,
+    headers: HeaderMap,
+    ws: WebSocketUpgrade,
+) -> Result<Response, StatusCode> {
+    #[cfg(unix)]
+    {
+        voice_preview::upgrade(auth, headers, ws).await
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (auth, headers, ws);
         Err(StatusCode::SERVICE_UNAVAILABLE)
     }
 }

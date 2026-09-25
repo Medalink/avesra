@@ -2,6 +2,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 pub mod media;
+pub mod preview;
 pub mod voice;
 
 pub const PROTOCOL_VERSION: u16 = 2;
