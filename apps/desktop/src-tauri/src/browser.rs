@@ -27,6 +27,9 @@ pub struct BrowserSetup {
 #[derive(Default)]
 struct Inner {
     generation: u64,
+    settings_generation: u64,
+    action_epoch: u64,
+    action_allowed: bool,
     attempt: Option<Attempt>,
 }
 struct Attempt {
@@ -36,6 +39,7 @@ struct Attempt {
     selected: Option<AppRecord>,
     pending: Option<Confirmation>,
     approval: Option<ManagementProof>,
+    selection: Option<Id>,
     state: &'static str,
 }
 impl Attempt {
@@ -56,13 +60,38 @@ pub struct Status {
     browser_revision: Option<Uuid>,
     browser_label: Option<String>,
     pending: Option<Confirmation>,
+    selection: Option<Id>,
+    action_epoch: u64,
+    mode_allows_actions: bool,
 }
 impl BrowserSetup {
     /// Caller lock order: Runtime.local -> browser.inner. Never does I/O.
     pub fn invalidate(&self) {
         if let Ok(mut inner) = self.inner.lock() {
             inner.generation = inner.generation.saturating_add(1);
+            inner.settings_generation = inner.settings_generation.saturating_add(1);
+            inner.action_allowed = false;
             inner.attempt = None;
+        }
+    }
+    pub fn settings_hidden(&self) {
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.settings_generation = inner.settings_generation.saturating_add(1);
+            let established = inner.attempt.as_ref().is_some_and(|v| {
+                v.selection.is_some() && v.state == "authenticated_no_scopes" && v.current_time()
+            });
+            if !established {
+                inner.generation = inner.generation.saturating_add(1);
+                inner.attempt = None;
+            }
+        }
+    }
+    /// Runtime.local owns every publication. Future document ingress must match
+    /// this exact epoch even when a transport survives Stop/Pause for status.
+    pub fn observe(&self, local: &avesra_core::state::LocalState) {
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.action_epoch = local.action_epoch;
+            inner.action_allowed = local.connected && !local.locked && !local.settings.paused;
         }
     }
 }
@@ -80,7 +109,7 @@ fn management_current(
         .map_err(|_| ErrorCode::Unavailable)?;
     if local.locked
         || !local.connected
-        || inner.generation != generation
+        || inner.settings_generation != generation
         || proof.is_some_and(|v| !v.current_locked(&runtime, &local))
     {
         return Err(ErrorCode::Stale);
@@ -135,10 +164,14 @@ pub async fn revoke_browser_pairing(
             .inner
             .lock()
             .map_err(|_| "Browser setup unavailable")?;
-        if inner.generation != admitted {
+        if inner.settings_generation != admitted {
             return Err("Settings changed".into());
         }
         inner.generation = inner.generation.checked_add(1).ok_or("Restart Avesra")?;
+        inner.settings_generation = inner
+            .settings_generation
+            .checked_add(1)
+            .ok_or("Restart Avesra")?;
         inner.attempt = None;
         let work = state.browser.work.clone().try_lock_owned().map_err(
             |_| "Connection is closing. Refresh, then explicitly revoke the saved revision.",
@@ -146,7 +179,7 @@ pub async fn revoke_browser_pairing(
         let proof = state
             .setup
             .management_proof(&local, state.connection_generation.load(Ordering::SeqCst))?;
-        (work, inner.generation, proof)
+        (work, inner.settings_generation, proof)
     };
     let actor = crate::owner::current_actor(&app).await?;
     management_current(&app, generation, Some(&proof))
@@ -173,11 +206,15 @@ fn selection_change(
         .inner
         .lock()
         .map_err(|_| "Browser setup unavailable")?;
-    if inner.generation != admitted {
+    if inner.settings_generation != admitted {
         return Err("Settings changed".into());
     }
     // Withdraw old connection admission before a durable selection mutation.
     inner.generation = inner.generation.checked_add(1).ok_or("Restart Avesra")?;
+    inner.settings_generation = inner
+        .settings_generation
+        .checked_add(1)
+        .ok_or("Restart Avesra")?;
     inner.attempt = None;
     let work = state
         .browser
@@ -188,7 +225,7 @@ fn selection_change(
     let proof = state
         .setup
         .management_proof(&local, state.connection_generation.load(Ordering::SeqCst))?;
-    Ok((work, inner.generation, proof))
+    Ok((work, inner.settings_generation, proof))
 }
 #[tauri::command]
 pub async fn browser_selections(
@@ -320,7 +357,7 @@ fn visible(window: &tauri::WebviewWindow) -> Result<u64, String> {
         .inner
         .lock()
         .map_err(|_| "Browser setup unavailable")?
-        .generation;
+        .settings_generation;
     if window.label() != "settings" || !window.is_visible().map_err(|_| "Settings unavailable")? {
         return Err("Use visible Settings to pair a browser installation".into());
     }
@@ -368,7 +405,7 @@ pub fn browser_pairing_status(
         .lock()
         .map_err(|_| "Browser setup unavailable")?;
     let active = inner.attempt.as_ref().filter(|v| {
-        inner.generation == admitted
+        inner.settings_generation == admitted
             && v.current_time()
             && !local.locked
             && local.connected
@@ -381,6 +418,9 @@ pub fn browser_pairing_status(
         browser_revision: active.and_then(|v| v.selected.as_ref().map(|v| v.revision)),
         browser_label: active.and_then(|v| v.selected.as_ref().map(|v| v.name.clone())),
         pending: active.and_then(|v| v.pending.clone()),
+        selection: active.and_then(|v| v.selection),
+        action_epoch: inner.action_epoch,
+        mode_allows_actions: inner.action_allowed,
     })
 }
 #[tauri::command]
@@ -397,9 +437,42 @@ pub fn cancel_browser_pairing(
         .inner
         .lock()
         .map_err(|_| "Browser setup unavailable")?;
-    if inner.generation == admitted && inner.attempt.as_ref().is_some_and(|v| v.id == attempt) {
+    if inner.settings_generation == admitted
+        && inner.attempt.as_ref().is_some_and(|v| v.id == attempt)
+    {
         inner.generation = inner.generation.saturating_add(1);
+        inner.settings_generation = inner.settings_generation.saturating_add(1);
         inner.attempt = None;
+    }
+    Ok(())
+}
+#[tauri::command]
+pub fn release_browser_management(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    attempt: Uuid,
+) -> Result<(), String> {
+    if window.label() != "settings" {
+        return Err("Use Settings".into());
+    }
+    let state = app.state::<Runtime>();
+    let _local = state.local.lock().map_err(|_| "Local state unavailable")?;
+    let mut inner = state
+        .browser
+        .inner
+        .lock()
+        .map_err(|_| "Browser setup unavailable")?;
+    if let Some(current) = inner.attempt.as_ref().filter(|v| v.id == attempt) {
+        // Decide using authoritative current state, even if authentication finished
+        // after the webview's last status read. Explicit Disconnect is separate.
+        let established = current.selection.is_some()
+            && current.state == "authenticated_no_scopes"
+            && current.current_time();
+        inner.settings_generation = inner.settings_generation.saturating_add(1);
+        if !established {
+            inner.generation = inner.generation.saturating_add(1);
+            inner.attempt = None;
+        }
     }
     Ok(())
 }
@@ -418,7 +491,7 @@ pub fn approve_browser_pairing(
         .inner
         .lock()
         .map_err(|_| "Browser setup unavailable")?;
-    if inner.generation != admitted {
+    if inner.settings_generation != admitted {
         return Err("Settings changed".into());
     }
     let pending = inner.attempt.as_mut().ok_or("Pairing expired")?;
@@ -447,9 +520,28 @@ pub fn begin_browser_pairing(
     app: tauri::AppHandle,
     phrase: String,
 ) -> Result<Uuid, String> {
-    let admitted = visible(&window)?;
     avesra_core::apps::alias_phrase(&phrase)
         .map_err(|_| "Choose an existing learned application name")?;
+    begin(&window, app, ConnectionChoice::Setup(phrase))
+}
+#[tauri::command]
+pub fn connect_selected_browser(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    revision: Id,
+) -> Result<Uuid, String> {
+    begin(&window, app, ConnectionChoice::Selected(revision))
+}
+enum ConnectionChoice {
+    Setup(String),
+    Selected(Id),
+}
+fn begin(
+    window: &tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    choice: ConnectionChoice,
+) -> Result<Uuid, String> {
+    let admitted = visible(window)?;
     let state = app.state::<Runtime>();
     let owner = state
         .browser
@@ -468,7 +560,7 @@ pub fn begin_browser_pairing(
             .inner
             .lock()
             .map_err(|_| "Browser setup unavailable")?;
-        if inner.generation != admitted {
+        if inner.settings_generation != admitted {
             return Err("Settings changed".into());
         }
         inner.generation = inner
@@ -482,13 +574,14 @@ pub fn begin_browser_pairing(
             selected: None,
             pending: None,
             approval: None,
+            selection: None,
             state: "preparing",
         });
         inner.generation
     };
     tauri::async_runtime::spawn(async move {
         let _owner = owner;
-        let result = run(&app, id, generation, phrase).await;
+        let result = run(&app, id, generation, choice).await;
         let _ = with_attempt(&app, id, generation, |_, _, attempt| {
             attempt.approval = None;
             attempt.pending = None;
@@ -506,25 +599,54 @@ async fn run(
     app: &tauri::AppHandle,
     id: Uuid,
     generation: u64,
-    phrase: String,
+    choice: ConnectionChoice,
 ) -> Result<(), ErrorCode> {
     let admission = Admission::new(generation)?;
     let actor = crate::owner::current_actor(app)
         .await
         .map_err(|_| ErrorCode::Unauthenticated)?;
     with_attempt(app, id, generation, |_, _, _| Ok(()))?;
-    let receiver = app.state::<Runtime>().effects.resolve_app(actor, phrase)?;
-    let selected = tokio::task::spawn_blocking(move || receiver.recv())
-        .await
-        .map_err(|_| ErrorCode::Unavailable)?
-        .map_err(|_| ErrorCode::Unavailable)??
-        .record;
-    admission.current(generation)?;
-    with_attempt(app, id, generation, |_, _, _| Ok(()))?;
     let directory = app
         .path()
         .app_data_dir()
         .map_err(|_| ErrorCode::Unavailable)?;
+    let (selected, expected_pairing, selected_revision) = match choice {
+        ConnectionChoice::Setup(phrase) => {
+            let receiver = app.state::<Runtime>().effects.resolve_app(actor, phrase)?;
+            let record = tokio::task::spawn_blocking(move || receiver.recv())
+                .await
+                .map_err(|_| ErrorCode::Unavailable)?
+                .map_err(|_| ErrorCode::Unavailable)??;
+            (record.record, None, None)
+        }
+        ConnectionChoice::Selected(revision) => {
+            let path = directory.join("browser-pairings");
+            let (selection, binding) = tokio::task::spawn_blocking(move || {
+                Store::open(&path)?
+                    .selected(Id::new(actor)?)?
+                    .ok_or(ErrorCode::Unavailable)
+            })
+            .await
+            .map_err(|_| ErrorCode::Unavailable)??;
+            if selection.revision != revision {
+                return Err(ErrorCode::Stale);
+            }
+            with_attempt(app, id, generation, |_, _, _| Ok(()))?;
+            admission.current(generation)?;
+            let receiver = app.state::<Runtime>().effects.inspect_app(
+                actor,
+                binding.browser_app.uuid(),
+                binding.browser_revision.uuid(),
+            )?;
+            let record = tokio::task::spawn_blocking(move || receiver.recv())
+                .await
+                .map_err(|_| ErrorCode::Unavailable)?
+                .map_err(|_| ErrorCode::Unavailable)??;
+            (record, Some(selection.pairing), Some(revision))
+        }
+    };
+    admission.current(generation)?;
+    with_attempt(app, id, generation, |_, _, _| Ok(()))?;
     // Extension origin is installation configuration, never provided by the webview.
     let (extension, listener) = tokio::task::spawn_blocking(|| {
         use std::io::Read;
@@ -568,6 +690,9 @@ async fn run(
     let Client::Hello(hello) = browser::decode(&pipe.receive().await?)? else {
         return Err(ErrorCode::Malformed);
     };
+    if expected_pairing.is_some() && hello.pairing != expected_pairing {
+        return Err(ErrorCode::Unauthenticated);
+    }
     let mut pending = Some(admission.challenge(hello, &extension, generation)?);
     let challenge = pending
         .as_ref()
@@ -658,6 +783,7 @@ async fn run(
                     let response=with_attempt(app,id,generation,|_,_,attempt| {
                         let response=native.authenticate(record,reply,generation)?;
                         attempt.state="authenticated_no_scopes"; attempt.pending=None;
+                        attempt.selection=selected_revision;
                         Ok(response)
                     })?;
                     pipe.send(&serde_json::to_vec(&serde_json::json!({"type":"authenticated","body":response})).map_err(|_|ErrorCode::Malformed)?).await?;

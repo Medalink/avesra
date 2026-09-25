@@ -81,6 +81,12 @@ enum Command {
         operation: CatalogAuthorization,
         reply: SyncSender<Result<(), ErrorCode>>,
     },
+    InspectApp(
+        Uuid,
+        Uuid,
+        Uuid,
+        SyncSender<Result<avesra_core::apps::AppRecord, ErrorCode>>,
+    ),
 }
 pub type CatalogAuthorization = Box<dyn FnMut() -> Result<(), ErrorCode> + Send>;
 /// Native-owned setup commands. Neither an alias nor registration grants effects.
@@ -297,6 +303,15 @@ impl NativeEffects {
                             let _ = reply.try_send(result);
                             continue;
                         }
+                        Command::InspectApp(actor, id, revision, reply) => {
+                            let _ = reply.try_send(adapter.apps.get(id).and_then(|record| {
+                                if record.selected_by != actor || record.revision != revision {
+                                    return Err(ErrorCode::Stale);
+                                }
+                                Ok(record)
+                            }));
+                            continue;
+                        }
                     };
                     let result =
                         controller.execute(job.step, &job.session, &job.cancellation, &mut adapter);
@@ -430,6 +445,21 @@ impl NativeEffects {
                 operation,
                 reply,
             })
+            .map_err(|_| ErrorCode::Unavailable)?;
+        Ok(receive)
+    }
+    pub fn inspect_app(
+        &self,
+        actor: Uuid,
+        id: Uuid,
+        revision: Uuid,
+    ) -> Result<Receiver<Result<avesra_core::apps::AppRecord, ErrorCode>>, ErrorCode> {
+        if actor.is_nil() || id.is_nil() || revision.is_nil() {
+            return Err(ErrorCode::Malformed);
+        }
+        let (reply, receive) = mpsc::sync_channel(1);
+        self.send
+            .try_send(Command::InspectApp(actor, id, revision, reply))
             .map_err(|_| ErrorCode::Unavailable)?;
         Ok(receive)
     }

@@ -79,6 +79,7 @@ impl Runtime {
             self.catalog.invalidate();
             self.browser.invalidate();
         }
+        self.browser.observe(local);
         if local.locked
             && let Ok(mut slot) = self.shortcut_recording.lock()
         {
@@ -124,7 +125,7 @@ fn runtime_snapshot(state: tauri::State<'_, Runtime>) -> Result<LocalState, Stri
 }
 fn invalidate_settings(app: &tauri::AppHandle) {
     app.state::<Runtime>().catalog.invalidate();
-    app.state::<Runtime>().browser.invalidate();
+    app.state::<Runtime>().browser.settings_hidden();
     setup::cancel_native(app);
     let _ = app.emit("settings-hidden", ());
 }
@@ -621,9 +622,11 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             browser::begin_browser_pairing,
+            browser::connect_selected_browser,
             browser::browser_pairing_status,
             browser::approve_browser_pairing,
             browser::cancel_browser_pairing,
+            browser::release_browser_management,
             browser::saved_browser_pairings,
             browser::revoke_browser_pairing,
             browser::browser_selections,
