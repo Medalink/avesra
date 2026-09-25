@@ -31,7 +31,6 @@ fn device_failed(app: &tauri::AppHandle, epoch: u64, output: bool) {
     local.enrollment_capture = false;
     local.capture_epoch = local.capture_epoch.saturating_add(1);
     local.playback_epoch = local.playback_epoch.saturating_add(1);
-    local.action_epoch = local.action_epoch.saturating_add(1);
     local.refresh();
     state.publish(&local);
     let snapshot = local.clone();

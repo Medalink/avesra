@@ -21,7 +21,9 @@ pub struct DispatchSession {
     pub actor_id: Uuid,
     pub device_id: Uuid,
     pub session_id: Uuid,
+    /// Frozen accepted source provenance, not the current microphone epoch.
     pub capture_epoch: u64,
+    /// Current native action authority; pause/stop/lock/disconnect revoke it.
     pub action_epoch: u64,
     pub active: bool,
 }

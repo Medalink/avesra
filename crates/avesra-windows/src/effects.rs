@@ -139,7 +139,7 @@ struct Job {
     reply: SyncSender<Result<ExecutionReceipt, ErrorCode>>,
 }
 struct State {
-    epochs: (u64, u64),
+    action_epoch: u64,
     allowed: bool,
     active: Option<Cancellation>,
 }
@@ -163,7 +163,7 @@ impl NativeEffects {
         let ownership = WorkerOwnership::acquire(&path)?;
         let (send, receive) = mpsc::sync_channel::<Command>(16);
         let state = Arc::new(Mutex::new(State {
-            epochs: (0, 0),
+            action_epoch: 0,
             allowed: false,
             active: None,
         }));
@@ -200,15 +200,17 @@ impl NativeEffects {
             .map_err(|_| ErrorCode::Unavailable)?;
         Ok(Self { send, state })
     }
+    /// Accepted work retains its frozen capture provenance. Only current action
+    /// authority is observed here; input/output listening controls are independent.
     /// Called synchronously with local state changes, before any storage await.
-    pub fn observe(&self, capture_epoch: u64, action_epoch: u64, allowed: bool) {
+    pub fn observe(&self, action_epoch: u64, allowed: bool) {
         if let Ok(mut state) = self.state.lock() {
-            if ((capture_epoch, action_epoch) != state.epochs || !allowed)
+            if (action_epoch != state.action_epoch || !allowed)
                 && let Some(active) = &state.active
             {
                 active.cancel();
             }
-            state.epochs = (capture_epoch, action_epoch);
+            state.action_epoch = action_epoch;
             state.allowed = allowed;
         }
     }
@@ -220,7 +222,11 @@ impl NativeEffects {
         session: DispatchSession,
     ) -> Result<Receiver<Result<ExecutionReceipt, ErrorCode>>, ErrorCode> {
         let mut state = self.state.lock().map_err(|_| ErrorCode::Unavailable)?;
-        if !state.allowed || state.epochs != (session.capture_epoch, session.action_epoch) {
+        if !state.allowed
+            || session.capture_epoch == 0
+            || session.action_epoch == 0
+            || state.action_epoch != session.action_epoch
+        {
             return Err(ErrorCode::Stale);
         }
         if state.active.is_some() {
@@ -264,6 +270,6 @@ impl NativeEffects {
 }
 impl Drop for NativeEffects {
     fn drop(&mut self) {
-        self.observe(0, 0, false);
+        self.observe(0, false);
     }
 }

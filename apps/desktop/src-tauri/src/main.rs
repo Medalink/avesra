@@ -71,15 +71,8 @@ impl Runtime {
         );
         self.media.publish(local);
         self.effects.observe(
-            local.capture_epoch,
             local.action_epoch,
-            local.connected
-                && local.enrolled
-                && local.voice_ready
-                && !local.locked
-                && !local.settings.paused
-                && !local.settings.explicit_mute
-                && !local.settings.deafened,
+            local.connected && local.enrolled && !local.locked && !local.settings.paused,
         );
         self.modes.send_replace(ModeSnapshot::from(local));
     }
