@@ -22,6 +22,7 @@ use tokio::sync::oneshot;
 #[derive(Clone)]
 struct ModeSnapshot {
     capture_epoch: u64,
+    playback_epoch: u64,
     action_epoch: u64,
     muted: bool,
     deafened: bool,
@@ -31,6 +32,7 @@ impl From<&LocalState> for ModeSnapshot {
     fn from(local: &LocalState) -> Self {
         Self {
             capture_epoch: local.capture_epoch,
+            playback_epoch: local.playback_epoch,
             action_epoch: local.action_epoch,
             muted: local.settings.explicit_mute || local.locked,
             deafened: local.settings.deafened,
@@ -197,6 +199,10 @@ async fn save_settings(
             return Err("Use local controls to change listening modes".into());
         }
         let pending = enqueue(&state, settings.clone())?;
+        if settings.speaker != local.settings.speaker || settings.profile != local.settings.profile
+        {
+            local.playback_epoch = local.playback_epoch.saturating_add(1);
+        }
         if settings.microphone != local.settings.microphone
             || settings.speaker != local.settings.speaker
             || settings.profile != local.settings.profile

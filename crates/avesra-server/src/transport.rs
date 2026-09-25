@@ -1,7 +1,7 @@
 use crate::auth::{AuthStore, now_ms};
 use avesra_contracts::{
-    ConnectionStatus, ControlMessage, MAX_CONTROL_BYTES, ServerStatus, SessionContext,
-    decode_control,
+    ConnectionStatus, ControlMessage, MAX_CONTROL_BYTES, PROTOCOL_VERSION, ServerStatus,
+    SessionContext, decode_control,
 };
 use axum::{
     Json, Router,
@@ -51,6 +51,7 @@ struct ServerState {
 struct LiveSession {
     device: Uuid,
     epoch: u64,
+    output_epoch: u64,
     enabled: bool,
     output_enabled: bool,
     output_permission: tokio::sync::watch::Sender<(u64, bool)>,
@@ -581,7 +582,7 @@ async fn session(
         id: session_id,
     };
     let reply = SessionReply {
-        version: 1,
+        version: PROTOCOL_VERSION,
         device_id,
         session_id,
         status: "owner_setup_required",
@@ -620,6 +621,7 @@ async fn session(
                 session_id,
                 last_sequence: 0,
                 capture_epoch: envelope.capture_epoch,
+                playback_epoch: envelope.playback_epoch,
                 action_epoch: envelope.action_epoch,
             };
             if !matches!(envelope.message, ControlMessage::Hello { .. })
@@ -632,6 +634,7 @@ async fn session(
                 session_id,
                 last_sequence: envelope.sequence,
                 capture_epoch: envelope.capture_epoch,
+                playback_epoch: envelope.playback_epoch,
                 action_epoch: envelope.action_epoch,
             });
         } else {
@@ -641,6 +644,7 @@ async fn session(
             // A local control may advance epochs; any backwards move remains stale.
             if matches!(envelope.message, ControlMessage::Mode { .. })
                 && envelope.capture_epoch >= current.capture_epoch
+                && envelope.playback_epoch >= current.playback_epoch
                 && envelope.action_epoch >= current.action_epoch
             {
                 let updated = SessionContext {
@@ -648,12 +652,14 @@ async fn session(
                     session_id,
                     last_sequence: current.last_sequence,
                     capture_epoch: envelope.capture_epoch,
+                    playback_epoch: envelope.playback_epoch,
                     action_epoch: envelope.action_epoch,
                 };
                 if envelope.validate(&updated, now).is_err() {
                     break;
                 }
                 current.capture_epoch = updated.capture_epoch;
+                current.playback_epoch = updated.playback_epoch;
                 current.action_epoch = updated.action_epoch;
             } else if envelope.validate(current, now).is_err() {
                 break;
@@ -679,10 +685,11 @@ async fn session(
             let live = sessions.entry(session_id).or_insert_with(|| LiveSession {
                 device: device_id,
                 epoch: envelope.capture_epoch,
+                output_epoch: envelope.playback_epoch,
                 enabled: !mode.0 && !mode.1 && !mode.2,
                 output_enabled: !mode.1 && !mode.2,
                 output_permission: tokio::sync::watch::channel((
-                    envelope.capture_epoch,
+                    envelope.playback_epoch,
                     !mode.1 && !mode.2,
                 ))
                 .0,
@@ -695,10 +702,11 @@ async fn session(
                 seen: std::collections::VecDeque::new(),
             });
             live.epoch = envelope.capture_epoch;
+            live.output_epoch = envelope.playback_epoch;
             live.enabled = !mode.0 && !mode.1 && !mode.2;
             live.output_enabled = !mode.1 && !mode.2;
             live.output_permission.send_if_modified(|permission| {
-                let next = (live.epoch, live.output_enabled);
+                let next = (live.output_epoch, live.output_enabled);
                 if *permission == next {
                     false
                 } else {
@@ -722,13 +730,14 @@ async fn session(
         };
         response_sequence = next;
         let reply = ServerStatus {
-            version: 1,
+            version: PROTOCOL_VERSION,
             device_id,
             session_id,
             sequence: response_sequence,
             request_id: envelope.request_id,
             request_sequence: envelope.sequence,
             capture_epoch: envelope.capture_epoch,
+            playback_epoch: envelope.playback_epoch,
             action_epoch: envelope.action_epoch,
             status: if matches!(envelope.message, ControlMessage::Action(_)) {
                 ConnectionStatus::RejectedOwnerSetupRequired

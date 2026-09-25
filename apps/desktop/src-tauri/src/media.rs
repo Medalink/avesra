@@ -12,19 +12,25 @@ use std::{
 };
 use tauri::{Emitter, Manager};
 
-fn device_failed(app: &tauri::AppHandle, epoch: u64) {
+fn device_failed(app: &tauri::AppHandle, epoch: u64, output: bool) {
     let Some(state) = app.try_state::<crate::Runtime>() else {
         return;
     };
     let Ok(mut local) = state.local.lock() else {
         return;
     };
-    if local.capture_epoch != epoch {
+    if (if output {
+        local.playback_epoch
+    } else {
+        local.capture_epoch
+    }) != epoch
+    {
         return;
     }
     local.voice_ready = false;
     local.enrollment_capture = false;
     local.capture_epoch = local.capture_epoch.saturating_add(1);
+    local.playback_epoch = local.playback_epoch.saturating_add(1);
     local.action_epoch = local.action_epoch.saturating_add(1);
     local.refresh();
     state.publish(&local);
@@ -39,6 +45,7 @@ fn device_failed(app: &tauri::AppHandle, epoch: u64) {
 struct Configuration {
     revision: u64,
     epoch: u64,
+    playback_epoch: u64,
     input: Option<String>,
     output: Option<String>,
     capture: bool,
@@ -161,7 +168,7 @@ impl MediaWorker {
                             || config.input != previous.input
                             || config.capture != previous.capture
                             || config.capture_deadline != previous.capture_deadline;
-                        let playback_changed = config.epoch != previous.epoch
+                        let playback_changed = config.playback_epoch != previous.playback_epoch
                             || config.output != previous.output
                             || config.playback != previous.playback;
                         // Capture-window churn must not restart an independent playback device.
@@ -194,7 +201,7 @@ impl MediaWorker {
                             playback = config.output.as_ref().and_then(|name| {
                                 Playback::open_with_gate(
                                     name,
-                                    playback_gate.new_attempt(config.epoch),
+                                    playback_gate.new_attempt(config.playback_epoch),
                                 )
                                 .ok()
                             });
@@ -207,7 +214,11 @@ impl MediaWorker {
                                 .lock()
                                 .is_ok_and(|value| value.revision == revision)
                         {
-                            device_failed(&app, config.epoch);
+                            if config.capture && capture.is_none() {
+                                device_failed(&app, config.epoch, false);
+                            } else {
+                                device_failed(&app, config.playback_epoch, true);
+                            }
                         }
                         let _ = app.emit(
                             "media-health",
@@ -302,7 +313,7 @@ impl MediaWorker {
                                 .capture_deadline
                                 .is_some_and(|deadline| Instant::now() >= deadline)
                         {
-                            device_failed(&app, config.epoch);
+                            device_failed(&app, config.epoch, false);
                             let _ = app.emit(
                                 "media-health",
                                 MediaHealth {
@@ -323,7 +334,7 @@ impl MediaWorker {
                                 };
                                 if config.playback
                                     && stream.gate.current(frame.epoch)
-                                    && frame.epoch == config.epoch
+                                    && frame.epoch == config.playback_epoch
                                     && frame.captured.elapsed() < Duration::from_millis(500)
                                     && stream.frames.try_send(frame).is_err()
                                 {
@@ -342,7 +353,7 @@ impl MediaWorker {
                             }
                         }
                         if stream.gate.failed() || discontinuity {
-                            device_failed(&app, config.epoch);
+                            device_failed(&app, config.playback_epoch, true);
                             playback = None;
                         }
                     }
@@ -368,6 +379,8 @@ impl MediaWorker {
             && !local.settings.deafened
             && !local.settings.paused
             && local.settings.speaker.is_some();
+        let mut clear_capture = true;
+        let mut clear_playback = true;
         if let Ok(mut config) = self.configuration.lock() {
             let voice_window = config.voice_window
                 && config.epoch == local.capture_epoch
@@ -375,6 +388,7 @@ impl MediaWorker {
                 && !local.enrollment_capture;
             let capture = allowed && (local.enrollment_capture || voice_window);
             if config.epoch == local.capture_epoch
+                && config.playback_epoch == local.playback_epoch
                 && config.input == local.settings.microphone
                 && config.output == local.settings.speaker
                 && config.capture == capture
@@ -382,8 +396,14 @@ impl MediaWorker {
             {
                 return;
             }
+            clear_capture = config.epoch != local.capture_epoch
+                || config.capture != capture
+                || config.input != local.settings.microphone;
+            clear_playback = config.playback_epoch != local.playback_epoch
+                || config.playback != playback
+                || config.output != local.settings.speaker;
             self.capture_gate.publish(capture, local.capture_epoch);
-            self.playback_gate.publish(playback, local.capture_epoch);
+            self.playback_gate.publish(playback, local.playback_epoch);
             let capture_deadline = if voice_window {
                 config.capture_deadline
             } else {
@@ -394,6 +414,7 @@ impl MediaWorker {
             *config = Configuration {
                 revision: config.revision.saturating_add(1),
                 epoch: local.capture_epoch,
+                playback_epoch: local.playback_epoch,
                 input: local.settings.microphone.clone(),
                 output: local.settings.speaker.clone(),
                 capture,
@@ -404,13 +425,13 @@ impl MediaWorker {
             };
         } else {
             self.capture_gate.publish(false, local.capture_epoch);
-            self.playback_gate.publish(false, local.capture_epoch);
+            self.playback_gate.publish(false, local.playback_epoch);
         }
         // Dispose data synchronously even if the worker is delayed in an OS call.
-        if let Ok(mut queue) = self.outbound.lock() {
+        if clear_capture && let Ok(mut queue) = self.outbound.lock() {
             queue.clear();
         }
-        if let Ok(mut queue) = self.inbound.lock() {
+        if clear_playback && let Ok(mut queue) = self.inbound.lock() {
             queue.clear();
         }
     }

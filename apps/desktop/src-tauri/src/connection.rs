@@ -1,6 +1,6 @@
 use crate::{ModeSnapshot, Runtime};
 use avesra_contracts::{
-    ConnectionStatus, ControlMessage, Envelope, MAX_CONTROL_BYTES, ServerStatus,
+    ConnectionStatus, ControlMessage, Envelope, MAX_CONTROL_BYTES, PROTOCOL_VERSION, ServerStatus,
 };
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -469,7 +469,7 @@ pub async fn run(
         return Err("Invalid Spark handshake".into());
     };
     let hello: SessionReply = serde_json::from_str(&text).map_err(|_| "Invalid Spark handshake")?;
-    if hello.version != 1
+    if hello.version != PROTOCOL_VERSION
         || hello.device_id != record.device_id
         || hello.session_id.is_nil()
         || hello.status != "owner_setup_required"
@@ -479,12 +479,13 @@ pub async fn run(
     let mut sequence = 1u64;
     let mut mode = modes.borrow().clone();
     let make = |sequence, mode: &ModeSnapshot, message| Envelope {
-        version: 1,
+        version: PROTOCOL_VERSION,
         device_id: record.device_id,
         session_id: hello.session_id,
         request_id: Uuid::new_v4(),
         sequence,
         capture_epoch: mode.capture_epoch,
+        playback_epoch: mode.playback_epoch,
         action_epoch: mode.action_epoch,
         message,
     };
@@ -517,12 +518,12 @@ pub async fn run(
           let Message::Text(text)=response else{return Err("Spark closed the session".into());};
           let reply:ServerStatus=serde_json::from_str(&text).map_err(|_|"Invalid Spark status")?;
           let request=pending.pop_front().ok_or("Unexpected Spark reply")?;
-          if reply.version!=1||reply.device_id!=record.device_id||reply.session_id!=hello.session_id||reply.sequence!=response_sequence.checked_add(1).ok_or("Response sequence exhausted")?||reply.request_id!=request.request_id||reply.request_sequence!=request.sequence||reply.capture_epoch!=request.capture_epoch||reply.action_epoch!=request.action_epoch||reply.status!=ConnectionStatus::ConnectedOwnerSetupRequired{return Err("Spark response failed session validation".into());}
+          if reply.version!=PROTOCOL_VERSION||reply.device_id!=record.device_id||reply.session_id!=hello.session_id||reply.sequence!=response_sequence.checked_add(1).ok_or("Response sequence exhausted")?||reply.request_id!=request.request_id||reply.request_sequence!=request.sequence||reply.capture_epoch!=request.capture_epoch||reply.playback_epoch!=request.playback_epoch||reply.action_epoch!=request.action_epoch||reply.status!=ConnectionStatus::ConnectedOwnerSetupRequired{return Err("Spark response failed session validation".into());}
           if let ControlMessage::Mode{muted,deafened,paused}=request.message && (reply.muted!=muted||reply.deafened!=deafened||reply.paused!=paused){return Err("Spark did not acknowledge local modes".into());}
           response_sequence=reply.sequence;last_reply=tokio::time::Instant::now();
           let state=app.state::<Runtime>();let mut local=state.local.lock().map_err(|_|"Local state unavailable")?;
           if state.connection_generation.load(std::sync::atomic::Ordering::SeqCst)!=generation{return Err("Session replaced".into());}
-          if local.capture_epoch==reply.capture_epoch&&local.action_epoch==reply.action_epoch {
+          if local.capture_epoch==reply.capture_epoch&&local.playback_epoch==reply.playback_epoch&&local.action_epoch==reply.action_epoch {
             if !local.connected {local.connected=true;local.refresh();state.publish(&local);let _=app.emit("runtime-state",local.clone());}
             if let Ok(mut session)=state.acknowledged_session.lock(){*session=Some(SessionIdentity{id:hello.session_id,epoch:reply.capture_epoch,generation});}
           }continue;

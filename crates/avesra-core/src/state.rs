@@ -76,6 +76,7 @@ pub struct LocalState {
     pub revision: u64,
     pub settings: Settings,
     pub capture_epoch: u64,
+    pub playback_epoch: u64,
     pub action_epoch: u64,
     pub connected: bool,
     pub enrolled: bool,
@@ -106,6 +107,7 @@ impl LocalState {
             revision: 1,
             settings,
             capture_epoch: 1,
+            playback_epoch: 1,
             action_epoch: 1,
             connected: false,
             enrolled: false,
@@ -153,6 +155,9 @@ impl LocalState {
             }
         }
         self.capture_epoch = self.capture_epoch.saturating_add(1);
+        if !matches!(control, LocalControl::Mute | LocalControl::Unmute) {
+            self.playback_epoch = self.playback_epoch.saturating_add(1);
+        }
         if matches!(
             control,
             LocalControl::Pause

@@ -1,5 +1,7 @@
 //! Binary audio boundary; only an already authenticated media session may use it.
-use crate::{ErrorCode, MAX_AUDIO_FRAME_BYTES, PROTOCOL_VERSION};
+use crate::{ErrorCode, MAX_AUDIO_FRAME_BYTES};
+/// Media framing evolves independently of the control handshake.
+pub const MEDIA_PROTOCOL_VERSION: u16 = 1;
 use uuid::Uuid;
 
 const HEADER: usize = 82;
@@ -37,7 +39,7 @@ impl AudioPacket {
         self.validate_shape()?;
         let mut bytes = Vec::with_capacity(HEADER + self.pcm.len());
         bytes.extend_from_slice(b"AVAU");
-        bytes.extend_from_slice(&PROTOCOL_VERSION.to_le_bytes());
+        bytes.extend_from_slice(&MEDIA_PROTOCOL_VERSION.to_le_bytes());
         bytes
             .extend_from_slice(&(u16::from(self.start) | (u16::from(self.end) << 1)).to_le_bytes());
         for id in [self.device_id, self.session_id, self.utterance_id] {
@@ -67,7 +69,7 @@ impl AudioPacket {
             *offset += N;
             Ok(value)
         }
-        if u16::from_le_bytes(take(bytes, &mut offset)?) != PROTOCOL_VERSION {
+        if u16::from_le_bytes(take(bytes, &mut offset)?) != MEDIA_PROTOCOL_VERSION {
             return Err(ErrorCode::Version);
         }
         let flags = u16::from_le_bytes(take(bytes, &mut offset)?);

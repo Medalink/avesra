@@ -45,7 +45,11 @@ pub(super) fn current(
     auth.sessions.lock().is_ok_and(|sessions| {
         sessions.get(&session).is_some_and(|live| {
             live.device == device
-                && live.epoch == epoch
+                && (if output {
+                    live.output_epoch
+                } else {
+                    live.epoch
+                }) == epoch
                 && live.updated.elapsed() < Duration::from_secs(30)
                 && (!output || live.output_enabled)
         })
@@ -68,7 +72,11 @@ pub(super) fn admit(
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     let live = sessions.get_mut(&session).ok_or(StatusCode::UNAUTHORIZED)?;
     if live.device != device
-        || live.epoch != epoch
+        || (if output {
+            live.output_epoch
+        } else {
+            live.epoch
+        }) != epoch
         || live.updated.elapsed() >= Duration::from_secs(30)
         || (output && !live.output_enabled)
     {
@@ -85,7 +93,11 @@ pub(super) fn admit(
         return Err(StatusCode::CONFLICT);
     }
     live.seen.push_back((request, Instant::now()));
-    Ok(live.output_permission.subscribe())
+    Ok(if output {
+        live.output_permission.subscribe()
+    } else {
+        live.permission.subscribe()
+    })
 }
 pub(super) async fn operation(
     auth: Shared,

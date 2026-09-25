@@ -4,7 +4,7 @@ use uuid::Uuid;
 pub mod media;
 pub mod voice;
 
-pub const PROTOCOL_VERSION: u16 = 1;
+pub const PROTOCOL_VERSION: u16 = 2;
 pub const MAX_CONTROL_BYTES: usize = 65_536;
 pub const MAX_ACTION_AGE_MS: u64 = 30_000;
 pub const MAX_AUDIO_FRAME_BYTES: usize = 640;
@@ -22,6 +22,7 @@ pub struct ServerStatus {
     pub request_id: Uuid,
     pub request_sequence: u64,
     pub capture_epoch: u64,
+    pub playback_epoch: u64,
     pub action_epoch: u64,
     pub status: ConnectionStatus,
     pub muted: bool,
@@ -351,6 +352,7 @@ pub struct Envelope {
     pub request_id: Uuid,
     pub sequence: u64,
     pub capture_epoch: u64,
+    pub playback_epoch: u64,
     pub action_epoch: u64,
     pub message: ControlMessage,
 }
@@ -361,6 +363,7 @@ pub struct SessionContext {
     pub session_id: Uuid,
     pub last_sequence: u64,
     pub capture_epoch: u64,
+    pub playback_epoch: u64,
     pub action_epoch: u64,
 }
 
@@ -372,7 +375,13 @@ pub fn decode_control(bytes: &[u8]) -> Result<Envelope, ErrorCode> {
     if value.version != PROTOCOL_VERSION {
         return Err(ErrorCode::Version);
     }
-    if value.device_id.is_nil() || value.session_id.is_nil() || value.request_id.is_nil() {
+    if value.device_id.is_nil()
+        || value.session_id.is_nil()
+        || value.request_id.is_nil()
+        || value.capture_epoch == 0
+        || value.action_epoch == 0
+        || value.playback_epoch == 0
+    {
         return Err(ErrorCode::Malformed);
     }
     Ok(value)
@@ -383,13 +392,20 @@ impl Envelope {
         if self.version != PROTOCOL_VERSION {
             return Err(ErrorCode::Version);
         }
-        if self.device_id.is_nil() || self.session_id.is_nil() || self.request_id.is_nil() {
+        if self.device_id.is_nil()
+            || self.session_id.is_nil()
+            || self.request_id.is_nil()
+            || self.capture_epoch == 0
+            || self.action_epoch == 0
+            || self.playback_epoch == 0
+        {
             return Err(ErrorCode::Malformed);
         }
         if self.device_id != session.device_id
             || self.session_id != session.session_id
             || self.sequence <= session.last_sequence
             || self.capture_epoch != session.capture_epoch
+            || self.playback_epoch != session.playback_epoch
             || self.action_epoch != session.action_epoch
         {
             return Err(ErrorCode::Stale);

@@ -18,6 +18,7 @@ export type Runtime = {
   revision: number;
   settings: Settings;
   capture_epoch: number;
+  playback_epoch: number;
   action_epoch: number;
   connected: boolean;
   enrolled: boolean;
