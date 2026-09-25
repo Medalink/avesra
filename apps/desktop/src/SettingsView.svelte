@@ -2,6 +2,7 @@
   import Icon from "./Icon.svelte";
   import Pairing from "./Pairing.svelte";
   import SetupLock from "./SetupLock.svelte";
+  import EnrollmentView from "./EnrollmentView.svelte";
   import type { Runtime, Settings, AudioDevice } from "./runtime";
   let {
     runtime,
@@ -465,28 +466,7 @@
           </section>
         {:else if section === "people"}
           <SetupLock {runtime} />
-          <section class="section">
-            <span class="av-kicker">Owner</span>
-            <div class="empty">
-              <div class="row">
-                <h2>No owner enrolled</h2>
-                <span class="av-chip text-amber-200 ring-amber-400/30"
-                  >Setup required</span
-                >
-              </div>
-              <p class="av-hint">
-                Pair Spark and prepare the speaker identity service before
-                enrolling. Enrollment uses prompted and held-out speech.
-              </p>
-              <button class="av-btn av-btn-primary self-start" disabled
-                >Enroll owner</button
-              >
-              <p class="av-hint">
-                Enrollment is unavailable until identity and local
-                authentication are ready.
-              </p>
-            </div>
-          </section>
+          <EnrollmentView {runtime} />
           <section class="section">
             <span class="av-kicker">Other people</span>
             <p class="av-hint">

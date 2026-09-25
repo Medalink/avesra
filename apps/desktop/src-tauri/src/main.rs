@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod connection;
 mod media;
+mod profiles;
 mod setup;
 use avesra_core::{
     state::{LocalControl, LocalState, Settings},
@@ -404,6 +405,10 @@ fn main() {
             setup::setup_status,
             setup::verify_setup,
             setup::cancel_setup,
+            setup::begin_enrollment,
+            setup::finish_enrollment,
+            setup::speaker_candidates,
+            setup::delete_speaker_candidate,
             runtime_snapshot,
             audio_devices,
             local_control,
