@@ -57,26 +57,49 @@ class Service:
         self.successful_inferences = 0
         self.clock_wall = time.time()
         self.clock_mono = time.monotonic()
+        self.lifecycle = asyncio.Lock()
 
     def current(self, generation, key, epoch, deadline):
         return generation == self.generation and self.sessions.get(key, (None,))[0] == epoch and time.monotonic() < deadline
 
     async def stop(self):
-        self.generation += 1
-        process = self.process
-        pipe, self.pipe = self.pipe, None
-        self.state = "termination_pending" if process is not None else "unavailable"
-        if pipe is not None:
-            pipe.close()
-        if process is not None:
-            if process.is_alive():
-                process.kill()
-            await asyncio.to_thread(process.join, 2)
-            if not process.is_alive():
-                process.close()
-                if self.process is process:
+        async with self.lifecycle:
+            self.generation += 1
+            process = self.process
+            pipe, self.pipe = self.pipe, None
+            self.state = "termination_pending" if process is not None else "unavailable"
+            if pipe is not None:
+                pipe.close()
+            if process is not None:
+                if process.is_alive():
+                    process.kill()
+                await asyncio.to_thread(process.join, 2)
+                if not process.is_alive():
+                    process.close()
                     self.process = None
                     self.state = "unavailable"
+            return self.process is None
+
+    async def start(self, generation):
+        async with self.lifecycle:
+            if generation != self.generation:
+                raise ValueError("cancelled")
+            if self.state == "termination_pending" and self.process is not None:
+                if self.process.is_alive():
+                    raise ValueError("termination_pending")
+                self.process.close()
+                self.process = None
+                self.state = "unavailable"
+            if self.process is not None:
+                return False
+            self.state = "loading"
+            context = mp.get_context("spawn")
+            parent, worker = context.Pipe()
+            self.pipe = parent
+            self.process = context.Process(target=child, args=(worker, self.config), daemon=True)
+            self.process.start()
+            worker.close()
+            return True
 
     async def receive(self, generation, deadline):
         while time.monotonic() < deadline:
@@ -136,8 +159,8 @@ class Service:
         if operation == "cancel":
             if self.active != (key, request["request_id"]):
                 return {"error": "unknown_request"}
-            await self.stop()
-            return {"outcome": "cancelled"}
+            stopped = await self.stop()
+            return {"outcome": "cancelled" if stopped else "termination_pending"}
         if self.active is not None:
             return {"error": "busy"}
         self.active = (key, request["request_id"])
@@ -149,20 +172,7 @@ class Service:
         started = time.monotonic()
         try:
             if operation == "load":
-                if self.state == "termination_pending" and self.process is not None:
-                    if self.process.is_alive():
-                        return {"error": "termination_pending"}
-                    self.process.close()
-                    self.process = None
-                    self.state = "unavailable"
-                if self.process is None:
-                    self.state = "loading"
-                    context = mp.get_context("spawn")
-                    parent, worker = context.Pipe()
-                    self.pipe = parent
-                    self.process = context.Process(target=child, args=(worker, self.config), daemon=True)
-                    self.process.start()
-                    worker.close()
+                if await self.start(generation):
                     result = await self.receive(generation, deadline)
                     if not self.current(generation, key, epoch, deadline):
                         raise ValueError("stale_reply")
