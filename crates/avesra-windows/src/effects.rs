@@ -65,6 +65,48 @@ impl Management {
 enum Command {
     Execute(Job),
     Manage(Management, SyncSender<Result<(), ErrorCode>>),
+    Catalog(
+        CatalogCommand,
+        SyncSender<Result<Vec<avesra_core::apps::AppAlias>, ErrorCode>>,
+    ),
+}
+pub type CatalogAuthorization = Box<dyn FnMut() -> Result<(), ErrorCode> + Send>;
+/// Native-owned setup commands. Neither an alias nor registration grants effects.
+pub enum CatalogCommand {
+    List,
+    Remember {
+        record: Box<avesra_core::apps::AppRecord>,
+        phrase: String,
+        authorize: CatalogAuthorization,
+    },
+    Forget {
+        id: Uuid,
+        revision: Uuid,
+        actor: Uuid,
+        authorize: CatalogAuthorization,
+    },
+}
+impl CatalogCommand {
+    fn apply(
+        self,
+        apps: &mut avesra_core::apps::AppCatalog,
+    ) -> Result<Vec<avesra_core::apps::AppAlias>, ErrorCode> {
+        match self {
+            Self::List => {}
+            Self::Remember {
+                record,
+                phrase,
+                mut authorize,
+            } => apps.remember(&record, &phrase, &mut authorize)?,
+            Self::Forget {
+                id,
+                revision,
+                actor,
+                mut authorize,
+            } => apps.forget(id, revision, actor, &mut authorize)?,
+        }
+        apps.aliases()
+    }
 }
 
 static PROCESS_OWNER: AtomicBool = AtomicBool::new(false);
@@ -209,6 +251,10 @@ impl NativeEffects {
                             );
                             continue;
                         }
+                        Command::Catalog(command, reply) => {
+                            let _ = reply.try_send(command.apply(&mut adapter.apps));
+                            continue;
+                        }
                     };
                     let result =
                         controller.execute(job.step, &job.session, &job.cancellation, &mut adapter);
@@ -289,6 +335,18 @@ impl NativeEffects {
         let (reply, receive) = mpsc::sync_channel(1);
         self.send
             .try_send(Command::Manage(command, reply))
+            .map_err(|_| ErrorCode::Unavailable)?;
+        Ok(receive)
+    }
+    /// Catalog management shares the effect owner and never recovers a second
+    /// live ledger. Remember/forget leave frozen accepted tasks and grants intact.
+    pub fn catalog(
+        &self,
+        command: CatalogCommand,
+    ) -> Result<Receiver<Result<Vec<avesra_core::apps::AppAlias>, ErrorCode>>, ErrorCode> {
+        let (reply, receive) = mpsc::sync_channel(1);
+        self.send
+            .try_send(Command::Catalog(command, reply))
             .map_err(|_| ErrorCode::Unavailable)?;
         Ok(receive)
     }

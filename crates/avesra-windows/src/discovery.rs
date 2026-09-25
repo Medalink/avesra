@@ -11,7 +11,7 @@ use std::{
 use uuid::Uuid;
 use windows::{
     Win32::{
-        Foundation::{ERROR_NO_MORE_ITEMS, ERROR_SUCCESS},
+        Foundation::{ERROR_NO_MORE_ITEMS, ERROR_SUCCESS, HWND},
         System::{
             Com::{
                 CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
@@ -24,8 +24,9 @@ use windows::{
             },
         },
         UI::Shell::{
-            FOLDERID_CommonPrograms, FOLDERID_Programs, IShellLinkW, KF_FLAG_DONT_VERIFY,
-            SHGetKnownFolderPath, SLGP_RAWPATH, ShellLink,
+            FOLDERID_CommonPrograms, FOLDERID_Programs, FOS_DONTADDTORECENT, FOS_FORCEFILESYSTEM,
+            FOS_NODEREFERENCELINKS, FOS_PICKFOLDERS, FileOpenDialog, IFileOpenDialog, IShellLinkW,
+            KF_FLAG_DONT_VERIFY, SHGetKnownFolderPath, SIGDN_FILESYSPATH, SLGP_RAWPATH, ShellLink,
         },
     },
     core::{Interface, PCWSTR, PWSTR},
@@ -98,6 +99,59 @@ impl Drop for Apartment {
         unsafe {
             CoUninitialize();
         }
+    }
+}
+/// Explicit local folder choice only. This modal call retains its owning worker
+/// until it returns; cancellation revokes publication, not a claim to stop COM.
+pub fn choose_working_directory(owner: isize) -> Result<PathBuf, ErrorCode> {
+    if owner == 0 {
+        return Err(ErrorCode::Malformed);
+    }
+    unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }
+        .ok()
+        .map_err(|_| ErrorCode::Unavailable)?;
+    let _apartment = Apartment;
+    let dialog: IFileOpenDialog =
+        unsafe { CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER) }
+            .map_err(|_| ErrorCode::Unavailable)?;
+    unsafe {
+        let options = dialog.GetOptions().map_err(|_| ErrorCode::Unavailable)?;
+        dialog
+            .SetOptions(
+                options
+                    | FOS_PICKFOLDERS
+                    | FOS_FORCEFILESYSTEM
+                    | FOS_NODEREFERENCELINKS
+                    | FOS_DONTADDTORECENT,
+            )
+            .map_err(|_| ErrorCode::Unavailable)?;
+        dialog
+            .Show(Some(HWND(owner as *mut _)))
+            .map_err(|_| ErrorCode::Denied)?;
+        let item = dialog.GetResult().map_err(|_| ErrorCode::Unavailable)?;
+        let raw = item
+            .GetDisplayName(SIGDN_FILESYSPATH)
+            .map_err(|_| ErrorCode::Unavailable)?;
+        let result = (|| {
+            if raw.is_null() {
+                return Err(ErrorCode::Malformed);
+            }
+            let mut length = 0;
+            while length <= 4096 && *raw.0.add(length) != 0 {
+                length += 1;
+            }
+            if length > 4096 {
+                return Err(ErrorCode::TooLarge);
+            }
+            let value = String::from_utf16(std::slice::from_raw_parts(raw.0, length))
+                .map_err(|_| ErrorCode::Malformed)?;
+            if !local_path(&value) {
+                return Err(ErrorCode::Unsupported);
+            }
+            Ok(PathBuf::from(value))
+        })();
+        CoTaskMemFree(Some(raw.0.cast()));
+        result
     }
 }
 struct Key(HKEY);

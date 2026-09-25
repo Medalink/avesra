@@ -48,6 +48,40 @@ pub enum AppSource {
     WindowsRegistration,
     PackageRegistration,
 }
+#[derive(Clone, Debug, Serialize)]
+pub struct AppAlias {
+    pub id: Uuid,
+    pub revision: Uuid,
+    pub phrase: String,
+    pub target: Uuid,
+    pub target_revision: Uuid,
+    pub selected_by: Uuid,
+    pub name: String,
+    pub detail: String,
+    pub available: bool,
+}
+/// Canonical lookup key; a phrase never chooses an executable or grants rights.
+pub fn alias_phrase(value: &str) -> Result<String, ErrorCode> {
+    if value.len() > 256 || value.chars().any(char::is_control) {
+        return Err(ErrorCode::Malformed);
+    }
+    let value = value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
+    if value.is_empty()
+        || value.len() > 256
+        || value.chars().count() > 64
+        || !value
+            .chars()
+            .all(|v| v.is_alphanumeric() || matches!(v, ' ' | '-' | '\''))
+    {
+        return Err(ErrorCode::Malformed);
+    }
+    Ok(value)
+}
+const ALIASES_SCHEMA: &str = "CREATE TABLE aliases(id TEXT PRIMARY KEY, revision TEXT UNIQUE NOT NULL, phrase TEXT UNIQUE NOT NULL, target TEXT NOT NULL REFERENCES apps(id), target_revision TEXT NOT NULL, selected_by TEXT NOT NULL);";
 fn text(value: &str, max: usize, empty: bool) -> bool {
     (empty || !value.is_empty()) && value.len() <= max && !value.chars().any(char::is_control)
 }
@@ -134,15 +168,148 @@ impl AppCatalog {
                     |r| Ok((r.get(0)?, r.get(1)?)),
                 )
                 .map_err(|_| ErrorCode::Malformed)?;
-            if version != (1, 1) {
+            if !matches!(version, (1, 1) | (1, 2)) {
                 return Err(ErrorCode::Unsupported);
+            }
+            if version == (1, 1) {
+                db.prepare("SELECT id,revision,body,revoked FROM apps LIMIT 0")
+                    .map_err(|_| ErrorCode::Malformed)?;
+                // Exact, transactional upgrade preserves every immutable app.
+                let tx = db.transaction().map_err(|_| ErrorCode::Unavailable)?;
+                tx.execute_batch(ALIASES_SCHEMA)
+                    .map_err(|_| ErrorCode::Malformed)?;
+                tx.execute("UPDATE schema_version SET version=2", [])
+                    .map_err(|_| ErrorCode::Unavailable)?;
+                tx.commit().map_err(|_| ErrorCode::Unavailable)?;
             }
         } else {
             let tx = db.transaction().map_err(|_| ErrorCode::Unavailable)?;
-            tx.execute_batch("CREATE TABLE schema_version(version INTEGER NOT NULL); INSERT INTO schema_version VALUES(1); CREATE TABLE apps(id TEXT PRIMARY KEY, revision TEXT UNIQUE NOT NULL, body TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0 CHECK(revoked IN (0,1)));").map_err(|_| ErrorCode::Unavailable)?;
+            tx.execute_batch("CREATE TABLE schema_version(version INTEGER NOT NULL); INSERT INTO schema_version VALUES(2); CREATE TABLE apps(id TEXT PRIMARY KEY, revision TEXT UNIQUE NOT NULL, body TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0 CHECK(revoked IN (0,1)));").map_err(|_| ErrorCode::Unavailable)?;
+            tx.execute_batch(ALIASES_SCHEMA)
+                .map_err(|_| ErrorCode::Unavailable)?;
             tx.commit().map_err(|_| ErrorCode::Unavailable)?;
         }
         Ok(Self(db))
+    }
+    pub fn remember(
+        &mut self,
+        record: &AppRecord,
+        phrase: &str,
+        authorize: &mut dyn FnMut() -> Result<(), ErrorCode>,
+    ) -> Result<(), ErrorCode> {
+        record.validate()?;
+        let phrase = alias_phrase(phrase)?;
+        let body = serde_json::to_string(record).map_err(|_| ErrorCode::Malformed)?;
+        if body.len() > 32768 {
+            return Err(ErrorCode::TooLarge);
+        }
+        let tx = self.0.transaction().map_err(|_| ErrorCode::Unavailable)?;
+        let count: (i64, i64) = tx
+            .query_row(
+                "SELECT (SELECT count(*) FROM apps), (SELECT count(*) FROM aliases)",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .map_err(|_| ErrorCode::Unavailable)?;
+        if count.0 >= 512 || count.1 >= 256 {
+            return Err(ErrorCode::TooLarge);
+        }
+        tx.execute(
+            "INSERT INTO apps(id,revision,body) VALUES(?1,?2,?3)",
+            params![record.id.to_string(), record.revision.to_string(), body],
+        )
+        .map_err(|_| ErrorCode::Denied)?;
+        tx.execute(
+            "INSERT INTO aliases VALUES(?1,?2,?3,?4,?5,?6)",
+            params![
+                Uuid::new_v4().to_string(),
+                Uuid::new_v4().to_string(),
+                phrase,
+                record.id.to_string(),
+                record.revision.to_string(),
+                record.selected_by.to_string()
+            ],
+        )
+        .map_err(|_| ErrorCode::Denied)?;
+        authorize()?;
+        tx.commit().map_err(|_| ErrorCode::Unavailable)
+    }
+    pub fn aliases(&self) -> Result<Vec<AppAlias>, ErrorCode> {
+        let mut statement = self.0.prepare("SELECT substr(id,1,37),substr(revision,1,37),substr(phrase,1,257),substr(target,1,37),substr(target_revision,1,37),substr(selected_by,1,37) FROM aliases ORDER BY phrase LIMIT 257").map_err(|_|ErrorCode::Malformed)?;
+        let mut rows = statement.query([]).map_err(|_| ErrorCode::Unavailable)?;
+        let mut result = Vec::new();
+        while let Some(row) = rows.next().map_err(|_| ErrorCode::Malformed)? {
+            if result.len() >= 256 {
+                return Err(ErrorCode::TooLarge);
+            }
+            let parse = |index| -> Result<Uuid, ErrorCode> {
+                let value: String = row.get(index).map_err(|_| ErrorCode::Malformed)?;
+                let id: Uuid = value.parse().map_err(|_| ErrorCode::Malformed)?;
+                if id.is_nil() || id.to_string() != value {
+                    return Err(ErrorCode::Malformed);
+                }
+                Ok(id)
+            };
+            let phrase: String = row.get(2).map_err(|_| ErrorCode::Malformed)?;
+            if alias_phrase(&phrase)? != phrase {
+                return Err(ErrorCode::Malformed);
+            }
+            let mut value = AppAlias {
+                id: parse(0)?,
+                revision: parse(1)?,
+                phrase,
+                target: parse(3)?,
+                target_revision: parse(4)?,
+                selected_by: parse(5)?,
+                name: String::new(),
+                detail: String::new(),
+                available: false,
+            };
+            let (body, length, revoked): (String,i64,i64) = self.0.query_row("SELECT substr(body,1,32769),length(CAST(body AS BLOB)),revoked FROM apps WHERE id=?1 AND revision=?2",params![value.target.to_string(),value.target_revision.to_string()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(|_|ErrorCode::Malformed)?;
+            if length > 32768 || !matches!(revoked, 0 | 1) {
+                return Err(ErrorCode::Malformed);
+            }
+            let app: AppRecord = serde_json::from_str(&body).map_err(|_| ErrorCode::Malformed)?;
+            app.validate()?;
+            if app.id != value.target
+                || app.revision != value.target_revision
+                || app.selected_by != value.selected_by
+            {
+                return Err(ErrorCode::Malformed);
+            }
+            value.name = app.name;
+            value.detail = match app.launch {
+                LaunchIdentity::Executable(v) => v.path,
+                LaunchIdentity::Packaged { app_id, .. } => app_id,
+            };
+            value.available = revoked == 0;
+            result.push(value);
+        }
+        Ok(result)
+    }
+    pub fn forget(
+        &mut self,
+        id: Uuid,
+        revision: Uuid,
+        actor: Uuid,
+        authorize: &mut dyn FnMut() -> Result<(), ErrorCode>,
+    ) -> Result<(), ErrorCode> {
+        if id.is_nil() || revision.is_nil() || actor.is_nil() {
+            return Err(ErrorCode::Malformed);
+        }
+        let tx = self.0.transaction().map_err(|_| ErrorCode::Unavailable)?;
+        if tx
+            .execute(
+                "DELETE FROM aliases WHERE id=?1 AND revision=?2 AND selected_by=?3",
+                params![id.to_string(), revision.to_string(), actor.to_string()],
+            )
+            .map_err(|_| ErrorCode::Unavailable)?
+            != 1
+        {
+            return Err(ErrorCode::Stale);
+        }
+        authorize()?;
+        tx.commit().map_err(|_| ErrorCode::Unavailable)
     }
     pub fn register(&mut self, record: &AppRecord) -> Result<(), ErrorCode> {
         record.validate()?;
