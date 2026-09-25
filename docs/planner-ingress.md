@@ -1,0 +1,29 @@
+# Paired accepted-planner ingress
+
+This contract extends planner-driver.md and reasoning-adapter.md. It does not create a voice qualification, accepted turn, model deployment proof or browser grant. The native ledger's opaque PlannerClaim is the only intended producer. Public parsing alone does not prove acceptance; the paired native companion asserts that its claim was durably accepted under the existing same-user trust boundary.
+
+## Request and authority
+
+POST /planner accepts the existing strict planner-v1 Request, at most 16 KiB encoded JSON. Authentication, actor lookup, queueing, deployment checks, model streaming and final publication share the remaining budget supplied by the native claim, capped at 30 seconds and anchored once at server route admission. The native original Instant remains authoritative on reply; server receipt cannot attest time spent before receipt, so the native producer must compute remaining_ms immediately before send, bound transit and never retry or renew the claim.
+
+The authenticated paired device must equal context.device. Its active stored actor binding must match actor and registration_revision, be unrevoked, and belong to the exact live control session/current action epoch with action permission and a heartbeat younger than 30 seconds. Frozen accepted capture_epoch is provenance; current mic mute/deafen must not revoke accepted action authority. Stop, pause, lock, disconnect, action change and actor/device revocation withdraw publication. Read the actual binding before model send and after terminal completion; a configured actor label or a status cached at registration is insufficient.
+
+At most two public preparation owners and one actual private model owner may exist. Blocking authentication/registration reads retain actual admission until completion, even if the waiter disappears. No jobs/SQLite mutex may block cancellation. Committed actor revocation must signal matching planner ownership from the actual writer, even if its HTTP waiter was cancelled. During waiting, bounded fresh authority inspection covers out-of-process device revocation; inability to establish authority withdraws rather than preserves availability.
+
+## Replay and withdrawal
+
+Each control session retains at most 64 planner identities without eviction until the session ends. Reserve the exact request context before any model work; reject reused request, turn/revision or utterance source, including a changed payload under an old ID. This roster stores bounded identities and withdrawal state, never accepted text or answers. Completed, failed, unavailable and cancelled requests remain retired. A new control session cannot reuse an old request's frozen session context. Exhaustion requires an explicit reconnect and does not authorize resending an old accepted turn.
+
+POST /planner/cancel carries the planner version and exact context, without text or budget. Its separate bounded admission uses only the withdrawal digest established by that authenticated control session, in constant time. It can withdraw an existing matching request or install a cancellation-before-admission tombstone; it cannot register, inspect accepted text, create a task or grant authority. Old context cannot withdraw another request. The native owner sends one correlated cancel when its claim is withdrawn; losing the network caller also withdraws local publication, but remote cancellation remains best effort.
+
+Cancellation and control/registration invalidation are independent of actual backend completion. Once the private driver might have sent inference, its spawned coordinator retains the model slot and durable job record while draining terminal output or reaching the original deadline. A dropped public waiter must not free that actual slot or prove that GPU work stopped. Unknown termination retains the durable uncertainty row and closes subsequent inference; no timer, changed recipe or process restart clears it automatically.
+
+## Driver and reply
+
+The public route requires a private Driver plus an opaque current QualifiedDeployment. No constructor exists for the latter today, and normal server startup leaves this capability absent. An authenticated, current request therefore returns unavailable without opening a model request or silently treating configuration as proof. Do not add a frontend flag or config boolean to bypass this boundary.
+
+Future qualification must bind the actual loaded artifact, exact request routing to the observed incarnation, backend terminal semantics and serving context capacity. max_tokens=512 limits output only: qualify capacity for the fixed system prompt, worst-case accepted 8192-byte input and output reserve, or perform exact qualified tokenizer-budget admission. Before/after deployment metadata and a matching model label cannot prove routing across an ABA change.
+
+The private driver performs native authority checks after blocking preparation and immediately before model send, then rechecks before publishing its result. Those checks use actual paired registration and session state; the original caller's live withdrawal is checked after awaited work. Once inference starts, authority withdrawal suppresses publication while the owned drain continues. Only a complete validated Answer/NeedsInput yields a strict correlated planner-v1 Reply; no tool proposal or success claim is executed.
+
+The companion must validate exact context and original claim lifetime before the same native ledger worker finalizes a stored reply. History/status cannot reconstruct the opaque handle. Answered history is immutable; later output cancellation needs its separate playback lease. This slice does not yet connect normal TTS or make a qualified profile available.
