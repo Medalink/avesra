@@ -48,6 +48,8 @@ struct Attempt {
     pairing: Option<browser::PairingRef>,
     actor: Option<Uuid>,
     observation_revision: u64,
+    targets: Vec<documents::Target>,
+    target_generation: u64,
     state: &'static str,
 }
 impl Attempt {
@@ -84,6 +86,22 @@ impl BrowserSetup {
         }
         self.scopes.invalidate();
         self.documents.invalidate();
+    }
+    /// Caller holds Runtime.local. Withdrawal retires metadata before remote or
+    /// durable actor revocation; it never grants/reconstructs accepted work.
+    pub fn retire_actor_targets(&self, actor: Uuid) {
+        if let Ok(mut inner) = self.inner.lock()
+            && let Some(attempt) = inner.attempt.as_mut()
+        {
+            for target in &mut attempt.targets {
+                target.retire_actor(actor);
+            }
+            if attempt.actor == Some(actor) {
+                attempt.target_generation = attempt.target_generation.saturating_add(1);
+                // A pre-withdrawal revalidation must not mint a replacement.
+                self.documents.invalidate();
+            }
+        }
     }
     pub fn settings_hidden(&self) {
         if let Ok(mut inner) = self.inner.lock() {
@@ -615,6 +633,8 @@ fn begin(
             pairing: None,
             actor: None,
             observation_revision: 0,
+            targets: Vec::with_capacity(documents::MAX_TARGETS),
+            target_generation: 1,
             state: "preparing",
         });
         inner.generation
@@ -891,6 +911,9 @@ async fn run(
                     }
                     if revision > attempt.observation_revision {
                         attempt.observation_revision = revision;
+                        for target in &mut attempt.targets {
+                            target.retire();
+                        }
                         state.browser.documents.invalidate();
                     }
                     Ok(())

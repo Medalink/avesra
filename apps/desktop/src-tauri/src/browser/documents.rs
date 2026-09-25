@@ -3,6 +3,7 @@ use super::*;
 use avesra_contracts::browser::{ScopeOperation, ScopeRef, documents as wire};
 use avesra_core::browser_scopes::{Grant, Store as ScopeStore};
 use scopes::Context;
+pub(super) const MAX_TARGETS: usize = 16;
 
 #[derive(Default)]
 pub(super) struct Coordinator {
@@ -17,9 +18,110 @@ struct Pending {
     request: Id,
     observation_revision: u64,
     resource_generation: u64,
+    target_generation: u64,
     mode: wire::Mode,
     phase: Phase,
     _work: tokio::sync::OwnedMutexGuard<()>,
+}
+// Immutable native configuration metadata. Only this module's actual reply
+// path constructs it; no Deserialize, Settings-fields constructor or persistence.
+#[derive(Clone)]
+pub(super) struct Target {
+    reference: ScopeRef,
+    actor: Uuid,
+    grant: Grant,
+    session: Id,
+    transport: u64,
+    connection: u64,
+    observation_revision: u64,
+    resource_generation: u64,
+    target_generation: u64,
+    candidate: wire::Candidate,
+    retired: bool,
+}
+impl Target {
+    fn selected(pending: &Pending, candidate: wire::Candidate) -> Result<Self, ErrorCode> {
+        pending.grant.validate()?;
+        candidate.validate(&pending.grant.origin)?;
+        if !pending.grant.operations.contains(&ScopeOperation::Read)
+            || pending.grant.actor.uuid() != pending.context.actor
+            || pending.grant.selection != pending.context.selection
+        {
+            return Err(ErrorCode::Stale);
+        }
+        Ok(Self {
+            reference: ScopeRef {
+                id: Id::new(Uuid::new_v4())?,
+                revision: Id::new(Uuid::new_v4())?,
+            },
+            actor: pending.context.actor,
+            grant: pending.grant.clone(),
+            session: pending.context.session,
+            transport: pending.context.transport,
+            connection: pending.context.connection,
+            observation_revision: pending.observation_revision,
+            resource_generation: pending.resource_generation,
+            target_generation: pending.target_generation,
+            candidate,
+            retired: false,
+        })
+    }
+    pub(super) fn retire(&mut self) {
+        self.retired = true;
+    }
+    pub(super) fn retire_actor(&mut self, actor: Uuid) {
+        if self.actor == actor {
+            self.retire();
+        }
+    }
+}
+/// Bounded metadata resolver only. Accepted use must separately establish
+/// current durable grant/registration/native owner and exact Chrome identity.
+/// Caller holds Runtime.local -> browser.inner; no I/O or management proof here.
+pub(super) fn resolve_target(
+    state: &Runtime,
+    local: &avesra_core::state::LocalState,
+    inner: &Inner,
+    reference: ScopeRef,
+    actor: Uuid,
+) -> Result<Target, ErrorCode> {
+    let attempt = inner.attempt.as_ref().ok_or(ErrorCode::Stale)?;
+    let target = attempt
+        .targets
+        .iter()
+        .find(|v| v.reference == reference)
+        .ok_or(ErrorCode::Stale)?;
+    if target.retired
+        || target.actor != actor
+        || !local.connected
+        || local.locked
+        || local.settings.paused
+        || !attempt.current_time()
+        || attempt.state != "authenticated_no_scopes"
+        || attempt.actor != Some(actor)
+        || attempt.session != Some(target.session)
+        || inner.generation != target.transport
+        || attempt.connection != target.connection
+        || state.connection_generation.load(Ordering::SeqCst) != target.connection
+        || attempt.observation_revision != target.observation_revision
+        || attempt.target_generation == u64::MAX
+        || attempt.target_generation != target.target_generation
+        || attempt.selection != Some(target.grant.selection)
+        || attempt.pairing != Some(target.grant.pairing)
+        || !attempt.selected.as_ref().is_some_and(|app| {
+            app.id == target.grant.browser_app.uuid()
+                && app.revision == target.grant.browser_revision.uuid()
+                && app.selected_by == actor
+        })
+        || !state
+            .effects
+            .browser_work_generation()
+            .is_ok_and(|v| v == target.resource_generation)
+    {
+        return Err(ErrorCode::Stale);
+    }
+    target.candidate.validate(&target.grant.origin)?;
+    Ok(target.clone())
 }
 #[derive(Clone, Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
@@ -57,10 +159,11 @@ impl Pending {
             .is_ok_and(|v| v == self.resource_generation)
             && self.started.elapsed() < Duration::from_millis(wire::LIFETIME_MS)
             && self.context.matches(state, local, inner)
-            && inner
-                .attempt
-                .as_ref()
-                .is_some_and(|v| v.observation_revision == self.observation_revision)
+            && inner.attempt.as_ref().is_some_and(|v| {
+                v.observation_revision == self.observation_revision
+                    && v.target_generation != u64::MAX
+                    && v.target_generation == self.target_generation
+            })
             && self.proof.current_locked(state, local)
     }
     fn wire(&self) -> wire::Request {
@@ -118,6 +221,8 @@ impl Coordinator {
                 || p.context.transport != generation
                 || p.context.attempt != attempt.id
                 || p.observation_revision != attempt.observation_revision
+                || attempt.target_generation == u64::MAX
+                || p.target_generation != attempt.target_generation
                 || !attempt.current_time()
                 || local.action_epoch != p.context.action
                 || local.capture_epoch != p.context.capture
@@ -156,7 +261,7 @@ fn admitted(
         capture: local.capture_epoch,
         actor: attempt.actor.ok_or("Owner unavailable")?,
     };
-    if !context.matches(state, local, inner) {
+    if attempt.target_generation == u64::MAX || !context.matches(state, local, inner) {
         return Err("Selected browser context changed".into());
     }
     Ok(context)
@@ -170,7 +275,15 @@ pub async fn inspect_browser_documents(
     let generation = visible(&window)?;
     let started = Instant::now();
     let state = app.state::<Runtime>();
-    let (work, context, proof, pairing, observation_revision, resource_generation) = {
+    let (
+        work,
+        context,
+        proof,
+        pairing,
+        observation_revision,
+        resource_generation,
+        target_generation,
+    ) = {
         let local = state.local.lock().map_err(|_| "Local state unavailable")?;
         let inner = state
             .browser
@@ -211,6 +324,11 @@ pub async fn inspect_browser_documents(
             pairing,
             observation_revision,
             resource_generation,
+            inner
+                .attempt
+                .as_ref()
+                .ok_or("Browser unavailable")?
+                .target_generation,
         )
     };
     let directory = app
@@ -262,6 +380,9 @@ pub async fn inspect_browser_documents(
                     .effects
                     .browser_work_generation()
                     .is_ok_and(|v| v == resource_generation)
+                    || !inner.attempt.as_ref().is_some_and(|v| {
+                        v.target_generation != u64::MAX && v.target_generation == target_generation
+                    })
                     || !context.matches(&state, &local, &inner)
                     || !inner
                         .attempt
@@ -291,6 +412,9 @@ pub async fn inspect_browser_documents(
         .effects
         .browser_work_generation()
         .is_ok_and(|v| v == resource_generation)
+        || !inner.attempt.as_ref().is_some_and(|v| {
+            v.target_generation != u64::MAX && v.target_generation == target_generation
+        })
         || !context.matches(&state, &local, &inner)
         || !inner
             .attempt
@@ -315,6 +439,7 @@ pub async fn inspect_browser_documents(
         request,
         observation_revision,
         resource_generation,
+        target_generation,
         mode: wire::Mode::Discover,
         phase: Phase::Waiting,
         _work: work,
@@ -345,6 +470,24 @@ pub fn browser_documents_status(
         .is_some_and(|p| p.context.settings != generation || !p.current(&state, &local, &inner))
     {
         *slot = None;
+    }
+    if let Some(p) = slot.as_mut()
+        && let Phase::Selected {
+            identity, revision, ..
+        } = &p.phase
+        && resolve_target(
+            &state,
+            &local,
+            &inner,
+            ScopeRef {
+                id: *identity,
+                revision: *revision,
+            },
+            p.context.actor,
+        )
+        .is_err()
+    {
+        p.phase = Phase::Unavailable;
     }
     Ok(if let Some(p) = slot.as_ref() {
         let request = p.wire();
@@ -440,7 +583,7 @@ pub(super) fn reply(
 ) -> Result<(), ErrorCode> {
     let state = app.state::<Runtime>();
     let local = state.local.lock().map_err(|_| ErrorCode::Unavailable)?;
-    let inner = state
+    let mut inner = state
         .browser
         .inner
         .lock()
@@ -467,11 +610,37 @@ pub(super) fn reply(
     p.phase = match reply.outcome {
         wire::Outcome::Available { candidates } => match &p.mode {
             wire::Mode::Discover => Phase::Available { candidates },
-            wire::Mode::Revalidate { candidate } => Phase::Selected {
-                identity: Id::new(Uuid::new_v4())?,
-                revision: Id::new(Uuid::new_v4())?,
-                candidate: candidate.clone(),
-            },
+            wire::Mode::Revalidate { candidate } => {
+                if inner
+                    .attempt
+                    .as_ref()
+                    .ok_or(ErrorCode::Stale)?
+                    .targets
+                    .len()
+                    >= MAX_TARGETS
+                {
+                    Phase::Unavailable
+                } else {
+                    let target = Target::selected(p, candidate.clone())?;
+                    if !p.current(&state, &local, &inner) {
+                        return Err(ErrorCode::Stale);
+                    }
+                    let attempt = inner.attempt.as_mut().ok_or(ErrorCode::Stale)?;
+                    if attempt.targets.iter().any(|v| {
+                        v.reference.id == target.reference.id
+                            || v.reference.revision == target.reference.revision
+                    }) {
+                        return Err(ErrorCode::Malformed);
+                    }
+                    let phase = Phase::Selected {
+                        identity: target.reference.id,
+                        revision: target.reference.revision,
+                        candidate: target.candidate.clone(),
+                    };
+                    attempt.targets.push(target);
+                    phase
+                }
+            }
         },
         wire::Outcome::Unavailable => Phase::Unavailable,
         wire::Outcome::Expired => Phase::Expired,

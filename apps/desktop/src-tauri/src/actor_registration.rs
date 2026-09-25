@@ -158,6 +158,11 @@ async fn run(
                 if registration_revision.is_nil() { return Err("Invalid registration revision".into()); }
                 app.state::<Runtime>().planner.revoke(identity.actor, registration_revision);
                 app.state::<Runtime>().effects.revoke_reply_registration(identity.actor, registration_revision);
+                {
+                    let state = app.state::<Runtime>();
+                    let _local = state.local.lock().map_err(|_| "Local state unavailable")?;
+                    state.browser.retire_actor_targets(identity.actor);
+                }
                 actors::Command::Revoke { actor: identity.actor, registration_revision }
             }
             Operation::Register => {
