@@ -31,3 +31,10 @@ Synthesis has its original fixed deadline; playback has a separate fixed utteran
 A submitted receipt proves frames reached the native output callback, not that the user heard them. Retain the existing bounded callback/playback timestamp projection and drain margin before releasing the stream; Stop/deafen interrupts immediately. Signal renderers and speaking state may use only actual owned/output telemetry. No prototype waveform, delivered claim or unavailable microphone-level animation belongs in this path.
 
 The planner, normal speech source registry, controller route and native playback handoff are separately observable implementation boundaries. Unavailable qualification or an unsupported long reply must remain explicit while independent source work proceeds. No automated test, synthetic corpus, model inference, browser/UI invocation or device operation is part of this spec checkpoint.
+
+
+## Source checkpoint: continuous published-source lease
+
+NativeEffects now returns a distinct opaque PublishedReply after final planner publication. The exact cancellation signal transfers under one effects-state lock from pending planners into a published-source roster, bounded jointly to16 live planner/reply sources. Dropping the reply withdraws the signal; cancelled entries are pruned at subsequent admission without evicting live owners. No history reader constructs this type. The reply retains its original immutable actor binding for later preparation, in addition to context/revision/Response.
+
+Exact-source cancellation, action invalidation, native effects-owner destruction and explicit exact actor-registration revocation now reach the published source during the handoff/preparation interval. Native planner success returns this new type and disarms only normal cleanup; failure still withdraws. This closes the previously dormant publication-to-output source gap. The normal output route, completed-response digest and media consumer below remain next source work, and no output/device/model operation has been invoked.

@@ -6,8 +6,9 @@ use crate::{
 use avesra_contracts::{ErrorCode, actors, planner};
 use avesra_core::{
     actor_intents::{self, Identity},
-    conversations::{PlannerCancellation, PlannerClaim, StoredReply},
+    conversations::{PlannerCancellation, PlannerClaim},
 };
+use avesra_windows::effects::PublishedReply;
 use std::{
     path::PathBuf,
     sync::{
@@ -254,7 +255,7 @@ async fn run(
     app: &tauri::AppHandle,
     claim: PlannerClaim,
     withdrawn: Arc<AtomicBool>,
-) -> Result<StoredReply, String> {
+) -> Result<PublishedReply, String> {
     let deadline = Instant::now()
         .checked_add(Duration::from_millis(
             claim.remaining_ms().map_err(|_| "Planner claim expired")?,
@@ -366,7 +367,7 @@ async fn run(
 }
 /// Called only by an eventual qualified native producer holding a durable claim.
 /// Reading saved history or passing arbitrary text cannot invoke this signature.
-pub async fn answer(app: tauri::AppHandle, claim: PlannerClaim) -> Result<StoredReply, String> {
+pub async fn answer(app: tauri::AppHandle, claim: PlannerClaim) -> Result<PublishedReply, String> {
     let cancellation = claim.cancellation();
     let withdrawn = Arc::new(AtomicBool::new(false));
     let mut caller = Caller {

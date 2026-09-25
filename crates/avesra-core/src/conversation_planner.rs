@@ -274,6 +274,7 @@ struct ReplyRecord {
 }
 /// Only a successful current ledger commit constructs this normal-output source.
 pub struct StoredReply {
+    binding: Binding,
     publication: PlannerCancellation,
     revision: Uuid,
     reply: planner::Reply,
@@ -284,6 +285,9 @@ impl Drop for StoredReply {
     }
 }
 impl StoredReply {
+    pub fn binding(&self) -> &Binding {
+        &self.binding
+    }
     pub fn publication_current(&self) -> bool {
         !self.publication.cancelled()
     }
@@ -593,6 +597,7 @@ impl Store {
         claim.cancellation.check()?;
         remaining(claim.started)?;
         Ok(StoredReply {
+            binding: claim.plan.binding.clone(),
             publication: claim.cancellation.clone(),
             revision: result.revision,
             reply: result.reply,

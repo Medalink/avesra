@@ -270,12 +270,40 @@ struct Job {
     cancellation: Cancellation,
     reply: SyncSender<Result<ExecutionReceipt, ErrorCode>>,
 }
+/// Native publication proof with continuous source withdrawal ownership.
+/// No Clone/Deserialize; normal output must consume this instead of StoredReply.
+pub struct PublishedReply {
+    reply: StoredReply,
+}
+impl PublishedReply {
+    pub fn current(&self) -> bool {
+        self.reply.publication_current()
+    }
+    pub fn context(&self) -> &avesra_contracts::planner::Context {
+        self.reply.context()
+    }
+    pub fn revision(&self) -> Uuid {
+        self.reply.revision()
+    }
+    pub fn response(&self) -> &avesra_contracts::planner::Response {
+        self.reply.response()
+    }
+    pub fn binding(&self) -> &avesra_contracts::actors::Binding {
+        self.reply.binding()
+    }
+}
+struct PublishedSource {
+    target: CancellationTarget,
+    registration: Uuid,
+    signal: PlannerCancellation,
+}
 struct State {
     action_epoch: u64,
     allowed: bool,
     active: Option<Active>,
     pending_cancellations: Vec<CancellationTarget>,
     planners: Vec<(CancellationTarget, PlannerCancellation)>,
+    replies: Vec<PublishedSource>,
 }
 fn planner_current(
     state: &Mutex<State>,
@@ -325,6 +353,7 @@ impl NativeEffects {
             active: None,
             pending_cancellations: Vec::new(),
             planners: Vec::new(),
+            replies: Vec::with_capacity(16),
         }));
         let owned = state.clone();
         std::thread::Builder::new()
@@ -567,12 +596,25 @@ impl NativeEffects {
                 for (_, planner) in &state.planners {
                     planner.cancel();
                 }
+                for source in &state.replies {
+                    source.signal.cancel();
+                }
             }
             state.action_epoch = action_epoch;
             state.allowed = allowed;
         }
     }
     /// Same durable owner; no transcript or accepted-boolean frontend ingress.
+    /// Protected native actor-management withdrawal; no durable history mutation.
+    pub fn revoke_reply_registration(&self, actor: Uuid, revision: Uuid) {
+        if let Ok(state) = self.state.lock() {
+            for source in &state.replies {
+                if source.target.actor == actor && source.registration == revision {
+                    source.signal.cancel();
+                }
+            }
+        }
+    }
     pub fn retire_planner(
         &self,
         retirement: PlannerRetirement,
@@ -585,6 +627,11 @@ impl NativeEffects {
                     signal.cancel();
                 }
             }
+            for source in &state.replies {
+                if source.target == target {
+                    source.signal.cancel();
+                }
+            }
         }
         let (reply, receive) = mpsc::sync_channel(1);
         self.send
@@ -594,7 +641,7 @@ impl NativeEffects {
     }
     /// Final native publication linearization; consumes the only stored handle.
     /// Call under current Runtime.local ownership after exact session validation.
-    pub fn publish_planner(&self, reply: StoredReply) -> Result<StoredReply, ErrorCode> {
+    pub fn publish_planner(&self, reply: StoredReply) -> Result<PublishedReply, ErrorCode> {
         let c = reply.context();
         let target = CancellationTarget {
             actor: c.actor,
@@ -618,8 +665,25 @@ impl NativeEffects {
         {
             return Err(ErrorCode::Stale);
         }
+        state.replies.retain(|source| !source.signal.cancelled());
+        if state.replies.len() >= 16 || state.replies.iter().any(|source| source.target == target) {
+            return Err(ErrorCode::Unavailable);
+        }
+        let signal = state
+            .planners
+            .iter()
+            .find(|(t, _)| *t == target)
+            .ok_or(ErrorCode::Stale)?
+            .1
+            .clone();
+        // Transfer under one state lock; exact-source cancellation has no gap.
+        state.replies.push(PublishedSource {
+            target,
+            registration: c.registration_revision,
+            signal,
+        });
         state.planners.retain(|(t, _)| *t != target);
-        Ok(reply)
+        Ok(PublishedReply { reply })
     }
     pub fn claim_planner(
         &self,
@@ -631,11 +695,13 @@ impl NativeEffects {
         let cancellation = request.cancellation();
         let mut state = self.state.lock().map_err(|_| ErrorCode::Unavailable)?;
         state.planners.retain(|(_, c)| !c.cancelled());
+        state.replies.retain(|source| !source.signal.cancelled());
         if !state.allowed
             || state.action_epoch != epoch
             || state.pending_cancellations.contains(&target)
-            || state.planners.len() >= 16
+            || state.planners.len() + state.replies.len() >= 16
             || state.planners.iter().any(|(t, _)| *t == target)
+            || state.replies.iter().any(|source| source.target == target)
         {
             return Err(ErrorCode::Denied);
         }
@@ -751,6 +817,11 @@ impl NativeEffects {
         for (owned, planner) in &state.planners {
             if *owned == target {
                 planner.cancel();
+            }
+        }
+        for source in &state.replies {
+            if source.target == target {
+                source.signal.cancel();
             }
         }
         if let Some(active) = &state.active
