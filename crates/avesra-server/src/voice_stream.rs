@@ -204,11 +204,39 @@ async fn run(socket: &mut WebSocket, auth: Shared, device: Uuid) -> Result<(), E
             .collect();
         let captured = opened + capture_offset;
         let captured = captured.min(Instant::now());
-        let result = tokio::select! {
+        let worker = Uuid::new_v4();
+        let mut cancel = packet.end.then(|| CancelSpeaker {
+            client: speaker.clone(),
+            id: worker,
+            complete: false,
+        });
+        let final_pcm = packet.end.then(|| {
+            let collected = std::mem::take(&mut raw);
+            STANDARD.encode(&collected)
+        });
+        let identify = async {
+            match final_pcm {
+                Some(pcm_s16le) => speaker
+                    .infer_with_budget(
+                        worker,
+                        1,
+                        start.utterance_id,
+                        AudioInput::Pcm { pcm_s16le },
+                        Duration::from_secs(10),
+                    )
+                    .await
+                    .map(Some),
+                None => Ok(None),
+            }
+        };
+        let (result, identity) = tokio::select! {
             biased;
             _=permission.changed()=>return Err(ErrorCode::Stale),
-            result=stream.push(&samples,packet.sequence,captured,packet.end)=>result?,
+            result=async {tokio::try_join!(stream.push(&samples,packet.sequence,captured,packet.end),identify)}=>result?,
         };
+        if let Some(cancel) = cancel.as_mut() {
+            cancel.complete = true;
+        }
         if !session_current(&auth, device, start.session_id, start.capture_epoch) {
             return Err(ErrorCode::Stale);
         }
@@ -217,20 +245,7 @@ async fn run(socket: &mut WebSocket, auth: Shared, device: Uuid) -> Result<(), E
             send(socket,serde_json::json!({"version":1,"session_id":start.session_id,"capture_epoch":start.capture_epoch,"utterance_id":start.utterance_id,"sequence":packet.sequence,"status":"processing","accepted_turn":false})).await?;
             continue;
         }
-        let worker = Uuid::new_v4();
-        let mut cancel = CancelSpeaker {
-            client: speaker.clone(),
-            id: worker,
-            complete: false,
-        };
-        let pcm_s16le = STANDARD.encode(&raw);
-        drop(raw);
-        let identity = tokio::select! {
-            biased;
-            _=permission.changed()=>return Err(ErrorCode::Stale),
-            value=speaker.infer_with_budget(worker,1,start.utterance_id,AudioInput::Pcm {pcm_s16le},Duration::from_secs(10))=>value?,
-        };
-        cancel.complete = true;
+        let identity = identity.ok_or(ErrorCode::Malformed)?;
         if !session_current(&auth, device, start.session_id, start.capture_epoch)
             || !active(auth.clone(), device).await
             || !session_current(&auth, device, start.session_id, start.capture_epoch)
