@@ -7,6 +7,8 @@ pub mod authentication;
 pub mod credentials;
 #[cfg(windows)]
 mod resampling;
+#[cfg(windows)]
+pub mod session;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AudioDevice {

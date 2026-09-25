@@ -11,6 +11,6 @@ serde_json.workspace = true
 cpal = "0.17"
 rubato = { version = "=0.16.2", default-features = false }
 windows-future = "0.3.2"
-windows = { version = "0.62.2", features = ["Win32_Security_Cryptography", "Win32_Foundation", "Win32_System_WinRT", "Security_Credentials_UI", "Foundation"] }
+windows = { version = "0.62.2", features = ["Win32_Security_Cryptography", "Win32_Foundation", "Win32_System_WinRT", "Win32_System_RemoteDesktop", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Security_Credentials_UI", "Foundation"] }
 [lints]
 workspace = true

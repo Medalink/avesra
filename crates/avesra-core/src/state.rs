@@ -157,7 +157,12 @@ impl LocalState {
     }
     pub fn refresh(&mut self) {
         self.revision = self.revision.saturating_add(1);
-        let (status, reason) = if self.settings.paused {
+        let (status, reason) = if self.locked {
+            (
+                "unavailable",
+                "Windows session is locked, disconnected, or unavailable.",
+            )
+        } else if self.settings.paused {
             ("paused", "Listening and new actions are paused.")
         } else if self.settings.deafened {
             ("deafened", "Microphone and assistant sound are off.")

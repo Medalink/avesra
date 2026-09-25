@@ -31,9 +31,9 @@ impl From<&LocalState> for ModeSnapshot {
         Self {
             capture_epoch: local.capture_epoch,
             action_epoch: local.action_epoch,
-            muted: local.settings.explicit_mute,
+            muted: local.settings.explicit_mute || local.locked,
             deafened: local.settings.deafened,
-            paused: local.settings.paused,
+            paused: local.settings.paused || local.locked,
         }
     }
 }
@@ -165,7 +165,8 @@ fn start_connection(
         .map_err(|_| "Connection manager unavailable")?;
     let generation = {
         let mut local = state.local.lock().map_err(|_| "Local state unavailable")?;
-        if state.connection_generation.load(Ordering::SeqCst) != expected_generation {
+        if local.locked || state.connection_generation.load(Ordering::SeqCst) != expected_generation
+        {
             return Err("Connection request cancelled or superseded".into());
         }
         let generation = state.connection_generation.fetch_add(1, Ordering::SeqCst) + 1;
@@ -285,6 +286,34 @@ fn disconnect_spark(app: tauri::AppHandle, state: tauri::State<'_, Runtime>) -> 
     app.emit("runtime-state", snapshot)
         .map_err(|_| "Unable to notify windows".into())
 }
+fn session_changed(app: &tauri::AppHandle, locked: bool) {
+    let state = app.state::<Runtime>();
+    // Match connection-start/disconnect lock order. No window getter, disk or
+    // network operation occurs while these native state locks are held.
+    let Ok(mut slot) = state.connection.lock() else {
+        return;
+    };
+    let Ok(mut local) = state.local.lock() else {
+        return;
+    };
+    if locked {
+        state.connection_generation.fetch_add(1, Ordering::SeqCst);
+        local.apply(LocalControl::Lock);
+        local.voice_ready = false;
+        if let Some(task) = slot.take() {
+            task.abort();
+        }
+    } else {
+        local.locked = false;
+        local.refresh();
+    }
+    state.publish(&local);
+    let snapshot = local.clone();
+    drop(local);
+    drop(slot);
+    let _ = app.emit("signal-clear", ());
+    let _ = app.emit("runtime-state", snapshot);
+}
 fn main() {
     let _ = rustls::crypto::ring::default_provider().install_default();
     tauri::Builder::default()
@@ -322,7 +351,10 @@ fn main() {
                         let _ = write.reply.send(result);
                     }
                 })?;
-            let local = LocalState::new(settings);
+            let mut local = LocalState::new(settings);
+            // Closed until own-session WTS registration and initial query succeed.
+            local.locked = true;
+            local.refresh();
             let (modes, _) = tokio::sync::watch::channel(ModeSnapshot::from(&local));
             let media = media::MediaWorker::spawn(app.handle().clone())?;
             media.publish(&local);
@@ -337,6 +369,20 @@ fn main() {
                 connection_generation: AtomicU64::new(0),
                 pairing: tokio::sync::Mutex::new(()),
             });
+            if let Some(window) = app.get_webview_window("settings") {
+                let handle = window.hwnd()?;
+                let app_handle = app.handle().clone();
+                if avesra_windows::session::install(handle.0 as isize, move |locked| {
+                    session_changed(&app_handle, locked);
+                })
+                .is_err()
+                {
+                    let _ = app.emit(
+                        "runtime-error",
+                        "Windows session monitoring unavailable; capture remains closed.",
+                    );
+                }
+            }
             let show = MenuItem::with_id(app, "show", "Show Avesra", true, None::<&str>)?;
             let settings = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
             let pause = MenuItem::with_id(app, "pause", "Pause / resume", true, None::<&str>)?;
