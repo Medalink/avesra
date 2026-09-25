@@ -1,6 +1,6 @@
 //! Privileged paired-native assertions. No deployment qualifier is installed.
 use super::{Shared, authenticate_headers};
-use avesra_contracts::{ErrorCode, planner};
+use avesra_contracts::{ErrorCode, planner, speech};
 use axum::http::{HeaderMap, StatusCode};
 use sha2::{Digest, Sha256};
 use std::{
@@ -14,16 +14,37 @@ use subtle::ConstantTimeEq;
 pub(super) struct Entry {
     context: planner::Context,
     live: Arc<AtomicBool>,
+    completed: Option<Completed>,
+}
+struct Completed {
+    digest: [u8; 32],
+    at: Instant,
+    output: Option<Output>,
+}
+struct Output {
+    context: speech::Context,
+    live: Arc<AtomicBool>,
+}
+pub(super) struct SpeechLease(Arc<AtomicBool>);
+impl Drop for SpeechLease {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
 }
 impl Entry {
     pub(super) fn withdraw(&self) {
         self.live.store(false, Ordering::SeqCst);
     }
 }
-struct Lease(Arc<AtomicBool>);
+struct Lease {
+    live: Arc<AtomicBool>,
+    completed: bool,
+}
 impl Drop for Lease {
     fn drop(&mut self) {
-        self.0.store(false, Ordering::SeqCst);
+        if !self.completed {
+            self.live.store(false, Ordering::SeqCst);
+        }
     }
 }
 fn current(state: &Shared, context: &planner::Context) -> bool {
@@ -115,7 +136,7 @@ pub(super) async fn operation(
     if device != context.device || Instant::now() >= deadline {
         return Err(StatusCode::CONFLICT);
     }
-    let owner = {
+    let mut owner = {
         let mut sessions = state
             .sessions
             .lock()
@@ -138,9 +159,13 @@ pub(super) async fn operation(
             Entry {
                 context: context.clone(),
                 live: live.clone(),
+                completed: None,
             },
         );
-        Lease(live)
+        Lease {
+            live,
+            completed: false,
+        }
     };
     let checked = state.clone();
     let exact = context.clone();
@@ -204,7 +229,40 @@ pub(super) async fn operation(
     reply
         .validate(&context)
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
-    drop(owner);
+    let digest = response_digest(&reply.response).map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    {
+        let mut sessions = state
+            .sessions
+            .lock()
+            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+        let session = sessions
+            .get_mut(&context.session)
+            .ok_or(StatusCode::CONFLICT)?;
+        if session.device != context.device
+            || session.action_epoch != context.action_epoch
+            || !session.action_enabled
+            || session.updated.elapsed() >= Duration::from_secs(30)
+            || Instant::now() >= deadline
+        {
+            return Err(StatusCode::CONFLICT);
+        }
+        let entry = session
+            .planner_requests
+            .get_mut(&context.request)
+            .ok_or(StatusCode::CONFLICT)?;
+        if entry.context != context
+            || !entry.live.load(Ordering::SeqCst)
+            || entry.completed.is_some()
+        {
+            return Err(StatusCode::CONFLICT);
+        }
+        entry.completed = Some(Completed {
+            digest,
+            at: Instant::now(),
+            output: None,
+        });
+        owner.completed = true;
+    }
     Ok(reply)
 }
 pub(super) fn cancel(
@@ -256,8 +314,110 @@ pub(super) fn cancel(
             Entry {
                 context,
                 live: Arc::new(AtomicBool::new(false)),
+                completed: None,
             },
         );
+    }
+    Ok(())
+}
+
+fn response_digest(response: &planner::Response) -> Result<[u8; 32], ErrorCode> {
+    let encoded = serde_json::to_vec(response).map_err(|_| ErrorCode::Malformed)?;
+    Ok(Sha256::digest(encoded).into())
+}
+/// Consumes the server completion's one output opportunity. This is paired
+/// native assertion, not permission for frontend text or history reconstruction.
+pub(super) fn reserve_speech(
+    state: &Shared,
+    device: uuid::Uuid,
+    request: &speech::Request,
+) -> Result<SpeechLease, ErrorCode> {
+    request.validate()?;
+    let context = &request.source.planner;
+    if device != context.device {
+        return Err(ErrorCode::Denied);
+    }
+    let digest = response_digest(&request.source.response)?;
+    let mut sessions = state.sessions.lock().map_err(|_| ErrorCode::Unavailable)?;
+    let session = sessions.get_mut(&context.session).ok_or(ErrorCode::Stale)?;
+    if session.device != device
+        || session.action_epoch != context.action_epoch
+        || !session.action_enabled
+        || session.output_epoch != request.playback_epoch
+        || !session.output_enabled
+        || session.updated.elapsed() >= Duration::from_secs(30)
+        || session.planner_requests.values().any(|entry| {
+            entry
+                .completed
+                .as_ref()
+                .and_then(|c| c.output.as_ref())
+                .is_some_and(|output| output.context.request == request.request)
+        })
+    {
+        return Err(ErrorCode::Stale);
+    }
+    let entry = session
+        .planner_requests
+        .get_mut(&context.request)
+        .ok_or(ErrorCode::Stale)?;
+    if entry.context != *context || !entry.live.load(Ordering::SeqCst) {
+        return Err(ErrorCode::Stale);
+    }
+    let completed = entry.completed.as_mut().ok_or(ErrorCode::Stale)?;
+    if completed.output.is_some()
+        || completed.at.elapsed() >= Duration::from_secs(10)
+        || !bool::from(completed.digest.ct_eq(&digest))
+    {
+        return Err(ErrorCode::Stale);
+    }
+    let live = Arc::new(AtomicBool::new(true));
+    completed.output = Some(Output {
+        context: request.stream_context(),
+        live: live.clone(),
+    });
+    Ok(SpeechLease(live))
+}
+pub(super) fn speech_current(state: &Shared, context: &speech::Context) -> bool {
+    state.sessions.lock().is_ok_and(|sessions| {
+        sessions
+            .get(&context.planner.session)
+            .is_some_and(|session| {
+                session.device == context.planner.device
+                    && session.action_epoch == context.planner.action_epoch
+                    && session.action_enabled
+                    && session.output_enabled
+                    && session.output_epoch == context.playback_epoch
+                    && session.updated.elapsed() < Duration::from_secs(30)
+                    && session
+                        .planner_requests
+                        .get(&context.planner.request)
+                        .is_some_and(|entry| {
+                            entry.context == context.planner
+                                && entry.live.load(Ordering::SeqCst)
+                                && entry
+                                    .completed
+                                    .as_ref()
+                                    .and_then(|c| c.output.as_ref())
+                                    .is_some_and(|output| {
+                                        output.context == *context
+                                            && output.live.load(Ordering::SeqCst)
+                                    })
+                        })
+            })
+    })
+}
+pub(super) fn speech_authority(
+    state: &Shared,
+    context: &speech::Context,
+    deadline: Instant,
+) -> Result<(), ErrorCode> {
+    if Instant::now() >= deadline || !speech_current(state, context) {
+        return Err(ErrorCode::Stale);
+    }
+    let store = state.auth.try_lock().map_err(|_| ErrorCode::Unavailable)?;
+    store.planner_binding(&context.planner)?;
+    if Instant::now() >= deadline || !speech_current(state, context) {
+        return Err(ErrorCode::Stale);
     }
     Ok(())
 }

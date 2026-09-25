@@ -5,6 +5,7 @@ pub mod actors;
 pub mod media;
 pub mod planner;
 pub mod preview;
+pub mod speech;
 pub mod voice;
 pub mod voices;
 

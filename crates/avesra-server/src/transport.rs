@@ -24,6 +24,9 @@ use uuid::Uuid;
 #[path = "actor_registration.rs"]
 mod actor_registration;
 #[cfg(unix)]
+#[path = "normal_speech.rs"]
+mod normal_speech;
+#[cfg(unix)]
 #[path = "planner_ingress.rs"]
 mod planner_ingress;
 #[cfg(unix)]
@@ -144,6 +147,7 @@ pub fn router(auth: AuthStore, directory: &std::path::Path) -> Result<Router, St
         .route("/voice-analysis", post(voice_analysis))
         .route("/voice-stream", get(voice_stream_upgrade))
         .route("/voice-preview", get(voice_preview_upgrade))
+        .route("/normal-speech", get(normal_speech_upgrade))
         .route(
             "/voices",
             post(voice_operations).layer(DefaultBodyLimit::max(16384)),
@@ -261,6 +265,21 @@ async fn voice_operations(
     #[cfg(not(unix))]
     {
         let _ = (auth, headers, body);
+        Err(StatusCode::SERVICE_UNAVAILABLE)
+    }
+}
+async fn normal_speech_upgrade(
+    State(auth): State<Shared>,
+    headers: HeaderMap,
+    ws: WebSocketUpgrade,
+) -> Result<Response, StatusCode> {
+    #[cfg(unix)]
+    {
+        normal_speech::upgrade(auth, headers, ws).await
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (auth, headers, ws);
         Err(StatusCode::SERVICE_UNAVAILABLE)
     }
 }
