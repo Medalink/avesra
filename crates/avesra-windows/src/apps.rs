@@ -611,6 +611,7 @@ pub fn bind_window_hint(record: &mut AppRecord, hint: &WindowHint) -> Result<(),
             hint.pid,
             &Some(hint.class.clone()),
         )
+        || hint.observed.elapsed() >= Duration::from_secs(30)
     {
         return Err(ErrorCode::Stale);
     }
