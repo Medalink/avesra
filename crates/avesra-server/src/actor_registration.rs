@@ -92,10 +92,10 @@ pub(super) async fn operation(
             Ok(())
         });
         // Notification belongs to the actual committed writer, not its HTTP waiter.
-        if let Ok(Some(binding)) = &result {
-            if binding.revoked {
-                super::planner_ingress::revoked(&owned, device, binding);
-            }
+        if let Ok(Some(binding)) = &result
+            && binding.revoked
+        {
+            super::planner_ingress::revoked(&owned, device, binding);
         }
         result
     });

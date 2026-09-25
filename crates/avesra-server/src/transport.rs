@@ -704,11 +704,11 @@ async fn session(
     #[cfg(unix)]
     impl Drop for SessionLease {
         fn drop(&mut self) {
-            if let Ok(mut sessions) = self.auth.sessions.lock() {
-                if let Some(session) = sessions.remove(&self.id) {
-                    for entry in session.planner_requests.values() {
-                        entry.withdraw();
-                    }
+            if let Ok(mut sessions) = self.auth.sessions.lock()
+                && let Some(session) = sessions.remove(&self.id)
+            {
+                for entry in session.planner_requests.values() {
+                    entry.withdraw();
                 }
             }
         }
