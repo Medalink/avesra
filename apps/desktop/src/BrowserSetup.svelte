@@ -13,8 +13,9 @@
   let status = $state<Status | null>(null), aliases = $state<Alias[] | null>(null), saved = $state<Saved[] | null>(null);
   let phrase = $state(""), panel = $state<string | null>(null);
   let ownedAttempt = $state<string | null>(null);
+  let lifetimeReady = $state(false);
   let mounted = false, generation = 0, refreshing = false, context = "";
-  const enabled = $derived(native && !!runtime?.connected && !runtime.locked);
+  const enabled = $derived(native && lifetimeReady && !!runtime?.connected && !runtime.locked);
   const active = $derived(!!ownedAttempt || (!!status?.attempt && ["preparing", "waiting_for_extension", "awaiting_owner", "saving", "awaiting_persistence_proof", "authenticating", "authenticated_no_scopes", "closing"].includes(status.state)));
   const stateLabel = $derived(status?.state === "authenticated_no_scopes" ? "Paired · no scopes" : active ? "Pairing session" : status?.state === "unavailable_refresh_saved_pairings" ? "Unavailable" : "Not connected");
   function invalidate() {
@@ -93,7 +94,7 @@
   }
   onMount(() => {
     mounted = true; let unlisten: (() => void) | undefined;
-    if (native) void listen("settings-hidden", () => { expanded = false; invalidate(); }).then(value => { if (mounted) unlisten = value; else value(); }).catch(() => { if (mounted) { error = "Settings lifetime notifications are unavailable; browser setup is closed."; expanded = false; invalidate(); } });
+    if (native) void listen("settings-hidden", () => { expanded = false; invalidate(); }).then(value => { if (mounted) { unlisten = value; lifetimeReady = true; } else value(); }).catch(() => { if (mounted) { lifetimeReady = false; error = "Settings lifetime notifications are unavailable; browser setup is closed."; expanded = false; invalidate(); } });
     const timer = setInterval(() => void refreshStatus(), 1000);
     return () => {
       mounted = false; clearInterval(timer); unlisten?.(); invalidate();
@@ -114,6 +115,7 @@
     <span class="av-chip {status?.state === 'authenticated_no_scopes' ? 'bg-av-500/10 text-av-300 ring-av-500/40' : active || status?.state === 'unavailable_refresh_saved_pairings' ? 'bg-amber-400/10 text-amber-200 ring-amber-400/25' : 'bg-red-400/10 text-red-300 ring-red-400/25'}">Browser · {stateLabel}</span>
   </div>
   <div class="flex items-center gap-2.5"><p class="av-hint flex-1">Client inference is disabled. Browser pairing grants no page or action scope.</p><button class="av-btn av-btn-secondary av-btn-sm" disabled={!enabled || busy} onclick={toggle}>{expanded ? "Close browser setup" : "Manage browser"}</button></div>
+  {#if !lifetimeReady && error}<p class="av-hint text-amber-200" role="status">{error}</p>{/if}
 </div>
 {#if expanded}
   <div class="flex flex-col gap-3">
