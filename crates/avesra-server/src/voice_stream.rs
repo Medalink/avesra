@@ -74,7 +74,11 @@ async fn session(
 ) {
     // Bounds all retained media even when a final auth/storage check stalls.
     let _ = tokio::time::timeout(Duration::from_secs(25), run(&mut socket, auth, device)).await;
-    let _ = tokio::time::timeout(Duration::from_millis(500), socket.close()).await;
+    let _ = tokio::time::timeout(
+        Duration::from_millis(500),
+        socket.send(Message::Close(None)),
+    )
+    .await;
 }
 struct CancelSpeaker {
     client: Arc<AudioClient>,
