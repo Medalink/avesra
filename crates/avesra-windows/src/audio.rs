@@ -13,6 +13,16 @@ use std::sync::{
 use std::time::Instant;
 
 pub const FRAME_SAMPLES: usize = 320;
+fn capture_instant(
+    info: &cpal::InputCallbackInfo,
+    sample: Option<cpal::StreamInstant>,
+    entered: Instant,
+) -> Option<Instant> {
+    let age = info.timestamp().callback.duration_since(&sample?)?;
+    (age <= std::time::Duration::from_millis(500))
+        .then(|| entered.checked_sub(age))
+        .flatten()
+}
 #[derive(Clone)]
 pub struct AudioFrame {
     pub epoch: u64,
@@ -266,15 +276,18 @@ where
     let mut epoch = 0;
     let mut sequence = 0u64;
     let mut device_time = None;
+    let mut captured = None;
     device
         .build_input_stream(
             config,
             move |input: &[T], info: &cpal::InputCallbackInfo| {
+                let entered = Instant::now();
                 let current = gate.permission.epoch.load(Ordering::SeqCst);
                 if current != epoch || !gate.current(current) {
                     samples.fill(0);
                     count = 0;
                     device_time = None;
+                    captured = None;
                     epoch = current;
                     sequence = 0;
                 }
@@ -293,6 +306,7 @@ where
                             .timestamp()
                             .capture
                             .add(std::time::Duration::from_secs_f64(offset as f64 / 16000.0));
+                        captured = capture_instant(info, device_time, entered);
                     }
                     let mono = frame
                         .iter()
@@ -319,10 +333,14 @@ where
                                 gate.fail();
                                 return;
                             }
+                            let Some(captured) = captured else {
+                                gate.fail();
+                                return;
+                            };
                             let packet = AudioFrame {
                                 epoch,
                                 sequence,
-                                captured: Instant::now(),
+                                captured,
                                 device_time,
                                 samples,
                                 rms: (sum / FRAME_SAMPLES as f32).sqrt(),
@@ -365,6 +383,7 @@ where
         .build_input_stream(
             config,
             move |input: &[T], info: &cpal::InputCallbackInfo| {
+                let entered = Instant::now();
                 let current = gate.permission.epoch.load(Ordering::SeqCst);
                 if current != epoch || !gate.current(current) {
                     converter.reset();
@@ -438,10 +457,14 @@ where
                                     emitted as f64 / 16000.0,
                                 ))
                             });
+                            let Some(captured) = capture_instant(info, device_time, entered) else {
+                                gate.fail();
+                                return;
+                            };
                             let packet = AudioFrame {
                                 epoch,
                                 sequence,
-                                captured: Instant::now(),
+                                captured,
                                 device_time,
                                 samples,
                                 rms: (sum / FRAME_SAMPLES as f32).sqrt(),

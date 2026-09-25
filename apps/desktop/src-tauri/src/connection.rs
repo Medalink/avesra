@@ -147,14 +147,60 @@ pub async fn enrollment_embedding(
     Ok(value.embedding)
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PairingRecord {
     version: u16,
     url: String,
     certificate: String,
-    device_id: Uuid,
+    pub(crate) device_id: Uuid,
     credential: String,
+}
+pub(crate) async fn voice_socket(
+    record: &PairingRecord,
+) -> Result<
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+    String,
+> {
+    record.validate()?;
+    let mut url = endpoint(&record.url)?;
+    url.set_scheme("wss").map_err(|_| "Invalid websocket URL")?;
+    url.set_path("/voice-stream");
+    let mut roots = rustls::RootCertStore::empty();
+    roots
+        .add(certificate(&record.certificate)?)
+        .map_err(|_| "Invalid trust root")?;
+    let tls = rustls::ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    let mut request = url
+        .as_str()
+        .into_client_request()
+        .map_err(|_| "Invalid voice endpoint")?;
+    request.headers_mut().insert(
+        "Authorization",
+        format!("Bearer {}", record.credential)
+            .parse()
+            .map_err(|_| "Invalid credential")?,
+    );
+    let config = WebSocketConfig::default()
+        .max_message_size(Some(16_384))
+        .max_frame_size(Some(16_384))
+        .write_buffer_size(1024)
+        .max_write_buffer_size(32_768);
+    let (socket, _) = tokio::time::timeout(
+        Duration::from_secs(3),
+        tokio_tungstenite::connect_async_tls_with_config(
+            request,
+            Some(config),
+            false,
+            Some(Connector::Rustls(Arc::new(tls))),
+        ),
+    )
+    .await
+    .map_err(|_| "Voice connection timed out")?
+    .map_err(|_| "Authenticated voice connection failed")?;
+    Ok(socket)
 }
 impl PairingRecord {
     fn validate(&self) -> Result<(), String> {
@@ -461,6 +507,7 @@ pub async fn run(
     .map_err(|_| "Spark send failed")?;
     let mut interval = tokio::time::interval(Duration::from_secs(10));
     let mut last_reply = tokio::time::Instant::now();
+    let _voice = crate::voice::spawn(app.clone(), record.clone(), generation);
     loop {
         let message = tokio::select! {
          changed=modes.changed()=>{changed.map_err(|_|"Companion shutting down")?;mode=modes.borrow_and_update().clone();ControlMessage::Mode{muted:mode.muted,deafened:mode.deafened,paused:mode.paused}},

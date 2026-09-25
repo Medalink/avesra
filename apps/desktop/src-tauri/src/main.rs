@@ -3,6 +3,7 @@ mod connection;
 mod media;
 mod profiles;
 mod setup;
+mod voice;
 use avesra_core::{
     state::{LocalControl, LocalState, Settings},
     store::Store,
