@@ -10,7 +10,29 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
+
+fn device_failed(app: &tauri::AppHandle, epoch: u64) {
+    let Some(state) = app.try_state::<crate::Runtime>() else {
+        return;
+    };
+    let Ok(mut local) = state.local.lock() else {
+        return;
+    };
+    if local.capture_epoch != epoch {
+        return;
+    }
+    local.voice_ready = false;
+    local.capture_epoch = local.capture_epoch.saturating_add(1);
+    local.action_epoch = local.action_epoch.saturating_add(1);
+    local.refresh();
+    state.publish(&local);
+    let snapshot = local.clone();
+    drop(local);
+    let _ = app.emit("signal-frame", Option::<SignalFrame>::None);
+    let _ = app.emit("runtime-state", snapshot);
+    let _ = app.emit("runtime-error", "Audio device unavailable; listening and playback stopped. Review devices before retrying setup.");
+}
 
 #[derive(Clone, Default)]
 struct Configuration {
@@ -103,6 +125,11 @@ impl MediaWorker {
                             });
                         }
                         revision = config.revision;
+                        if (config.capture && capture.is_none())
+                            || (config.playback && playback.is_none())
+                        {
+                            device_failed(&app, config.epoch);
+                        }
                         let _ = app.emit(
                             "media-health",
                             MediaHealth {
@@ -187,6 +214,7 @@ impl MediaWorker {
                             }
                         }
                         if stream.gate.failed() {
+                            device_failed(&app, config.epoch);
                             let _ = app.emit(
                                 "media-health",
                                 MediaHealth {
@@ -199,6 +227,7 @@ impl MediaWorker {
                         }
                     }
                     if let Some(stream) = playback.as_ref() {
+                        let mut discontinuity = false;
                         if let Ok(mut queue) = inbound.lock() {
                             for _ in 0..64 {
                                 let Some(frame) = queue.pop_front() else {
@@ -208,8 +237,12 @@ impl MediaWorker {
                                     && stream.gate.current(frame.epoch)
                                     && frame.epoch == config.epoch
                                     && frame.captured.elapsed() < Duration::from_millis(500)
+                                    && stream.frames.try_send(frame).is_err()
                                 {
-                                    let _ = stream.frames.try_send(frame);
+                                    discontinuity = true;
+                                    stream.gate.close_attempt();
+                                    queue.clear();
+                                    break;
                                 }
                             }
                         }
@@ -220,7 +253,8 @@ impl MediaWorker {
                                 break;
                             }
                         }
-                        if stream.gate.failed() {
+                        if stream.gate.failed() || discontinuity {
+                            device_failed(&app, config.epoch);
                             playback = None;
                         }
                     }

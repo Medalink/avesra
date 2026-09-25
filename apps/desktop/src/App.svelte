@@ -59,7 +59,10 @@
     }
   }
   async function hide() {
-    if (native) await getCurrentWindow().hide();
+    if (native) {
+      if (settingsWindow) await command("cancel_setup");
+      await getCurrentWindow().hide();
+    }
   }
   async function showSettings() {
     if (native) {

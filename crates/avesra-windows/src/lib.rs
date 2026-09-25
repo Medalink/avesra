@@ -2,6 +2,8 @@ use avesra_contracts::ErrorCode;
 use serde::Serialize;
 #[cfg(windows)]
 pub mod audio;
+#[cfg(windows)]
+pub mod authentication;
 pub mod credentials;
 
 #[derive(Debug, Clone, Serialize)]

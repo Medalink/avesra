@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod connection;
 mod media;
+mod setup;
 use avesra_core::{
     state::{LocalControl, LocalState, Settings},
     store::Store,
@@ -40,6 +41,7 @@ struct WriteSettings {
     reply: oneshot::Sender<Result<(), String>>,
 }
 struct Runtime {
+    setup: setup::Setup,
     media: media::MediaWorker,
     local: Mutex<LocalState>,
     writes: SyncSender<WriteSettings>,
@@ -50,6 +52,10 @@ struct Runtime {
 }
 impl Runtime {
     fn publish(&self, local: &LocalState) {
+        self.setup.observe(
+            local.capture_epoch,
+            self.connection_generation.load(Ordering::SeqCst),
+        );
         self.media.publish(local);
         self.modes.send_replace(ModeSnapshot::from(local));
     }
@@ -313,6 +319,7 @@ fn main() {
             let media = media::MediaWorker::spawn(app.handle().clone())?;
             media.publish(&local);
             app.manage(Runtime {
+                setup: setup::Setup::default(),
                 media,
                 local: Mutex::new(local),
                 writes,
@@ -386,11 +393,17 @@ fn main() {
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "settings" {
+                    window.state::<Runtime>().setup.invalidate();
+                }
                 api.prevent_close();
                 let _ = window.hide();
             }
         })
         .invoke_handler(tauri::generate_handler![
+            setup::setup_status,
+            setup::verify_setup,
+            setup::cancel_setup,
             runtime_snapshot,
             audio_devices,
             local_control,

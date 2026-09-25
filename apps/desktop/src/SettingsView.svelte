@@ -1,6 +1,7 @@
 <script lang="ts">
   import Icon from "./Icon.svelte";
   import Pairing from "./Pairing.svelte";
+  import SetupLock from "./SetupLock.svelte";
   import type { Runtime, Settings, AudioDevice } from "./runtime";
   let {
     runtime,
@@ -463,6 +464,7 @@
             </div>
           </section>
         {:else if section === "people"}
+          <SetupLock {runtime} />
           <section class="section">
             <span class="av-kicker">Owner</span>
             <div class="empty">
