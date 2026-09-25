@@ -43,6 +43,7 @@ struct WriteSettings {
     reply: oneshot::Sender<Result<(), String>>,
 }
 struct Runtime {
+    turns: Mutex<avesra_core::voice::TurnGate>,
     acknowledged_session: Mutex<Option<connection::SessionIdentity>>,
     setup: setup::Setup,
     media: media::MediaWorker,
@@ -431,6 +432,7 @@ fn main() {
                 Vec::new(),
             )?;
             app.manage(Runtime {
+                turns: Mutex::new(avesra_core::voice::TurnGate::default()),
                 acknowledged_session: Mutex::new(None),
                 setup: setup::Setup::default(),
                 media,

@@ -202,7 +202,7 @@ async fn window(
     }
     current(app, session)?;
     let opened = Instant::now();
-    {
+    let original_context = {
         let state = app.state::<Runtime>();
         let local = state.local.lock().map_err(|_| "Local state unavailable")?;
         if local.capture_epoch != session.epoch
@@ -211,7 +211,20 @@ async fn window(
             return Err("Capture epoch changed".into());
         }
         state.media.open_voice_window(&local)?;
-    }
+        avesra_core::voice::Context {
+            device: record.device_id,
+            session: session.id,
+            capture_epoch: session.epoch,
+            action_epoch: local.action_epoch,
+            microphone: local
+                .settings
+                .microphone
+                .clone()
+                .ok_or("Microphone not selected")?,
+            grant_revision: None,
+            actor: None,
+        }
+    };
     let capture = CaptureWindow {
         app: app.clone(),
         epoch: session.epoch,
@@ -245,8 +258,14 @@ async fn window(
                     }
                     Reply::Abstain(value)=>{
                         if sent!=500||value.version!=1||value.session_id!=session.id||value.capture_epoch!=session.epoch||value.utterance_id!=utterance||value.sequence!=sent||value.sequence!=received+1||value.asr_revision!="ebe59e5a817142986528bbbee5dba8db7b38ed50"||value.speaker_revision!="0f99f2d0ebe89ac095bcc5903c4dd8f72b367286"||value.transcript.len()>8192||value.embedding.as_ref().is_some_and(|v|v.len()!=192||v.iter().any(|n|!n.is_finite()))||value.outcome!="abstain"||value.reason!="owner_overlap_directness_qualification_required"||value.accepted_turn {return Err("Invalid final voice analysis".into());}
-                        // Unknown/unaccepted speech is neither UI content nor durable history.
-                        drop(value);
+                        let state=app.state::<Runtime>();
+                        let local=state.local.lock().map_err(|_|"Local state unavailable")?;
+                        let context=avesra_core::voice::Context{device:record.device_id,session:session.id,capture_epoch:local.capture_epoch,action_epoch:local.action_epoch,microphone:local.settings.microphone.clone().ok_or("Microphone not selected")?,grant_revision:None,actor:None};
+                        let observation=avesra_core::voice::Observation{utterance,context:original_context,asr_revision:value.asr_revision,speaker_revision:value.speaker_revision,started:opened,completed:Instant::now(),transcript:value.transcript,embedding:value.embedding,overlap:avesra_core::voice::AudioCondition::Unknown,echo:avesra_core::voice::AudioCondition::Unknown,signal:avesra_core::voice::SignalEvidence::Unknown,directed:avesra_core::voice::DirectedIntent::Unknown};
+                        let decision=state.turns.lock().map_err(|_|"Turn gate unavailable")?.analyze(&context,None,observation,None);
+                        // No qualified profile exists: discard every observation
+                        // without UI/history/planning or a durable AcceptedIntent.
+                        drop(decision);
                         return Ok(());
                     }
                 }
