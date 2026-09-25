@@ -866,6 +866,7 @@ async fn run(
             let incoming = pipe.receive().await?;
             with_attempt(app, id, generation, |_, _, _| Ok(()))?;
             let mut received_content = None;
+            let mut received_settlement = None;
             let message = match incoming {
                 avesra_windows::browser_receive::Incoming::Message(message) => message,
                 avesra_windows::browser_receive::Incoming::Content {
@@ -887,20 +888,7 @@ async fn run(
                     observation_revision,
                     proof,
                 } => {
-                    // Stop advertisement before handing retirement to SQL, but
-                    // retain original content authority for an already-sent reply.
-                    app.state::<Runtime>().browser.reading.settled(&proof)?;
-                    if let Some((context, _)) = &settlement {
-                        if context != proof.context() {
-                            return Err(ErrorCode::Unavailable);
-                        }
-                        // Exact in-flight duplicate: retain the first actual job.
-                    } else {
-                        let context = proof.context().clone();
-                        let receive = app.state::<Runtime>().effects.settle_browser_read(proof)?;
-                        settlement = Some((context, receive));
-                        read_ack = None;
-                    }
+                    received_settlement = Some(proof);
                     Client::Poll {
                         session,
                         sequence,
@@ -989,6 +977,23 @@ async fn run(
                 // Apply the envelope's observation withdrawal before the worker
                 // can receive/finalize content from that same complete frame.
                 app.state::<Runtime>().browser.reading.content(content)?;
+            }
+            if let Some(proof) = received_settlement {
+                // The settlement envelope can advance observation revision too.
+                // Withdraw its stale content before waking the worker: a held
+                // older result must not finalize in the retirement race.
+                app.state::<Runtime>().browser.reading.settled(&proof)?;
+                if let Some((context, _)) = &settlement {
+                    if context != proof.context() {
+                        return Err(ErrorCode::Unavailable);
+                    }
+                    // Exact in-flight duplicate: retain the first actual job.
+                } else {
+                    let context = proof.context().clone();
+                    let receive = app.state::<Runtime>().effects.settle_browser_read(proof)?;
+                    settlement = Some((context, receive));
+                    read_ack = None;
+                }
             }
             let message = match message {
                 Client::ReadResult {
