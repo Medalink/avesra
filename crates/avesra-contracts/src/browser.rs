@@ -7,6 +7,77 @@ pub const VERSION: u16 = 3;
 pub const MAX_MESSAGE: usize = 65536;
 pub const HANDSHAKE_SECONDS: u64 = 45;
 
+/// Exact native origin, not a Chrome match pattern or arbitrary navigation URL.
+#[derive(Clone, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct Origin(String);
+impl Origin {
+    pub fn parse(value: &str) -> Result<Self, ErrorCode> {
+        if value.is_empty()
+            || value.len() > 512
+            || !value.is_ascii()
+            || value
+                .bytes()
+                .any(|b| b.is_ascii_control() || b.is_ascii_whitespace())
+        {
+            return Err(ErrorCode::Malformed);
+        }
+        let parsed = url::Url::parse(value).map_err(|_| ErrorCode::Malformed)?;
+        let Some(url::Host::Domain(domain)) = parsed.host() else {
+            return Err(ErrorCode::Unsupported);
+        };
+        if domain.len() > 253
+            || domain.split('.').any(|label| {
+                label.is_empty()
+                    || label.len() > 63
+                    || label.starts_with('-')
+                    || label.ends_with('-')
+                    || !label
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+            })
+        {
+            return Err(ErrorCode::Malformed);
+        }
+        if parsed.scheme() != "https"
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+            || parsed.port().is_some()
+            || domain.ends_with('.')
+            || parsed.query().is_some()
+            || parsed.fragment().is_some()
+            || value != parsed.origin().ascii_serialization()
+        {
+            return Err(ErrorCode::Malformed);
+        }
+        Ok(Self(value.into()))
+    }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+    pub fn chrome_pattern(&self) -> String {
+        format!("{}/*", self.0)
+    }
+}
+impl<'de> Deserialize<'de> for Origin {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Self::parse(&String::deserialize(deserializer)?)
+            .map_err(|_| D::Error::custom("invalid exact browser origin"))
+    }
+}
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScopeOperation {
+    Read,
+    Navigate,
+}
+pub fn validate_operations(values: &[ScopeOperation]) -> Result<(), ErrorCode> {
+    if values.is_empty() || values.len() > 2 || values.windows(2).any(|v| v[0] >= v[1]) {
+        return Err(ErrorCode::Malformed);
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Id(Uuid);
 impl Id {
