@@ -19,51 +19,95 @@ fn id(value: &str) -> Result<Uuid, ErrorCode> {
     Ok(parsed)
 }
 
+pub(crate) const RETIREMENT_SCHEMA: &str = "CREATE TABLE browser_read_retirements(dispatch TEXT PRIMARY KEY NOT NULL REFERENCES dispatch_bindings(dispatch_id),request TEXT UNIQUE NOT NULL CHECK(length(request)=36),revision TEXT UNIQUE NOT NULL CHECK(length(revision)=36),action_revision TEXT NOT NULL REFERENCES action_revisions(revision),context TEXT NOT NULL CHECK(length(CAST(context AS BLOB)) BETWEEN 1 AND 4096))";
+
 pub(crate) fn check_schema(db: &Connection, version: u64) -> Result<(), ErrorCode> {
-    // LIMIT bounds user-defined objects too, before reading their SQL/text.
-    let mut query = sql(db.prepare("SELECT substr(CAST(type AS BLOB),1,17),substr(CAST(name AS BLOB),1,129),substr(CAST(sql AS BLOB),1,2049) FROM sqlite_master WHERE name='browser_read_owner' OR tbl_name='browser_read_owner' LIMIT 5"))?;
-    let mut rows = sql(query.query([]))?;
+    check_table(
+        db,
+        version,
+        8,
+        "browser_read_owner",
+        SCHEMA,
+        &[(1, "revision"), (2, "dispatch"), (3, "action_revision")],
+    )?;
+    check_table(
+        db,
+        version,
+        9,
+        "browser_read_retirements",
+        RETIREMENT_SCHEMA,
+        &[(0, "dispatch"), (1, "request"), (2, "revision")],
+    )
+}
+fn check_table(
+    db: &Connection,
+    version: u64,
+    introduced: u64,
+    table: &str,
+    expected_sql: &str,
+    columns: &[(i64, &str); 3],
+) -> Result<(), ErrorCode> {
+    // All names are native constants. Bound attached objects before reading SQL.
+    let mut query = sql(db.prepare("SELECT substr(CAST(type AS BLOB),1,17),substr(CAST(name AS BLOB),1,129),substr(CAST(sql AS BLOB),1,2049) FROM sqlite_master WHERE name=?1 OR tbl_name=?1 LIMIT 5"))?;
+    let mut rows = sql(query.query([table]))?;
+    let indexes = [
+        format!("sqlite_autoindex_{table}_1"),
+        format!("sqlite_autoindex_{table}_2"),
+        format!("sqlite_autoindex_{table}_3"),
+    ];
     let mut found = [false; 4];
     while let Some(row) = sql(rows.next())? {
-        if version < 8 {
+        if version < introduced {
             return Err(ErrorCode::Malformed);
         }
         let kind: Vec<u8> = sql(row.get(0))?;
         let name: Vec<u8> = sql(row.get(1))?;
         let body: Option<Vec<u8>> = sql(row.get(2))?;
-        let slot = match (kind.as_slice(), name.as_slice(), body.as_deref()) {
-            (b"table", b"browser_read_owner", Some(body)) if body == SCHEMA.as_bytes() => 0,
-            (b"index", b"sqlite_autoindex_browser_read_owner_1", None) => 1,
-            (b"index", b"sqlite_autoindex_browser_read_owner_2", None) => 2,
-            (b"index", b"sqlite_autoindex_browser_read_owner_3", None) => 3,
-            _ => return Err(ErrorCode::Malformed),
+        let slot = if kind == b"table"
+            && name == table.as_bytes()
+            && body.as_deref() == Some(expected_sql.as_bytes())
+        {
+            0
+        } else if kind == b"index" && body.is_none() {
+            indexes
+                .iter()
+                .position(|v| v.as_bytes() == name)
+                .map(|v| v + 1)
+                .ok_or(ErrorCode::Malformed)?
+        } else {
+            return Err(ErrorCode::Malformed);
         };
         if found[slot] {
             return Err(ErrorCode::Malformed);
         }
         found[slot] = true;
     }
-    if version < 8 {
+    if version < introduced {
         return Ok(());
     }
     if found != [true; 4] {
         return Err(ErrorCode::Malformed);
     }
-    let mut query = sql(db.prepare("PRAGMA index_list('browser_read_owner')"))?;
-    let mut rows = sql(query.query([]))?;
+    let mut query = sql(
+        db.prepare(r#"SELECT name,"unique",origin,partial FROM pragma_index_list(?1) LIMIT 4"#)
+    )?;
+    let mut rows = sql(query.query([table]))?;
     let mut found = [false; 3];
     while let Some(row) = sql(rows.next())? {
-        let name: String = sql(row.get(1))?;
-        let slot = match name.as_str() {
-            "sqlite_autoindex_browser_read_owner_1" => 0,
-            "sqlite_autoindex_browser_read_owner_2" => 1,
-            "sqlite_autoindex_browser_read_owner_3" => 2,
-            _ => return Err(ErrorCode::Malformed),
+        let name: String = sql(row.get(0))?;
+        let slot = indexes
+            .iter()
+            .position(|v| *v == name)
+            .ok_or(ErrorCode::Malformed)?;
+        let origin = if table == "browser_read_retirements" && slot == 0 {
+            "pk"
+        } else {
+            "u"
         };
         if found[slot]
-            || sql::<i64>(row.get(2))? != 1
-            || sql::<String>(row.get(3))? != "u"
-            || sql::<i64>(row.get(4))? != 0
+            || sql::<i64>(row.get(1))? != 1
+            || sql::<String>(row.get(2))? != origin
+            || sql::<i64>(row.get(3))? != 0
         {
             return Err(ErrorCode::Malformed);
         }
@@ -72,29 +116,14 @@ pub(crate) fn check_schema(db: &Connection, version: u64) -> Result<(), ErrorCod
     if found != [true; 3] {
         return Err(ErrorCode::Malformed);
     }
-    for (query, column, name) in [
-        (
-            "PRAGMA index_info('sqlite_autoindex_browser_read_owner_1')",
-            1,
-            "revision",
-        ),
-        (
-            "PRAGMA index_info('sqlite_autoindex_browser_read_owner_2')",
-            2,
-            "dispatch",
-        ),
-        (
-            "PRAGMA index_info('sqlite_autoindex_browser_read_owner_3')",
-            3,
-            "action_revision",
-        ),
-    ] {
-        let mut statement = sql(db.prepare(query))?;
-        let mut rows = sql(statement.query([]))?;
+    for (index, (column, name)) in indexes.iter().zip(columns) {
+        let mut query =
+            sql(db.prepare("SELECT seqno,cid,name FROM pragma_index_info(?1) LIMIT 2"))?;
+        let mut rows = sql(query.query([index]))?;
         let row = sql(rows.next())?.ok_or(ErrorCode::Malformed)?;
         if sql::<i64>(row.get(0))? != 0
-            || sql::<i64>(row.get(1))? != column
-            || sql::<String>(row.get(2))? != name
+            || sql::<i64>(row.get(1))? != *column
+            || sql::<String>(row.get(2))? != *name
             || sql(rows.next())?.is_some()
         {
             return Err(ErrorCode::Malformed);
@@ -149,6 +178,18 @@ pub(crate) fn current(db: &Connection) -> Result<Option<Ownership>, ErrorCode> {
     {
         return Err(ErrorCode::Malformed);
     }
+    validate_context(db, &context)?;
+    Ok(Some(Ownership {
+        revision,
+        context,
+        state,
+    }))
+}
+
+pub(crate) fn validate_context(db: &Connection, context: &Context) -> Result<(), ErrorCode> {
+    context.validate()?;
+    let action_revision = context.action_revision.uuid();
+    let dispatch = context.dispatch.uuid();
     // Check immutable action and source rows, irrespective of later outcome or
     // reconciliation. Expiration withdraws authority, not external ownership.
     let mut query = sql(db.prepare(
@@ -187,14 +228,53 @@ pub(crate) fn current(db: &Connection) -> Result<Option<Ownership>, ErrorCode> {
     {
         return Err(ErrorCode::Malformed);
     }
-    Ok(Some(Ownership {
-        revision,
-        context,
-        state,
-    }))
+    Ok(())
+}
+
+/// Historical resource receipt only. It never establishes content success.
+#[derive(Serialize)]
+pub struct Retirement {
+    pub revision: Uuid,
+    pub context: Context,
 }
 
 impl Store {
+    /// Authenticated native recovery must separately validate actual pairing.
+    /// This bounded metadata lookup mints no lease or transport capability.
+    pub fn browser_read_retirement(
+        &self,
+        expected: &Context,
+    ) -> Result<Option<Retirement>, ErrorCode> {
+        expected.validate()?;
+        let mut query = sql(self.connection.prepare("SELECT substr(CAST(dispatch AS BLOB),1,37),substr(CAST(request AS BLOB),1,37),substr(CAST(revision AS BLOB),1,37),substr(CAST(action_revision AS BLOB),1,37),substr(CAST(context AS BLOB),1,4097) FROM browser_read_retirements WHERE dispatch=?1 LIMIT 2"))?;
+        let mut rows = sql(query.query([expected.dispatch.uuid().to_string()]))?;
+        let Some(row) = sql(rows.next())? else {
+            return Ok(None);
+        };
+        let text = |index| -> Result<String, ErrorCode> {
+            String::from_utf8(sql::<Vec<u8>>(row.get(index))?).map_err(|_| ErrorCode::Malformed)
+        };
+        let dispatch = id(&text(0)?)?;
+        let request = id(&text(1)?)?;
+        let revision = id(&text(2)?)?;
+        let action_revision = id(&text(3)?)?;
+        let body: Vec<u8> = sql(row.get(4))?;
+        if body.is_empty() || body.len() > MAX_CONTEXT || sql(rows.next())?.is_some() {
+            return Err(ErrorCode::Malformed);
+        }
+        let context: Context = serde_json::from_slice(&body).map_err(|_| ErrorCode::Malformed)?;
+        validate_context(&self.connection, &context)?;
+        if context.dispatch.uuid() != dispatch
+            || context.request.uuid() != request
+            || context.action_revision.uuid() != action_revision
+        {
+            return Err(ErrorCode::Malformed);
+        }
+        if &context != expected {
+            return Err(ErrorCode::Stale);
+        }
+        Ok(Some(Retirement { revision, context }))
+    }
     /// Same-worker metadata only; neither absence nor this value grants effects.
     pub fn browser_read_ownership(&self) -> Result<Option<Ownership>, ErrorCode> {
         current(&self.connection)

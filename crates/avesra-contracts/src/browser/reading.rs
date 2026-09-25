@@ -185,3 +185,29 @@ fn encoded_bound(value: &impl Serialize) -> Result<(), ErrorCode> {
     }
     Ok(())
 }
+
+/// Future v6 wire claim only. Parsing does not prove authenticated settlement.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SettlementKind {
+    ActualJobSettled,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Settlement {
+    pub context: Context,
+    pub kind: SettlementKind,
+}
+impl Settlement {
+    pub fn validate(&self) -> Result<(), ErrorCode> {
+        self.context.validate()?;
+        encoded_bound(self)
+    }
+    pub fn matches_context(&self, context: &Context) -> Result<(), ErrorCode> {
+        self.validate()?;
+        if &self.context != context {
+            return Err(ErrorCode::Stale);
+        }
+        Ok(())
+    }
+}

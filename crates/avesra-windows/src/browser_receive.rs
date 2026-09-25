@@ -5,7 +5,7 @@ use crate::{
 };
 use avesra_contracts::{
     ErrorCode,
-    browser::{self, Client, Id},
+    browser::{self, Client, Id, ScopeRef},
 };
 use std::time::Instant;
 use tokio::net::windows::named_pipe::NamedPipeServer;
@@ -30,6 +30,8 @@ pub struct Authenticated {
     challenge: Id,
     response: browser::Authenticated,
     expires: Instant,
+    actor: Id,
+    app: ScopeRef,
 }
 impl Authenticated {
     pub(crate) fn verified(
@@ -37,12 +39,16 @@ impl Authenticated {
         challenge: Id,
         response: browser::Authenticated,
         expires: Instant,
+        actor: Id,
+        app: ScopeRef,
     ) -> Self {
         Self {
             owner,
             challenge,
             response,
             expires,
+            actor,
+            app,
         }
     }
 }
@@ -60,6 +66,7 @@ pub struct ReceiveOwner {
     sequence: u64,
     observation_revision: u64,
     authenticated: Option<browser::Authenticated>,
+    authenticated_binding: Option<(Id, ScopeRef)>,
     authentication_pending: bool,
     failed: bool,
 }
@@ -88,6 +95,7 @@ impl ReceiveOwner {
             sequence: 0,
             observation_revision: 0,
             authenticated: None,
+            authenticated_binding: None,
             authentication_pending: false,
             failed: false,
         };
@@ -114,8 +122,17 @@ impl ReceiveOwner {
             pairing: seal.response.pairing,
             generation: seal.response.generation,
         });
+        self.authenticated_binding = Some((seal.actor, seal.app));
         self.authentication_pending = false;
         Ok(seal.response)
+    }
+    /// Read-only verified pairing metadata, never a settlement/reset capability.
+    pub fn authenticated_binding(&self) -> Option<(Id, ScopeRef)> {
+        if self.failed {
+            None
+        } else {
+            self.authenticated_binding
+        }
     }
     pub async fn receive(&mut self) -> Result<Incoming, ErrorCode> {
         if self.failed || self.authentication_pending {

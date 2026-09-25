@@ -698,6 +698,11 @@ impl Pending {
                 generation,
             },
             self.admission.started + Duration::from_secs(browser::HANDSHAKE_SECONDS),
+            saved.binding.actor,
+            browser::ScopeRef {
+                id: saved.binding.browser_app,
+                revision: saved.binding.browser_revision,
+            },
         ))
     }
 }
