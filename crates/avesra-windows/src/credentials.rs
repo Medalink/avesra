@@ -52,6 +52,10 @@ fn transform(bytes: &[u8], protect: bool) -> Result<Vec<u8>, ErrorCode> {
             return Err(ErrorCode::TooLarge);
         }
         let result = std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec();
+        // Clear the owned DPAPI allocation before freeing it, including decrypted
+        // browser credentials; callers separately own and clear their returned copy.
+        use zeroize::Zeroize;
+        std::slice::from_raw_parts_mut(output.pbData, output.cbData as usize).zeroize();
         let _ = LocalFree(Some(HLOCAL(output.pbData.cast())));
         Ok(result)
     }

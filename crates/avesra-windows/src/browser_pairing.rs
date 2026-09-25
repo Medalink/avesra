@@ -101,6 +101,27 @@ pub struct Summary {
     /// Corrupt/foreign entries remain removable by their exact native filename identity.
     pub available: bool,
 }
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Selected {
+    pub revision: Id,
+    pub pairing: PairingRef,
+    pub actor: Id,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SelectedRecord {
+    version: u16,
+    principal: String,
+    selected: Selected,
+}
+#[derive(Serialize)]
+pub struct SelectionStatus {
+    pub revision: Id,
+    pub selected: Option<Selected>,
+    pub binding: Option<Binding>,
+    pub available: bool,
+}
 
 /// Exclusive across processes and retained through every blocking publication/read.
 /// Off-thread ownership must outlive a cancelled async waiter.
@@ -148,6 +169,10 @@ impl Store {
                 return Err(ErrorCode::Malformed);
             };
             if name == "pairings.lock" || (name.starts_with("pending-") && name.ends_with(".tmp")) {
+                continue;
+            }
+            if name.starts_with("selected-") {
+                selected_revision(name)?;
                 continue;
             }
             let Some(stem) = name.strip_suffix(".dpapi") else {
@@ -290,6 +315,169 @@ impl Store {
         authorize()?;
         std::fs::remove_file(self.path(pairing)).map_err(|_| ErrorCode::Unavailable)
     }
+    fn selection_path(&self, revision: Id) -> PathBuf {
+        self.directory
+            .join(format!("selected-{}.dpapi", revision.uuid()))
+    }
+    fn selection_revisions(&self) -> Result<Vec<Id>, ErrorCode> {
+        let mut revisions = Vec::new();
+        for (index, entry) in std::fs::read_dir(&self.directory)
+            .map_err(|_| ErrorCode::Unavailable)?
+            .enumerate()
+        {
+            if index >= 256 {
+                return Err(ErrorCode::TooLarge);
+            }
+            let entry = entry.map_err(|_| ErrorCode::Unavailable)?;
+            let name = entry.file_name();
+            let name = name.to_str().ok_or(ErrorCode::Malformed)?;
+            if name.starts_with("selected-") {
+                revisions.push(selected_revision(name)?);
+            }
+            if revisions.len() > 16 {
+                return Err(ErrorCode::TooLarge);
+            }
+        }
+        Ok(revisions)
+    }
+    fn read_selected(&self, revision: Id, actor: Id) -> Result<(Selected, Binding), ErrorCode> {
+        let mut file = OpenOptions::new()
+            .read(true)
+            .custom_flags(0x00200000)
+            .open(self.selection_path(revision))
+            .map_err(|_| ErrorCode::Unavailable)?;
+        let metadata = file.metadata().map_err(|_| ErrorCode::Unavailable)?;
+        if !metadata.is_file()
+            || metadata.file_attributes() & 0x400 != 0
+            || metadata.len() > MAX_RECORD
+        {
+            return Err(ErrorCode::Malformed);
+        }
+        let mut protected = Vec::new();
+        (&mut file)
+            .take(MAX_RECORD + 1)
+            .read_to_end(&mut protected)
+            .map_err(|_| ErrorCode::Unavailable)?;
+        if protected.is_empty() || protected.len() as u64 > MAX_RECORD {
+            return Err(ErrorCode::TooLarge);
+        }
+        let plain = Zeroizing::new(crate::credentials::unprotect(&protected)?);
+        if plain.len() as u64 > MAX_RECORD {
+            return Err(ErrorCode::TooLarge);
+        }
+        let record: SelectedRecord =
+            serde_json::from_slice(&plain).map_err(|_| ErrorCode::Malformed)?;
+        if record.version != 1
+            || record.principal != self.principal
+            || record.selected.revision != revision
+            || record.selected.actor != actor
+        {
+            return Err(ErrorCode::Unauthenticated);
+        }
+        let pairing = self.load(record.selected.pairing, actor)?;
+        Ok((record.selected, pairing.binding))
+    }
+    /// Recovery retains each exact filename revision even if its body is corrupt.
+    /// Multiple selected records are ambiguous: none is an active selection.
+    pub fn selections(&self, actor: Id) -> Result<Vec<SelectionStatus>, ErrorCode> {
+        let revisions = self.selection_revisions()?;
+        let unambiguous = revisions.len() == 1;
+        Ok(revisions
+            .into_iter()
+            .map(|revision| {
+                let decoded = self.read_selected(revision, actor).ok();
+                let available = unambiguous && decoded.is_some();
+                let (selected, binding) = decoded.map_or((None, None), |(v, b)| (Some(v), Some(b)));
+                SelectionStatus {
+                    revision,
+                    selected,
+                    binding,
+                    available,
+                }
+            })
+            .collect())
+    }
+    pub fn selected(&self, actor: Id) -> Result<Option<(Selected, Binding)>, ErrorCode> {
+        let revisions = self.selection_revisions()?;
+        match revisions.as_slice() {
+            [] => Ok(None),
+            [revision] => self.read_selected(*revision, actor).map(Some),
+            _ => Err(ErrorCode::Denied),
+        }
+    }
+    /// Selection is create-only. Explicitly clear a previous revision first; no
+    /// replacement operation can silently retarget already accepted work.
+    pub fn select(
+        &self,
+        pairing: PairingRef,
+        actor: Id,
+        authorize: &mut dyn FnMut() -> Result<(), ErrorCode>,
+    ) -> Result<Selected, ErrorCode> {
+        if !self.selection_revisions()?.is_empty() {
+            return Err(ErrorCode::Denied);
+        }
+        self.load(pairing, actor)?;
+        let selected = Selected {
+            revision: Id::new(uuid::Uuid::new_v4())?,
+            pairing,
+            actor,
+        };
+        let plain = Zeroizing::new(
+            serde_json::to_vec(&SelectedRecord {
+                version: 1,
+                principal: self.principal.clone(),
+                selected: selected.clone(),
+            })
+            .map_err(|_| ErrorCode::Malformed)?,
+        );
+        let protected = crate::credentials::protect(&plain)?;
+        if protected.len() as u64 > MAX_RECORD {
+            return Err(ErrorCode::TooLarge);
+        }
+        let temporary = self
+            .directory
+            .join(format!("pending-{}.tmp", uuid::Uuid::new_v4()));
+        let result = (|| {
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temporary)
+                .map_err(|_| ErrorCode::Unavailable)?;
+            file.write_all(&protected)
+                .and_then(|_| file.sync_all())
+                .map_err(|_| ErrorCode::Unavailable)?;
+            drop(file);
+            // Refresh the exact credential after potentially blocking staging.
+            self.load(pairing, actor)?;
+            if crate::principal::current_user()? != self.principal {
+                return Err(ErrorCode::Unauthenticated);
+            }
+            authorize()?;
+            std::fs::hard_link(&temporary, self.selection_path(selected.revision))
+                .map_err(|_| ErrorCode::Unavailable)?;
+            self.read_selected(selected.revision, actor).map(|v| v.0)
+        })();
+        let _ = std::fs::remove_file(temporary);
+        result
+    }
+    pub fn clear_selection(
+        &self,
+        revision: Id,
+        authorize: &mut dyn FnMut() -> Result<(), ErrorCode>,
+    ) -> Result<(), ErrorCode> {
+        if crate::principal::current_user()? != self.principal {
+            return Err(ErrorCode::Unauthenticated);
+        }
+        authorize()?;
+        std::fs::remove_file(self.selection_path(revision)).map_err(|_| ErrorCode::Unavailable)
+    }
+}
+fn selected_revision(name: &str) -> Result<Id, ErrorCode> {
+    let raw = name
+        .strip_prefix("selected-")
+        .and_then(|v| v.strip_suffix(".dpapi"))
+        .ok_or(ErrorCode::Malformed)?;
+    serde_json::from_value(serde_json::Value::String(raw.into())).map_err(|_| ErrorCode::Malformed)
 }
 
 /// Created before pipe acceptance/peer inspection, never reset after blocking work.
