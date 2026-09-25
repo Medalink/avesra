@@ -13,6 +13,32 @@ use std::sync::{
 use std::time::Instant;
 
 pub const FRAME_SAMPLES: usize = 320;
+fn capture_contiguous(
+    expected: &mut Option<cpal::StreamInstant>,
+    info: &cpal::InputCallbackInfo,
+    frames: usize,
+    rate: u32,
+) -> bool {
+    if frames == 0 {
+        return true;
+    }
+    let start = info.timestamp().capture;
+    // At most one source sample plus 1us for QPC/duration rounding. Larger
+    // discontinuities must not be hidden by our own contiguous packet sequence.
+    let tolerance = std::time::Duration::from_nanos(1_000_000_000 / u64::from(rate) + 1000);
+    if expected.is_some_and(|previous| {
+        start
+            .duration_since(&previous)
+            .or_else(|| previous.duration_since(&start))
+            .is_none_or(|difference| difference > tolerance)
+    }) {
+        return false;
+    }
+    *expected = start.add(std::time::Duration::from_secs_f64(
+        frames as f64 / f64::from(rate),
+    ));
+    expected.is_some()
+}
 fn capture_instant(
     info: &cpal::InputCallbackInfo,
     sample: Option<cpal::StreamInstant>,
@@ -277,6 +303,7 @@ where
     let mut sequence = 0u64;
     let mut device_time = None;
     let mut captured = None;
+    let mut expected_capture = None;
     device
         .build_input_stream(
             config,
@@ -288,10 +315,24 @@ where
                     count = 0;
                     device_time = None;
                     captured = None;
+                    expected_capture = None;
                     epoch = current;
                     sequence = 0;
                 }
                 if !gate.current(epoch) {
+                    return;
+                }
+                if !input.len().is_multiple_of(channels)
+                    || !capture_contiguous(
+                        &mut expected_capture,
+                        info,
+                        input.len() / channels,
+                        16000,
+                    )
+                {
+                    samples.fill(0);
+                    count = 0;
+                    gate.fail();
                     return;
                 }
                 for (offset, frame) in input.chunks_exact(channels).enumerate() {
@@ -379,6 +420,8 @@ where
     let mut sequence = 0u64;
     let mut origin: Option<cpal::StreamInstant> = None;
     let mut emitted = 0u64;
+    let mut expected_capture = None;
+    let source_rate = config.sample_rate;
     device
         .build_input_stream(
             config,
@@ -392,9 +435,24 @@ where
                     sequence = 0;
                     origin = None;
                     emitted = 0;
+                    expected_capture = None;
                     epoch = current;
                 }
                 if !gate.current(epoch) {
+                    return;
+                }
+                if !input.len().is_multiple_of(channels)
+                    || !capture_contiguous(
+                        &mut expected_capture,
+                        info,
+                        input.len() / channels,
+                        source_rate,
+                    )
+                {
+                    converter.reset();
+                    samples.fill(0);
+                    count = 0;
+                    gate.fail();
                     return;
                 }
                 for (offset, frame) in input.chunks_exact(channels).enumerate() {
