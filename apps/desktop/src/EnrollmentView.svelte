@@ -3,7 +3,7 @@
   import { command, native, type Runtime } from "./runtime";
   let { runtime }: { runtime: Runtime | null } = $props();
   type Status = { enrollment: string; completed_segments: number; next_segment: string | null; reason: string };
-  type Candidate = { id: string; revision: string; model_revision: string; segments: number; state: string };
+  type Candidate = { id: string; revision: string; model_revision: string | null; segments: number | null; state: string };
   let status = $state<Status | null>(null);
   let candidates = $state<Candidate[]>([]);
   let busy = $state(false);
@@ -56,8 +56,8 @@
   {/if}
   {#each candidates as candidate (candidate.revision)}
     <div class="av-card flex flex-col gap-2.5 p-3.5">
-      <span class="text-[12.5px] font-medium">Protected voice candidate · quality unqualified</span>
-      <p class="av-hint">{candidate.segments} segments · model revision {candidate.model_revision.slice(0, 7)}. This candidate grants no listening or action rights.</p>
+      <span class="text-[12.5px] font-medium">Protected voice candidate · {candidate.state === "unreadable_candidate" ? "unreadable" : "quality unqualified"}</span>
+      <p class="av-hint">{candidate.segments ?? "Unknown"} segments · model revision {candidate.model_revision?.slice(0, 7) ?? "unavailable"}. This candidate grants no listening or action rights. Unreadable candidates may be removed after verification.</p>
       <button class="av-btn av-btn-ghost av-btn-sm self-start" disabled={busy} onclick={() => remove(candidate)}>Delete candidate · Windows verification required</button>
     </div>
   {/each}

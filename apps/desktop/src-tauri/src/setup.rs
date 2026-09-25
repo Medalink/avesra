@@ -87,13 +87,13 @@ pub async fn setup_status(
     state: tauri::State<'_, Runtime>,
 ) -> Result<SetupStatus, String> {
     settings_only(&window)?;
-    let (epoch, generation) = {
-        let local = state.local.lock().map_err(|_| "Local state unavailable")?;
-        (
-            local.capture_epoch,
-            state.connection_generation.load(Ordering::SeqCst),
-        )
-    };
+    let available = avesra_windows::authentication::available()
+        .await
+        .map_err(|e| e.to_string())?;
+    // All native reads/mutations below share a fresh context after the await.
+    let local = state.local.lock().map_err(|_| "Local state unavailable")?;
+    let epoch = local.capture_epoch;
+    let generation = state.connection_generation.load(Ordering::SeqCst);
     let remaining = {
         let mut stored = state.setup.proof.lock().map_err(|_| "Setup unavailable")?;
         if stored.as_ref().is_some_and(|proof| {
@@ -110,10 +110,7 @@ pub async fn setup_status(
     };
     let authentication = if remaining > 0 {
         "verified"
-    } else if avesra_windows::authentication::available()
-        .await
-        .map_err(|e| e.to_string())?
-    {
+    } else if available {
         "available"
     } else {
         "unavailable"

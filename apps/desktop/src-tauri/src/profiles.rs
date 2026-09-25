@@ -20,8 +20,8 @@ fn lock_directory(directory: &Path) -> Result<std::fs::File, String> {
 pub struct CandidateSummary {
     pub id: Uuid,
     pub revision: Uuid,
-    pub model_revision: String,
-    pub segments: usize,
+    pub model_revision: Option<String>,
+    pub segments: Option<usize>,
     pub state: &'static str,
 }
 pub fn list_candidates(directory: &Path) -> Result<Vec<CandidateSummary>, String> {
@@ -44,37 +44,47 @@ pub fn list_candidates(directory: &Path) -> Result<Vec<CandidateSummary>, String
         if summaries.len() >= 128 {
             return Err("Candidate count exceeds limit".into());
         }
-        if !std::fs::symlink_metadata(&path)
-            .map_err(|_| "Candidate metadata unavailable")?
-            .is_file()
-        {
-            return Err("Candidate is not a regular file".into());
+        let Some(stem) = path.file_stem().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if stem.len() != 73 || !stem.is_ascii() || &stem[36..37] != "-" {
+            continue;
         }
-        let mut bytes = vec![];
-        std::fs::File::open(&path)
-            .map_err(|_| "Candidate unavailable")?
-            .take(32_769)
-            .read_to_end(&mut bytes)
-            .map_err(|_| "Candidate unavailable")?;
-        if bytes.len() > 32_768 {
-            return Err("Candidate exceeds limit".into());
+        let (Ok(id), Ok(revision)) = (Uuid::parse_str(&stem[..36]), Uuid::parse_str(&stem[37..]))
+        else {
+            continue;
+        };
+        if id.is_nil() || revision.is_nil() || stem != format!("{id}-{revision}") {
+            continue;
         }
-        let clear = avesra_windows::credentials::unprotect(&bytes)
-            .map_err(|_| "Candidate cannot be unlocked by this Windows user")?;
-        let candidate: Candidate =
-            serde_json::from_slice(&clear).map_err(|_| "Invalid candidate")?;
-        candidate.validate().map_err(|_| "Invalid candidate")?;
-        if path.file_name().and_then(|v| v.to_str())
-            != Some(format!("{}-{}.dpapi", candidate.id, candidate.revision).as_str())
-        {
-            return Err("Candidate identity mismatch".into());
-        }
+        let decoded = (|| -> Option<Candidate> {
+            if !std::fs::symlink_metadata(&path).ok()?.is_file() {
+                return None;
+            }
+            let mut bytes = vec![];
+            std::fs::File::open(&path)
+                .ok()?
+                .take(32_769)
+                .read_to_end(&mut bytes)
+                .ok()?;
+            if bytes.len() > 32_768 {
+                return None;
+            }
+            let clear = avesra_windows::credentials::unprotect(&bytes).ok()?;
+            let candidate: Candidate = serde_json::from_slice(&clear).ok()?;
+            candidate.validate().ok()?;
+            (candidate.id == id && candidate.revision == revision).then_some(candidate)
+        })();
         summaries.push(CandidateSummary {
-            id: candidate.id,
-            revision: candidate.revision,
-            model_revision: candidate.model_revision,
-            segments: candidate.segments,
-            state: "candidate_quality_unqualified",
+            id,
+            revision,
+            model_revision: decoded.as_ref().map(|value| value.model_revision.clone()),
+            segments: decoded.as_ref().map(|value| value.segments),
+            state: if decoded.is_some() {
+                "candidate_quality_unqualified"
+            } else {
+                "unreadable_candidate"
+            },
         });
     }
     Ok(summaries)
