@@ -318,6 +318,11 @@ impl Action {
         {
             return Err(ErrorCode::Expired);
         }
+        if let ActionPayload::LaunchApp { app_id } = self.payload
+            && app_id != self.target_id
+        {
+            return Err(ErrorCode::Denied);
+        }
         self.payload.validate()
     }
 }

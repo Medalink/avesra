@@ -61,3 +61,5 @@ pub fn audio_devices() -> Result<Vec<AudioDevice>, ErrorCode> {
 pub fn audio_devices() -> Result<Vec<AudioDevice>, ErrorCode> {
     Err(ErrorCode::Unsupported)
 }
+#[cfg(windows)]
+pub mod apps;

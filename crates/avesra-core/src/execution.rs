@@ -23,6 +23,13 @@ pub struct VolumeLevel {
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum EffectObservation {
+    Application {
+        app_id: Uuid,
+        catalog_revision: Uuid,
+        process_id: Option<u32>,
+        window: Option<u64>,
+        image_matched: bool,
+    },
     Volume {
         before: VolumeLevel,
         after: Option<VolumeLevel>,
@@ -35,6 +42,27 @@ impl EffectObservation {
         outcome: Outcome,
     ) -> Result<(), ErrorCode> {
         match self {
+            Self::Application {
+                app_id,
+                catalog_revision,
+                process_id,
+                window,
+                image_matched,
+            } => {
+                if action.payload
+                    != (avesra_contracts::ActionPayload::LaunchApp { app_id: *app_id })
+                    || action.target_id != *app_id
+                    || catalog_revision.is_nil()
+                    || process_id == &Some(0)
+                    || window == &Some(0)
+                    || (window.is_some() && (!image_matched || process_id.is_none()))
+                    || (outcome == Outcome::Success
+                        && (window.is_none() || process_id.is_none() || !image_matched))
+                {
+                    return Err(ErrorCode::Malformed);
+                }
+                Ok(())
+            }
             Self::Volume { before, after } => {
                 let avesra_contracts::ActionPayload::SetVolume { percent } = action.payload else {
                     return Err(ErrorCode::Denied);

@@ -33,9 +33,15 @@ pub enum Management {
     Seal { task: Uuid, actor: Uuid },
     RevokeGrant(Uuid),
     RevokeApproval(Uuid),
+    RegisterApp(avesra_core::apps::AppRecord),
+    RevokeApp(Uuid),
 }
 impl Management {
-    fn apply(self, store: &mut Store) -> Result<(), ErrorCode> {
+    fn apply(
+        self,
+        store: &mut Store,
+        apps: &mut avesra_core::apps::AppCatalog,
+    ) -> Result<(), ErrorCode> {
         let now = u64::try_from(
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -51,6 +57,8 @@ impl Management {
             Self::Seal { task, actor } => store.seal_task(task, actor),
             Self::RevokeGrant(id) => store.revoke_grant(id),
             Self::RevokeApproval(id) => store.revoke_approval(id),
+            Self::RegisterApp(record) => apps.register(&record),
+            Self::RevokeApp(id) => apps.revoke(id),
         }
     }
 }
@@ -93,15 +101,23 @@ impl Drop for WorkerOwnership {
     }
 }
 
-struct VolumeAdapter {
+struct NativeAdapter {
     targets: HashMap<Uuid, VolumeTarget>,
+    apps: avesra_core::apps::AppCatalog,
 }
-impl EffectAdapter for VolumeAdapter {
+impl EffectAdapter for NativeAdapter {
     fn execute(
         &mut self,
         permit: &DispatchPermit,
         authorize: &mut dyn FnMut() -> Result<(), ErrorCode>,
     ) -> Result<EffectResult, ErrorCode> {
+        if let ActionPayload::LaunchApp { app_id } = permit.action.payload {
+            if app_id != permit.action.target_id {
+                return Err(ErrorCode::Denied);
+            }
+            let record = self.apps.get(app_id)?;
+            return crate::apps::launch(&record, authorize);
+        }
         let ActionPayload::SetVolume { percent } = permit.action.payload else {
             return Ok(EffectResult {
                 outcome: Outcome::Unsupported,
@@ -175,13 +191,22 @@ impl NativeEffects {
                 let Ok(store) = Store::open(&path) else {
                     return;
                 };
+                let Ok(apps) = avesra_core::apps::AppCatalog::open(&path.with_extension("apps.db"))
+                else {
+                    return;
+                };
                 let mut controller = ExecutionController::new(store);
-                let mut adapter = VolumeAdapter { targets: registry };
+                let mut adapter = NativeAdapter {
+                    targets: registry,
+                    apps,
+                };
                 while let Ok(command) = receive.recv() {
                     let job = match command {
                         Command::Execute(job) => job,
                         Command::Manage(command, reply) => {
-                            let _ = reply.try_send(command.apply(controller.management()));
+                            let _ = reply.try_send(
+                                command.apply(controller.management(), &mut adapter.apps),
+                            );
                             continue;
                         }
                     };
