@@ -5,8 +5,15 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+#[path = "conversation_planner.rs"]
+mod planner;
 #[path = "conversation_tasks.rs"]
 mod tasks;
+pub(crate) use planner::{PLAN_SCHEMA, REPLY_SCHEMA};
+pub use planner::{
+    PlannerAuthority, PlannerCancellation, PlannerClaim, PlannerRequest, PlannerSummary,
+    StoredReply,
+};
 pub use tasks::{AppTaskRequest, LinkedTask, TaskAuthority, TaskResolution};
 pub(crate) use tasks::{SCHEMA as TASK_SCHEMA, validate_dispatch as validate_linked_dispatch};
 
@@ -15,6 +22,7 @@ pub(crate) const SCHEMA: &str = "CREATE TABLE accepted_conversations(id TEXT PRI
 
 pub(crate) fn check_schema(db: &Connection, version: u64) -> Result<(), ErrorCode> {
     tasks::check_schema(db, version)?;
+    planner::check_schema(db, version)?;
     let attached:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE tbl_name='accepted_conversations' AND type NOT IN ('table','index'))",[],|r|r.get(0)).map_err(|_|ErrorCode::Malformed)?;
     if attached {
         return Err(ErrorCode::Malformed);
@@ -195,6 +203,7 @@ pub struct Summary {
     pub state: String,
     pub created_ms: u64,
     pub linked_task: Option<LinkedTask>,
+    pub planner: Option<PlannerSummary>,
 }
 impl Store {
     pub fn accept_conversation(
@@ -297,6 +306,7 @@ impl Store {
             state,
             created_ms: record.created_ms,
             linked_task: tasks::linked(&self.connection, &record)?,
+            planner: planner::summary(&self.connection, &record)?,
         }))
     }
     /// Explicit native cancellation of this exact accepted turn. Future planner
@@ -323,6 +333,8 @@ impl Store {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|_| ErrorCode::Storage)?;
         if tx.execute("UPDATE accepted_conversations SET state='cancelled' WHERE id=?1 AND revision=?2 AND actor=?3 AND state IN ('accepted','planning','waiting_input','suspended','cancelled')",params![id.to_string(),revision.to_string(),actor.to_string()]).map_err(|_|ErrorCode::Storage)?!=1{return Err(ErrorCode::Stale);}
+        let (record, _) = tasks::read_record(&tx, id)?;
+        planner::cancel(&tx, &record)?;
         let dispatches = if let Some(linked) = summary.linked_task {
             let now = tasks::wall_time()?;
             crate::ledger::cancel_task_in(&tx, linked.task, actor, now)?

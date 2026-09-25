@@ -3,7 +3,8 @@ use crate::volume::{self, VolumeOutcome, VolumeTarget};
 use avesra_contracts::{Action, ActionPayload, ErrorCode, Outcome};
 use avesra_core::{
     conversations::{
-        AppTaskRequest, CancellationTarget, DurableTurn, Source as ConversationSource,
+        AppTaskRequest, CancellationTarget, DurableTurn, PlannerAuthority, PlannerCancellation,
+        PlannerClaim, PlannerRequest, Source as ConversationSource, StoredReply,
         Summary as ConversationSummary, TaskAuthority, TaskResolution,
     },
     execution::{
@@ -68,6 +69,17 @@ impl Management {
     }
 }
 enum Command {
+    ClaimPlanner {
+        request: PlannerRequest,
+        authorize: PlannerAuthorization,
+        reply: SyncSender<Result<PlannerClaim, ErrorCode>>,
+    },
+    FinishPlanner {
+        claim: PlannerClaim,
+        result: avesra_contracts::planner::Reply,
+        authorize: PlannerAuthorization,
+        reply: SyncSender<Result<StoredReply, ErrorCode>>,
+    },
     AcceptAppTask {
         request: AppTaskRequest,
         authorize: TaskAuthorization,
@@ -120,6 +132,8 @@ pub type CatalogAuthorization = Box<dyn FnMut() -> Result<(), ErrorCode> + Send>
 /// Must recheck the original qualified native profile/context at commit. A
 /// successful arbitrary closure is not a substitute for that runtime adapter.
 pub type ConversationAuthorization = Box<dyn FnMut(&Conversation) -> Result<(), ErrorCode> + Send>;
+pub type PlannerAuthorization =
+    Box<dyn FnMut(&PlannerAuthority<'_>) -> Result<(), ErrorCode> + Send>;
 pub type TaskAuthorization = Box<dyn FnMut(&TaskAuthority<'_>) -> Result<(), ErrorCode> + Send>;
 /// Native-owned setup commands. Neither an alias nor registration grants effects.
 pub enum CatalogCommand {
@@ -257,6 +271,25 @@ struct State {
     allowed: bool,
     active: Option<Active>,
     pending_cancellations: Vec<CancellationTarget>,
+    planners: Vec<(CancellationTarget, PlannerCancellation)>,
+}
+fn planner_current(
+    state: &Mutex<State>,
+    target: CancellationTarget,
+    epoch: u64,
+) -> Result<(), ErrorCode> {
+    let state = state.lock().map_err(|_| ErrorCode::Unavailable)?;
+    if !state.allowed
+        || state.action_epoch != epoch
+        || state.pending_cancellations.contains(&target)
+        || !state
+            .planners
+            .iter()
+            .any(|(t, c)| *t == target && !c.cancelled())
+    {
+        return Err(ErrorCode::Stale);
+    }
+    Ok(())
 }
 struct Active {
     step: Uuid,
@@ -287,6 +320,7 @@ impl NativeEffects {
             allowed: false,
             active: None,
             pending_cancellations: Vec::new(),
+            planners: Vec::new(),
         }));
         let owned = state.clone();
         std::thread::Builder::new()
@@ -307,6 +341,52 @@ impl NativeEffects {
                 };
                 while let Ok(command) = receive.recv() {
                     let job = match command {
+                        Command::ClaimPlanner {
+                            request,
+                            mut authorize,
+                            reply,
+                        } => {
+                            let target = request.target();
+                            let epoch = request.action_epoch();
+                            let result =
+                                controller
+                                    .management()
+                                    .claim_planner(request, &mut |authority| {
+                                        planner_current(&owned, target, epoch)?;
+                                        authorize(authority)?;
+                                        planner_current(&owned, target, epoch)
+                                    });
+                            if result.is_err()
+                                && let Ok(mut state) = owned.lock()
+                            {
+                                state.planners.retain(|(t, _)| *t != target);
+                            }
+                            let _ = reply.try_send(result);
+                            continue;
+                        }
+                        Command::FinishPlanner {
+                            claim,
+                            result,
+                            mut authorize,
+                            reply,
+                        } => {
+                            let target = claim.target();
+                            let epoch = claim.context().action_epoch;
+                            let result = controller.management().finish_planner(
+                                claim,
+                                result,
+                                &mut |authority| {
+                                    planner_current(&owned, target, epoch)?;
+                                    authorize(authority)?;
+                                    planner_current(&owned, target, epoch)
+                                },
+                            );
+                            if let Ok(mut state) = owned.lock() {
+                                state.planners.retain(|(t, _)| *t != target);
+                            }
+                            let _ = reply.try_send(result);
+                            continue;
+                        }
                         Command::AcceptAppTask {
                             request,
                             mut authorize,
@@ -459,9 +539,68 @@ impl NativeEffects {
             {
                 active.cancellation.cancel();
             }
+            if action_epoch != state.action_epoch || !allowed {
+                for (_, planner) in &state.planners {
+                    planner.cancel();
+                }
+            }
             state.action_epoch = action_epoch;
             state.allowed = allowed;
         }
+    }
+    /// Same durable owner; no transcript or accepted-boolean frontend ingress.
+    pub fn claim_planner(
+        &self,
+        request: PlannerRequest,
+        authorize: PlannerAuthorization,
+    ) -> Result<Receiver<Result<PlannerClaim, ErrorCode>>, ErrorCode> {
+        let target = request.target();
+        let epoch = request.action_epoch();
+        let cancellation = request.cancellation();
+        let mut state = self.state.lock().map_err(|_| ErrorCode::Unavailable)?;
+        state.planners.retain(|(_, c)| !c.cancelled());
+        if !state.allowed
+            || state.action_epoch != epoch
+            || state.pending_cancellations.contains(&target)
+            || state.planners.len() >= 16
+            || state.planners.iter().any(|(t, _)| *t == target)
+        {
+            return Err(ErrorCode::Denied);
+        }
+        state.planners.push((target, cancellation.clone()));
+        let (reply, receive) = mpsc::sync_channel(1);
+        if self
+            .send
+            .try_send(Command::ClaimPlanner {
+                request,
+                authorize,
+                reply,
+            })
+            .is_err()
+        {
+            cancellation.cancel();
+            state.planners.retain(|(t, _)| *t != target);
+            return Err(ErrorCode::Unavailable);
+        }
+        Ok(receive)
+    }
+    pub fn finish_planner(
+        &self,
+        claim: PlannerClaim,
+        result: avesra_contracts::planner::Reply,
+        authorize: PlannerAuthorization,
+    ) -> Result<Receiver<Result<StoredReply, ErrorCode>>, ErrorCode> {
+        planner_current(&self.state, claim.target(), claim.context().action_epoch)?;
+        let (reply, receive) = mpsc::sync_channel(1);
+        self.send
+            .try_send(Command::FinishPlanner {
+                claim,
+                result,
+                authorize,
+                reply,
+            })
+            .map_err(|_| ErrorCode::Unavailable)?;
+        Ok(receive)
     }
     /// Dormant until a qualified native producer supplies the opaque value and
     /// exact current-context callback. Queue delay never renews gate freshness.
@@ -537,6 +676,11 @@ impl NativeEffects {
             return Err(ErrorCode::Unavailable);
         }
         state.pending_cancellations.push(target);
+        for (owned, planner) in &state.planners {
+            if *owned == target {
+                planner.cancel();
+            }
+        }
         if let Some(active) = &state.active
             && active.conversation == Some(target)
         {
