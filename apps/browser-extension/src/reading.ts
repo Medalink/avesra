@@ -11,6 +11,9 @@ export type Context = {
 };
 export type Request = { context: Context; origin: string; document: Candidate; message_limit: number; remaining_ms: number };
 export type Settlement = { context: Context; kind: "actual_job_settled" };
+export type Outcome = { state: "excerpt"; excerpt: { coverage: "partial"; document: Candidate; dom_revision: number; title: string; blocks: string[]; truncated: boolean; excluded_content: boolean } }
+  | { state: "empty" | "changed" | "expired" | "unavailable" | "unsupported" };
+export type Reply = { context: Context; outcome: Outcome };
 const ids = ["request", "dispatch", "task", "step", "actor", "action_revision", "intent_revision", "grant", "selection", "browser_session"];
 const references = ["target", "scope", "pairing", "browser_app"];
 export function context(value: unknown): value is Context {

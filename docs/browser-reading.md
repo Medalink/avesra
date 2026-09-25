@@ -1,5 +1,7 @@
 # Accepted browser reading
 
+Current integration: the actual native worker, paired status/content channel and extension actual-job/outbox are joined under the ownership rules below. ReadPage without a concrete accepted-task borrowed consumer remains Unsupported, and no qualified producer exists yet. Generic excerpts cannot complete latest-N mailbox or owner workflow requirements. The later paragraphs labelled current checkpoint describe historical prerequisites; [browser-read-execution.md](browser-read-execution.md) owns the current integration and remaining live proof boundaries.
+
 This M5 slice adds a typed, bounded semantic read behind the existing durable native action owner. The protected Settings document chooser remains metadata setup only. Pairing, Chrome permission, a saved scope, a page title and a model proposal are each insufficient to read page content. No browser API or page operation is exercised during source implementation.
 
 ## Authority and the durable owner

@@ -1,8 +1,8 @@
-//! Private accepted preparation consumer. No dispatch or page publication.
+//! Private accepted preparation and status/content publication coordinator.
 use super::*;
 use crate::connection::{self, SessionIdentity};
 use avesra_contracts::actors;
-use avesra_windows::browser_read_channel::{Offer, Withdrawal};
+use avesra_windows::browser_read_channel::{NativeEndpoint, Offer, Withdrawal};
 use std::path::PathBuf;
 
 #[derive(Default)]
@@ -19,6 +19,8 @@ struct Active {
     actor: Uuid,
     registration: Option<Uuid>,
     signal: Withdrawal,
+    admission: std::sync::Weak<Admission>,
+    endpoint: Option<NativeEndpoint>,
 }
 impl Coordinator {
     pub(super) fn invalidate(&self) {
@@ -66,12 +68,89 @@ impl Coordinator {
             actor,
             registration: None,
             signal,
+            admission: std::sync::Weak::new(),
+            endpoint: None,
         });
         Ok(Owner {
             slot: self.slot.clone(),
             id,
             generation: slot.generation,
         })
+    }
+    fn install(
+        &self,
+        admission: &Arc<Admission>,
+        endpoint: NativeEndpoint,
+    ) -> Result<(), ErrorCode> {
+        let mut slot = self.slot.lock().map_err(|_| ErrorCode::Unavailable)?;
+        if slot.generation != admission.owner.generation {
+            return Err(ErrorCode::Stale);
+        }
+        let active = slot
+            .active
+            .as_mut()
+            .filter(|v| v.id == admission.owner.id)
+            .ok_or(ErrorCode::Stale)?;
+        active.signal.remaining_ms()?;
+        if active.endpoint.is_some() {
+            return Err(ErrorCode::InvalidTransition);
+        }
+        active.admission = Arc::downgrade(admission);
+        endpoint.prepared();
+        active.endpoint = Some(endpoint);
+        Ok(())
+    }
+    /// Caller owns Runtime.local -> browser.inner; no disk/network operations.
+    pub(super) fn request(
+        &self,
+        state: &Runtime,
+        local: &avesra_core::state::LocalState,
+        inner: &Inner,
+    ) -> Result<Option<browser::reading::Request>, ErrorCode> {
+        let admission = self
+            .slot
+            .lock()
+            .map_err(|_| ErrorCode::Unavailable)?
+            .active
+            .as_ref()
+            .and_then(|v| v.admission.upgrade());
+        let Some(admission) = admission else {
+            return Ok(None);
+        };
+        if admission.current_locked(state, local, inner).is_err() {
+            self.invalidate();
+            return Ok(None);
+        }
+        let mut slot = self.slot.lock().map_err(|_| ErrorCode::Unavailable)?;
+        let Some(active) = slot.active.as_mut().filter(|v| v.id == admission.owner.id) else {
+            return Ok(None);
+        };
+        active
+            .endpoint
+            .as_mut()
+            .map(NativeEndpoint::request)
+            .transpose()
+            .map(Option::flatten)
+    }
+    pub(super) fn content(
+        &self,
+        content: avesra_windows::browser_receive::Content,
+    ) -> Result<(), ErrorCode> {
+        let mut slot = self.slot.lock().map_err(|_| ErrorCode::Unavailable)?;
+        if let Some(endpoint) = slot.active.as_mut().and_then(|v| v.endpoint.as_mut()) {
+            endpoint.content(content)?;
+        }
+        Ok(())
+    }
+    pub(super) fn settled(
+        &self,
+        proof: &avesra_windows::browser_receive::Settlement,
+    ) -> Result<(), ErrorCode> {
+        let mut slot = self.slot.lock().map_err(|_| ErrorCode::Unavailable)?;
+        if let Some(endpoint) = slot.active.as_mut().and_then(|v| v.endpoint.as_mut()) {
+            endpoint.settled(proof)?;
+        }
+        Ok(())
     }
 }
 struct Owner {
@@ -137,6 +216,15 @@ impl Admission {
             .inner
             .lock()
             .map_err(|_| ErrorCode::Unavailable)?;
+        self.current_locked(&state, &local, &inner)
+    }
+    fn current_locked(
+        &self,
+        state: &Runtime,
+        local: &avesra_core::state::LocalState,
+        inner: &Inner,
+    ) -> Result<(), ErrorCode> {
+        self.signal.remaining_ms()?;
         if !inner.action_allowed
             || inner.action_epoch != self.session.action_epoch
             || !local.enrolled
@@ -156,7 +244,7 @@ impl Admission {
         {
             return Err(ErrorCode::Stale);
         }
-        self.target.current(&state, &local, &inner, &self.signal)?;
+        self.target.current(state, local, inner, &self.signal)?;
         self.owner.current()
     }
 }
@@ -335,11 +423,19 @@ pub(super) fn start(app: tauri::AppHandle) -> Result<(), ErrorCode> {
                     .target
                     .request(offer.permit(), offer.remaining_ms()?)?;
                 let expected = binding.clone();
-                offer.complete(
+                let admission = inspector.admission.clone();
+                let owned_app = inspector.app.clone();
+                let endpoint = offer.complete(
                     request,
                     binding,
                     Box::new(move || inspector.current(&expected)),
-                )
+                )?;
+                admission.current(&owned_app)?;
+                owned_app
+                    .state::<Runtime>()
+                    .browser
+                    .reading
+                    .install(&admission, endpoint)
             })
             .await;
             waiter.completed = matches!(result, Ok(Ok(())));

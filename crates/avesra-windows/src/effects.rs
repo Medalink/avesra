@@ -270,6 +270,34 @@ struct Job {
     session: DispatchSession,
     cancellation: Cancellation,
     reply: SyncSender<Result<ExecutionReceipt, ErrorCode>>,
+    read_consumer: Option<ReadConsumer>,
+}
+/// Runs on the actual worker with the borrowed read and native reservation held.
+/// C5 supplies the concrete accepted-task consumer; no webview callback exists.
+pub type ReadConsumer = Box<
+    dyn for<'a, 'store> FnOnce(
+            crate::browser_receive::ReadReply<'a, 'store>,
+        ) -> Result<(), ErrorCode>
+        + Send,
+>;
+/// Losing the original native caller withdraws immediately, independently of
+/// the worker's Store/Chrome cleanup. This owner never releases worker resources.
+pub struct ExecutionWaiter {
+    receive: Receiver<Result<ExecutionReceipt, ErrorCode>>,
+    cancellation: Cancellation,
+}
+impl ExecutionWaiter {
+    pub fn receive(
+        &self,
+        timeout: std::time::Duration,
+    ) -> Result<Result<ExecutionReceipt, ErrorCode>, mpsc::RecvTimeoutError> {
+        self.receive.recv_timeout(timeout)
+    }
+}
+impl Drop for ExecutionWaiter {
+    fn drop(&mut self) {
+        self.cancellation.cancel();
+    }
 }
 /// Native publication proof with continuous source withdrawal ownership.
 /// No Clone/Deserialize; normal output must consume this instead of StoredReply.
@@ -329,8 +357,10 @@ fn planner_current(
 }
 struct Active {
     step: Uuid,
+    actor: Uuid,
     cancellation: Cancellation,
     conversation: Option<CancellationTarget>,
+    registration: Option<(Uuid, Uuid)>,
 }
 struct BrowserCompletion {
     proof: crate::browser_receive::Settlement,
@@ -375,6 +405,180 @@ fn settle_browser(
     }
     recovery.retire()
 }
+fn active_completion(
+    execution: &mut avesra_core::browser_execution::ReadExecution<'_>,
+    preparation: &crate::browser_read_channel::WorkerPreparation,
+    lease: &mut Option<avesra_core::browser_execution::MarkerLease>,
+    receive: &Receiver<BrowserCompletion>,
+) -> Result<bool, ErrorCode> {
+    let Ok(completion) = receive.try_recv() else {
+        return Ok(false);
+    };
+    let own = lease
+        .as_ref()
+        .is_some_and(|v| v.context() == completion.proof.context());
+    let result = if own {
+        preparation.close_publication();
+        execution.retire_published(lease.take().ok_or(ErrorCode::Stale)?)
+    } else {
+        execution
+            .retirement(completion.proof.context())
+            .and_then(|v| v.ok_or(ErrorCode::Stale))
+    };
+    let succeeded = result.is_ok();
+    let _ = completion.reply.try_send(result);
+    if own && !succeeded {
+        return Err(ErrorCode::Storage);
+    }
+    Ok(own)
+}
+fn execute_read(
+    controller: &mut ExecutionController,
+    apps: &avesra_core::apps::AppCatalog,
+    owner: &crate::browser_read_channel::WorkerOwner,
+    completions: &Receiver<BrowserCompletion>,
+    state: &Mutex<State>,
+    job: &mut Job,
+) -> Result<ExecutionReceipt, ErrorCode> {
+    let mut execution = controller.begin_browser_read(job.step, &job.session, &job.cancellation)?;
+    let Some(consumer) = job.read_consumer.take() else {
+        let permit = execution.permit();
+        let receipt = ExecutionReceipt {
+            dispatch_id: permit.dispatch_id,
+            target_id: permit.action.target_id,
+            action_revision: permit.action.revision,
+            outcome: Outcome::Unsupported,
+            crossed_commit_boundary: false,
+            observation: None,
+        };
+        execution.finish_unpublished(None, Outcome::Unsupported)?;
+        return Ok(receipt);
+    };
+    let mut preparation = match owner.offer(&mut execution) {
+        Ok(value) => value,
+        Err(error) => {
+            execution.finish_unpublished(None, Outcome::Failed)?;
+            return Err(error);
+        }
+    };
+    let mut lease = None;
+    let prepared = loop {
+        active_completion(&mut execution, &preparation, &mut lease, completions)?;
+        if execution.remaining_ms().is_err() {
+            break Err(ErrorCode::Stale);
+        }
+        match preparation.try_prepared() {
+            Ok(Some(value)) => break Ok(value),
+            Err(error) => break Err(error),
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),
+        }
+    };
+    let prepared = match prepared {
+        Ok(value) => value,
+        Err(error) => {
+            preparation.withdraw();
+            // A dropped waiter never releases a still-running native inspection.
+            while !preparation.finished() {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            execution.finish_unpublished(None, Outcome::Cancelled)?;
+            preparation.release()?;
+            return Err(error);
+        }
+    };
+    let (request, binding, mut current) = prepared.into_parts();
+    let authorize = (|| {
+        let record = apps.get(request.context.browser_app.id.uuid())?;
+        if record.revision != request.context.browser_app.revision.uuid()
+            || record.selected_by != request.context.actor.uuid()
+        {
+            return Err(ErrorCode::Stale);
+        }
+        {
+            let mut state = state.lock().map_err(|_| ErrorCode::Unavailable)?;
+            let active = state
+                .active
+                .as_mut()
+                .filter(|v| v.step == job.step)
+                .ok_or(ErrorCode::Stale)?;
+            if active.cancellation.is_cancelled() {
+                return Err(ErrorCode::Stale);
+            }
+            active.registration = Some((binding.actor, binding.registration_revision));
+        }
+        execution.authorize(request, &mut current)
+    })();
+    let permit = match authorize {
+        Ok((marker, permit)) => {
+            lease = Some(marker);
+            permit
+        }
+        Err(error) => {
+            preparation.withdraw();
+            while !preparation.finished() {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            drop(current);
+            execution.finish_unpublished(None, Outcome::Failed)?;
+            preparation.release()?;
+            return Err(error);
+        }
+    };
+    let publication = preparation.publish(permit);
+    let mut settled = false;
+    let mut content = None;
+    let result = (|| {
+        publication?;
+        loop {
+            match active_completion(&mut execution, &preparation, &mut lease, completions) {
+                Ok(value) => settled |= value,
+                Err(error) => break Err(error),
+            }
+            if content.is_none() {
+                match preparation.try_content() {
+                    Ok(value) => content = value,
+                    Err(error) => break Err(error),
+                }
+            }
+            if settled && content.is_some() {
+                let borrowed = content
+                    .take()
+                    .ok_or(ErrorCode::Stale)?
+                    .finalize(&mut execution, &mut current)?;
+                consumer(borrowed)?;
+                break execution.completed_receipt();
+            }
+            if execution.remaining_ms().is_err() {
+                preparation.close_publication();
+                preparation.withdraw();
+                if settled || !execution.possibly_published() || preparation.native_lost() {
+                    break Err(ErrorCode::Stale);
+                }
+            }
+            if preparation.native_lost() {
+                break Err(ErrorCode::Unavailable);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    })();
+    preparation.close_publication();
+    while !preparation.finished() {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    drop(current);
+    if !execution.possibly_published() {
+        execution.finish_unpublished(lease, Outcome::Cancelled)?;
+        preparation.release()?;
+    } else {
+        // A missing receipt keeps the exact resource word closed and the durable
+        // marker uncertain. Idle recovery alone may later retire actual proof.
+        drop(execution);
+        if settled {
+            preparation.release()?;
+        }
+    }
+    result
+}
 /// Thread lifetime owns admission, including after receiver timeout/drop. Target
 /// records are immutable for its lifetime; replacement requires a new worker.
 pub struct NativeEffects {
@@ -416,9 +620,7 @@ impl NativeEffects {
             .spawn(move || {
                 let _ownership = ownership;
                 let _browser_lifetime = BrowserWorkerLifetime(owned_browser.clone());
-                // Kept inside the actual owner. No offers are sent until the
-                // specialized dispatch/current-authority path is integrated.
-                let _browser_preparation_owner = browser_preparation_owner;
+                // The preparation sender stays on this actual Store owner.
                 let Ok(store) = Store::open(&path) else {
                     return;
                 };
@@ -440,7 +642,7 @@ impl NativeEffects {
                 };
                 while let Ok(command) = receive.recv() {
                     // This dedicated mailbox is also the completion input for
-                    // the future active ReadExecution loop. Never queue its
+                    // the active ReadExecution loop. Never queue its
                     // settlement behind a worker waiting for that same browser.
                     if let Ok(completion) = browser_receive.try_recv() {
                         let mut result = settle_browser(controller.management(), completion.proof);
@@ -458,7 +660,7 @@ impl NativeEffects {
                         }
                         let _ = completion.reply.try_send(result);
                     }
-                    let job = match command {
+                    let mut job = match command {
                         Command::BrowserCompletionWake => continue,
                         Command::RetirePlanner { retirement, reply } => {
                             let target = retirement.target();
@@ -653,7 +855,23 @@ impl NativeEffects {
                             Ok(())
                         });
                     let result = binding.and_then(|()| {
-                        controller.execute(job.step, &job.session, &job.cancellation, &mut adapter)
+                        if controller.management().action_is_browser_read(job.step)? {
+                            execute_read(
+                                &mut controller,
+                                &adapter.apps,
+                                &browser_preparation_owner,
+                                &browser_receive,
+                                &owned,
+                                &mut job,
+                            )
+                        } else {
+                            controller.execute(
+                                job.step,
+                                &job.session,
+                                &job.cancellation,
+                                &mut adapter,
+                            )
+                        }
                     });
                     // Ownership ends only after native calls AND durable finalization
                     // have returned. A dropped receiver cannot overlap another job.
@@ -741,6 +959,12 @@ impl NativeEffects {
     /// Protected native actor-management withdrawal; no durable history mutation.
     pub fn revoke_reply_registration(&self, actor: Uuid, revision: Uuid) {
         if let Ok(state) = self.state.lock() {
+            if let Some(active) = &state.active
+                && active.actor == actor
+                && active.registration.is_none_or(|v| v == (actor, revision))
+            {
+                active.cancellation.cancel();
+            }
             for source in &state.replies {
                 if source.target.actor == actor && source.registration == revision {
                     source.signal.cancel();
@@ -1003,7 +1227,8 @@ impl NativeEffects {
         &self,
         step: Uuid,
         session: DispatchSession,
-    ) -> Result<Receiver<Result<ExecutionReceipt, ErrorCode>>, ErrorCode> {
+        read_consumer: Option<ReadConsumer>,
+    ) -> Result<ExecutionWaiter, ErrorCode> {
         let mut state = self.state.lock().map_err(|_| ErrorCode::Unavailable)?;
         if !state.allowed
             || session.capture_epoch == 0
@@ -1019,23 +1244,29 @@ impl NativeEffects {
         let (reply, receive) = mpsc::sync_channel(1);
         state.active = Some(Active {
             step,
+            actor: session.actor_id,
             cancellation: cancellation.clone(),
             conversation: None,
+            registration: None,
         });
         if self
             .send
             .try_send(Command::Execute(Job {
                 step,
                 session,
-                cancellation,
+                cancellation: cancellation.clone(),
                 reply,
+                read_consumer,
             }))
             .is_err()
         {
             state.active = None;
             return Err(ErrorCode::Unavailable);
         }
-        Ok(receive)
+        Ok(ExecutionWaiter {
+            receive,
+            cancellation,
+        })
     }
     /// Invalidates in-flight admission before queuing a permission/intent change.
     /// Its durable mutation waits for the same owner; a blocked OS call cannot

@@ -157,6 +157,7 @@ pub struct ReadExecution<'a> {
     phase: Arc<AtomicU8>,
     finished: bool,
     finalization_attempted: bool,
+    observation: Option<EffectObservation>,
 }
 impl<'a> ReadExecution<'a> {
     pub(crate) fn begin(
@@ -202,10 +203,31 @@ impl<'a> ReadExecution<'a> {
             phase: Arc::new(AtomicU8::new(NO_PERMIT)),
             finished: false,
             finalization_attempted: false,
+            observation: None,
         })
     }
     pub fn permit(&self) -> &DispatchPermit {
         &self.permit
+    }
+    pub fn possibly_published(&self) -> bool {
+        matches!(
+            self.phase.load(Ordering::SeqCst),
+            POSSIBLY_PUBLISHED | SETTLED
+        )
+    }
+    pub fn completed_receipt(&self) -> Result<crate::execution::ExecutionReceipt, ErrorCode> {
+        self.content_current()?;
+        if !self.finished || self.observation.is_none() {
+            return Err(ErrorCode::InvalidTransition);
+        }
+        Ok(crate::execution::ExecutionReceipt {
+            dispatch_id: self.permit.dispatch_id,
+            target_id: self.permit.action.target_id,
+            action_revision: self.permit.action.revision,
+            outcome: Outcome::Success,
+            crossed_commit_boundary: true,
+            observation: self.observation.clone(),
+        })
     }
     /// The sole worker transfers this once into its native preparation channel.
     /// Failed delivery/expiry does not permit a replacement preparation attempt.
@@ -422,6 +444,7 @@ impl<'a> ReadExecution<'a> {
             }),
         )?;
         self.finished = true;
+        self.observation = Some(observation);
         // Withdrawal may race commit. Preserve immutable history but withhold
         // the native transient handle when withdrawal wins this later check.
         self.content_current()

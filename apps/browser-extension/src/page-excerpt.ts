@@ -1,5 +1,5 @@
-// Fixed functions for future chrome.scripting ISOLATED injection. No caller,
-// manifest activation or page-facing message route is registered by this module.
+// Bundled fixed functions serialized into the exact document's ISOLATED world.
+// No page-facing command or caller-selected code is accepted.
 type Guard = {
   request: string; url: string; deadline: number; revision: number; settled: boolean;
   current(): boolean; finish(): boolean;
@@ -7,18 +7,23 @@ type Guard = {
 type Realm = typeof globalThis & { __avesraReadGuard1?: Guard };
 export type ReadParameters = { request: string; url: string; maxBlocks: number; budgetMs: number };
 export type Extracted = { started: true; state: "excerpt"; dom_revision: number; title: string; blocks: string[]; truncated: boolean; excluded_content: boolean }
-  | { started: boolean; state: "empty" | "changed" | "unavailable" };
+  | { started: true; state: "empty"; dom_revision: number }
+  | { started: true; state: "changed" | "unavailable" }
+  | { started: false; state: "unavailable"; request: string; url: string; guard_absent: true }
+  | { started: "unknown"; state: "unavailable" };
 
 // Must remain self-contained: Chrome serializes this function, not imports.
 export function beginPageExcerpt(input: ReadParameters): Extracted {
   const realm = globalThis as Realm;
+  // A same-request tombstone is still owned work. It never proves absence.
+  if (realm.__avesraReadGuard1) return { started: "unknown", state: "unavailable" };
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(input.request) ||
     input.request === "00000000-0000-0000-0000-000000000000" ||
     typeof input.url !== "string" || input.url.length > 2048 || location.href !== input.url ||
     location.protocol !== "https:" || self !== top || document.contentType !== "text/html" || document.readyState !== "complete" ||
     !Number.isSafeInteger(input.maxBlocks) || input.maxBlocks < 1 || input.maxBlocks > 16 ||
     !Number.isSafeInteger(input.budgetMs) || input.budgetMs < 1 || input.budgetMs > 10_000 ||
-    realm.__avesraReadGuard1 || !document.body) return { started: false, state: "unavailable" };
+    !document.body) return { started: false, state: "unavailable", request: input.request, url: input.url, guard_absent: true };
 
   // Separate closure scope: no extracted text/arrays live in retained callbacks.
   function ownGuard(request: string, url: string, lifetime: number): Guard {
@@ -141,7 +146,7 @@ export function beginPageExcerpt(input: ReadParameters): Extracted {
     truncated = true;
   }
   if (performance.now() >= cutoff || !guard.current()) { guard.finish(); return { started: true, state: "changed" }; }
-  if (!blocks.length) return { started: true, state: "empty" };
+  if (!blocks.length) return { started: true, state: "empty", dom_revision: guard.revision };
   // Generic excerpts do not collect a title; URL/document provenance is separate.
   const title = "";
   if (performance.now() >= cutoff || !guard.current()) { guard.finish(); return { started: true, state: "changed" }; }

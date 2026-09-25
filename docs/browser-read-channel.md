@@ -1,5 +1,7 @@
 # Native accepted-read channel
 
+Current source integration is described in [browser-read-execution.md](browser-read-execution.md): the actual worker now routes claimed ReadPage work through the private paired publication/content endpoints, services its own settlement mailbox, and retains the reservation through synchronous borrowed consumption. Missing accepted-task consumers remain Unsupported before preparation. There is still no qualified voice/browser task producer or live browser qualification. The staged prerequisite descriptions below are historical development boundaries, not additional alternate routes.
+
 This implements the ownership contract in [browser-reading.md](browser-reading.md). The target registry is immutable setup metadata. The next channel connects the already claimed native action to that registry and the existing authenticated receive owner; it introduces no webview read command, caller-built Request admission, reconstructed history handle, or qualified accepted producer. Source implementation remains uninvoked under the current no-tests/no-computer-use restriction.
 
 ## Concrete owners and admission

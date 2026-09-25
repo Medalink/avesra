@@ -60,6 +60,26 @@ fn sql<T>(value: rusqlite::Result<T>) -> Result<T, ErrorCode> {
 }
 
 impl Store {
+    /// Bounded routing metadata only; the selected execution path must claim
+    /// and independently authorize the actual immutable action afterward.
+    pub fn action_is_browser_read(&self, step: Uuid) -> Result<bool, ErrorCode> {
+        if step.is_nil() {
+            return Err(ErrorCode::Malformed);
+        }
+        let (body, length): (String, i64) = sql(self.connection.query_row(
+            "SELECT substr(a.body,1,32769),length(CAST(a.body AS BLOB)) FROM action_heads h JOIN action_revisions a ON a.revision=h.revision WHERE h.step_id=?1",
+            [step.to_string()], |row| Ok((row.get(0)?, row.get(1)?)),
+        ))?;
+        if !(1..=32768).contains(&length) {
+            return Err(ErrorCode::Malformed);
+        }
+        let action: Action = decode(&body)?;
+        action.validate(action.issued_at_ms)?;
+        if action.step_id != step {
+            return Err(ErrorCode::Malformed);
+        }
+        Ok(matches!(action.payload, ActionPayload::ReadPage { .. }))
+    }
     /// Historical evidence only. Never authorizes a new effect or claims that a
     /// process/window is still present. Use the existing ledger owner.
     pub fn last_app_success(

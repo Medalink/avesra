@@ -49,7 +49,14 @@ pub enum DirectedIntent {
         adapter_revision: String,
         utterance: Uuid,
         context: Context,
+        kind: DirectedKind,
     },
+}
+/// A qualified adapter distinguishes complete requests from contextual replies.
+/// This classification is evidence, never speaker or action authority.
+pub enum DirectedKind {
+    Request,
+    FollowUp,
 }
 pub struct Observation {
     pub utterance: Uuid,
@@ -228,6 +235,7 @@ impl TurnGate {
             || !observation.context.valid()
             || observation.utterance.is_nil()
             || observation.transcript.len() > 8192
+            || observation.transcript.trim().is_empty()
             || observation
                 .embedding
                 .as_ref()
@@ -312,13 +320,14 @@ impl TurnGate {
                 }
             }
         }
-        match observation.directed {
+        let directed_kind = match observation.directed {
             DirectedIntent::Unknown => return reject(Abstention::DirectednessUnknown),
             DirectedIntent::Rejected => return reject(Abstention::NotAddressed),
             DirectedIntent::Directed {
                 adapter_revision,
                 utterance,
                 context,
+                kind,
             } => {
                 if adapter_revision != profile.directed_adapter_revision
                     || utterance != observation.utterance
@@ -326,8 +335,9 @@ impl TurnGate {
                 {
                     return reject(Abstention::DirectednessUnknown);
                 }
+                kind
             }
-        }
+        };
         match observation.overlap {
             AudioCondition::Unknown => return reject(Abstention::OverlapUnknown),
             AudioCondition::Detected => return reject(Abstention::Overlap),
@@ -358,17 +368,6 @@ impl TurnGate {
             return reject(Abstention::UnknownSpeaker);
         }
         let text = observation.transcript.trim();
-        let addressed = text
-            .get(..6)
-            .is_some_and(|name| name.eq_ignore_ascii_case("avesra"))
-            && text.get(6..).is_some_and(|rest| {
-                rest.starts_with(|c: char| c.is_whitespace() || matches!(c, ',' | ':' | '!' | '.'))
-                    && !rest
-                        .trim_matches(|c: char| {
-                            c.is_whitespace() || matches!(c, ',' | ':' | '!' | '.')
-                        })
-                        .is_empty()
-            });
         let follow = follow_up.is_some_and(|invitation| {
             invitation.context == *current
                 && invitation.profile_revision == profile.candidate.revision
@@ -379,7 +378,9 @@ impl TurnGate {
                     .iter()
                     .any(|choice| *choice == text.to_lowercase())
         });
-        if !addressed && !follow {
+        // Name prefixes never prove directedness. A complete request relies on
+        // the qualified adapter above; contextual replies need its invitation.
+        if matches!(directed_kind, DirectedKind::FollowUp) && !follow {
             return reject(Abstention::NotAddressed);
         }
         Decision::Accepted(Box::new(AcceptedConversation {

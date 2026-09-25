@@ -865,6 +865,7 @@ async fn run(
             })?;
             let incoming = pipe.receive().await?;
             with_attempt(app, id, generation, |_, _, _| Ok(()))?;
+            let mut received_content = None;
             let message = match incoming {
                 avesra_windows::browser_receive::Incoming::Message(message) => message,
                 avesra_windows::browser_receive::Incoming::Content {
@@ -873,9 +874,7 @@ async fn run(
                     observation_revision,
                     content,
                 } => {
-                    // No live publication/result channel exists yet. Consume the
-                    // envelope without exposing authenticated raw page evidence.
-                    drop(content);
+                    received_content = Some(content);
                     Client::Poll {
                         session,
                         sequence,
@@ -888,6 +887,9 @@ async fn run(
                     observation_revision,
                     proof,
                 } => {
+                    // Stop advertisement before handing retirement to SQL, but
+                    // retain original content authority for an already-sent reply.
+                    app.state::<Runtime>().browser.reading.settled(&proof)?;
                     if let Some((context, _)) = &settlement {
                         if context != proof.context() {
                             return Err(ErrorCode::Unavailable);
@@ -983,6 +985,11 @@ async fn run(
                     Ok(())
                 })?;
             }
+            if let Some(content) = received_content {
+                // Apply the envelope's observation withdrawal before the worker
+                // can receive/finalize content from that same complete frame.
+                app.state::<Runtime>().browser.reading.content(content)?;
+            }
             let message = match message {
                 Client::ReadResult {
                     session,
@@ -991,7 +998,7 @@ async fn run(
                     reply,
                 } => {
                     // A well-formed unsolicited/withdrawn result cannot create
-                    // native ownership. There is no active read publication yet.
+                    // native ownership. Actual Content uses the opaque channel.
                     reply.context.validate()?;
                     Client::Poll {
                         session,
@@ -1140,10 +1147,33 @@ async fn run(
                             }
                         }
                     }
-                    let status = with_attempt(app, id, generation, |state, local, attempt| {
+                    let status = {
+                        let state = app.state::<Runtime>();
+                        let local = state.local.lock().map_err(|_| ErrorCode::Unavailable)?;
+                        let inner = state
+                            .browser
+                            .inner
+                            .lock()
+                            .map_err(|_| ErrorCode::Unavailable)?;
+                        if inner.generation != generation || local.locked || !local.connected {
+                            return Err(ErrorCode::Stale);
+                        }
+                        let attempt = inner.attempt.as_ref().ok_or(ErrorCode::Stale)?;
+                        if attempt.id != id
+                            || attempt.connection
+                                != state.connection_generation.load(Ordering::SeqCst)
+                            || !attempt.current_time()
+                        {
+                            return Err(ErrorCode::Stale);
+                        }
+                        let read = if authenticated && attempt.selection.is_some() {
+                            state.browser.reading.request(&state, &local, &inner)?
+                        } else {
+                            None
+                        };
                         let value = browser::StatusReply {
                             version: browser::VERSION,
-                            read: None,
+                            read: read.clone(),
                             read_ack: read_ack.clone(),
                             session: challenge.session,
                             generation,
@@ -1162,11 +1192,14 @@ async fn run(
                                         && !local.settings.paused,
                                 },
                             ),
-                            document: if authenticated && attempt.selection.is_some() {
+                            document: if read.is_none()
+                                && authenticated
+                                && attempt.selection.is_some()
+                            {
                                 state
                                     .browser
                                     .documents
-                                    .request(state, local, generation, attempt)?
+                                    .request(&state, &local, generation, attempt)?
                             } else {
                                 None
                             },
@@ -1174,19 +1207,16 @@ async fn run(
                                 state
                                     .browser
                                     .scopes
-                                    .status(state, local, generation, attempt)?
+                                    .status(&state, &local, generation, attempt)?
                             } else {
                                 None
                             },
                         };
                         value.validate()?;
-                        Ok(value)
-                    })?;
-                    pipe.send(
-                        &serde_json::to_vec(&serde_json::json!({"type":"status","body":status}))
-                            .map_err(|_| ErrorCode::Malformed)?,
-                    )
-                    .await?;
+                        serde_json::to_vec(&serde_json::json!({"type":"status","body":value}))
+                            .map_err(|_| ErrorCode::Malformed)?
+                    };
+                    pipe.send(&status).await?;
                 }
                 _ => return Err(ErrorCode::Malformed),
             }

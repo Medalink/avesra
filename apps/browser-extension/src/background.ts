@@ -1,6 +1,7 @@
 import * as p from "./protocol.js";
 import { ObservationAuthority } from "./authority.js";
 import { Documents } from "./documents.js";
+import { ReadJob, acknowledgeRead, pendingSettlement } from "./read-job.js";
 import { PermissionProposal, view } from "./permissions.js";
 let port: chrome.runtime.Port | null = null;
 let generation = 0;
@@ -16,10 +17,12 @@ let poll: ReturnType<typeof setTimeout> | undefined;
 let observation: ObservationAuthority | null = null;
 let permissions: PermissionProposal | null = null;
 let documents: Documents | null = null;
+let reading: ReadJob | null = null;
 let scopeOutcome: p.Scope | null = null;
 function current(owned: chrome.runtime.Port, epoch: number) { return owned === port && generation === epoch; }
 function close(reason: string, owned = port, epoch = generation, unavailable = false) {
   if (owned !== port || epoch !== generation) return;
+  reading?.dispose(); reading = null;
   documents?.dispose(); documents = null;
   permissions?.dispose(); permissions = null; scopeOutcome = null;
   observation?.dispose(); observation = null;
@@ -46,6 +49,9 @@ async function connect() {
     permissions = scopes;
     const metadata = new Documents(authority, () => current(owned, epoch), () => close("Document observation revision exhausted; reconnect explicitly.", owned, epoch, true));
     documents = metadata;
+    const reads = new ReadJob(authority, () => current(owned, epoch), () => metadata.observationRevision(),
+      () => close("Browser read cleanup unavailable; resource ownership retained.", owned, epoch, true));
+    reading = reads;
     let challenge: p.Challenge | null = null, handling = false, waiting = true, sequence = 0;
     let nativeGeneration: number | null = null;
     let phase: "challenge" | "pending" | "proof" | "authenticated" = "challenge";
@@ -58,6 +64,12 @@ async function connect() {
       poll = setTimeout(() => {
         if (!current(owned, epoch) || !challenge || waiting || handling) return;
         if (!p.counter(sequence + 1)) { close("Browser sequence exhausted", owned, epoch, true); return; }
+        if (phase === "authenticated" && record) {
+          const reply = reads.takeReply();
+          if (reply) { send({type:"read_result",body:{session:challenge.session,sequence:++sequence,observation_revision:metadata.observationRevision(),reply}}); return; }
+          const settlement = pendingSettlement(record.pairing);
+          if (settlement) { send({type:"read_settlement",body:{session:challenge.session,sequence:++sequence,observation_revision:metadata.observationRevision(),settlement}}); return; }
+        }
         const result = metadata.takeReply();
         if (result) { send({type:"document_result",body:{session:challenge.session,sequence:++sequence,reply:result}}); return; }
         const decision = scopes.takeDecision();
@@ -104,13 +116,13 @@ async function connect() {
           if (!challenge || status.session !== challenge.session || status.sequence !== sequence || !["pending", "authenticated"].includes(phase) || status.state !== (phase === "authenticated" ? "authenticated_no_scopes" : "pending") || (nativeGeneration !== null && status.generation !== nativeGeneration)) throw new Error("Native status mismatch");
           if (nativeGeneration === null) nativeGeneration = status.generation;
           if (phase === "authenticated") {
-            // The native worker channel is not admitted in this wire checkpoint.
-            // Never silently accept a read that this build cannot own/settle.
-            if (status.read !== null) throw new Error("Accepted browser reads are unavailable");
-            // No settlement outbox exists yet; unrelated acknowledgements confer
-            // no authority and do not release the module-global Chrome job.
+            if (!record) throw new Error("Authenticated pairing missing");
             authority.observe(status.authority);
+            acknowledgeRead(status.read_ack, record.pairing);
             metadata.observe(status.document,status.session,status.generation);
+            // Starts a retained independent promise chain; control polling stays
+            // responsive and no popup/setup route can supply a read request.
+            reads.observe(status.read,status.session,status.generation,record.pairing);
             scopes.observe(status);
             scopeOutcome = status.scope;
             void scopes.reconcile();
@@ -170,7 +182,7 @@ chrome.permissions.onAdded.addListener(() => { void permissions?.reconcile(); })
 chrome.permissions.onRemoved.addListener(() => { close("Browser permission removed; connection authority withdrawn.", port, generation, true); });
 
 // These listeners only invalidate in-memory ownership; no page data is retained.
-const invalidateDocuments = () => documents?.invalidate();
+const invalidateDocuments = () => { reading?.invalidate(); documents?.invalidate(); };
 chrome.webNavigation.onBeforeNavigate.addListener(invalidateDocuments);
 chrome.webNavigation.onCommitted.addListener(invalidateDocuments);
 chrome.webNavigation.onErrorOccurred.addListener(invalidateDocuments);

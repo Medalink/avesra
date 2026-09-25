@@ -1,12 +1,12 @@
-//! Dormant preparation plumbing. Only the actual worker owns a sender/token;
-//! metadata returned by the native consumer still needs ReadExecution.authorize.
+//! Actual-worker preparation, publication and authenticated content handoff.
+//! Metadata from the native consumer still needs ReadExecution.authorize.
 use avesra_contracts::{ErrorCode, actors::Binding, browser::reading::Request};
 use avesra_core::{
-    browser_execution::{Preparation, ReadExecution},
+    browser_execution::{Preparation, PublicationPermit, PublishedRequest, ReadExecution},
     ledger::DispatchPermit,
 };
 use std::sync::{
-    Arc,
+    Arc, Mutex,
     atomic::{AtomicBool, AtomicU64, Ordering},
     mpsc::{self, Receiver, SyncSender},
 };
@@ -35,6 +35,16 @@ struct Shared {
     // 0: unreserved; MAX: failed/in-progress; otherwise exact blocked word.
     reservation: AtomicU64,
     finished: AtomicBool,
+    native_lost: AtomicBool,
+    publication: Mutex<Publication>,
+}
+#[derive(Default)]
+struct Publication {
+    context: Option<avesra_contracts::browser::reading::Context>,
+    held: Option<PublicationPermit>,
+    published: Option<PublishedRequest>,
+    terminal: bool,
+    attempted: bool,
 }
 impl Shared {
     fn current(&self) -> Result<u64, ErrorCode> {
@@ -56,6 +66,83 @@ pub struct Offer {
     shared: Arc<Shared>,
     reply: Option<SyncSender<Prepared>>,
     completed: bool,
+    content: Option<SyncSender<crate::browser_receive::Content>>,
+}
+/// Paired endpoint from the original Offer. No raw reply or context constructor.
+pub struct NativeEndpoint {
+    shared: Arc<Shared>,
+    content: Option<SyncSender<crate::browser_receive::Content>>,
+}
+impl NativeEndpoint {
+    /// Last operation of the actual native preparation job, after installation.
+    pub fn prepared(&self) {
+        self.shared.finished.store(true, Ordering::SeqCst);
+    }
+    /// Call under the exact native current-context lock immediately before status.
+    pub fn request(&mut self) -> Result<Option<Request>, ErrorCode> {
+        self.shared.current()?;
+        self.shared.reserved()?;
+        let mut slot = self
+            .shared
+            .publication
+            .lock()
+            .map_err(|_| ErrorCode::Unavailable)?;
+        if slot.terminal {
+            return Ok(None);
+        }
+        if let Some(permit) = slot.held.take() {
+            slot.published = Some(permit.publish()?);
+        }
+        slot.published
+            .as_ref()
+            .map(PublishedRequest::request)
+            .transpose()
+    }
+    /// Actual authenticated proof stops advertising before retirement/ack.
+    /// Already-sent content remains eligible under its original authority.
+    pub fn settled(&mut self, proof: &crate::browser_receive::Settlement) -> Result<(), ErrorCode> {
+        let mut slot = self
+            .shared
+            .publication
+            .lock()
+            .map_err(|_| ErrorCode::Unavailable)?;
+        if slot.context.as_ref() == Some(proof.context()) {
+            slot.terminal = true;
+            slot.held.take();
+            slot.published.take();
+        }
+        Ok(())
+    }
+    pub fn content(&mut self, value: crate::browser_receive::Content) -> Result<(), ErrorCode> {
+        if self.shared.current().is_err() {
+            return Ok(());
+        }
+        let slot = self
+            .shared
+            .publication
+            .lock()
+            .map_err(|_| ErrorCode::Unavailable)?;
+        if slot.context.as_ref() != Some(value.context()) {
+            return Ok(());
+        }
+        drop(slot);
+        if let Some(send) = self.content.take() {
+            send.try_send(value).map_err(|_| ErrorCode::Unavailable)?;
+        }
+        Ok(())
+    }
+}
+impl Drop for NativeEndpoint {
+    fn drop(&mut self) {
+        self.shared.finished.store(true, Ordering::SeqCst);
+        self.shared.native_lost.store(true, Ordering::SeqCst);
+        self.shared.preparation.withdraw();
+        if let Ok(mut slot) = self.shared.publication.lock() {
+            slot.terminal = true;
+            slot.held.take();
+            slot.published.take();
+        }
+    }
 }
 /// Cloneable withdrawal only; cannot reserve, publish, settle or release.
 #[derive(Clone)]
@@ -87,6 +174,7 @@ impl Prepared {
 pub struct WorkerPreparation {
     shared: Arc<Shared>,
     receive: Receiver<Prepared>,
+    content: Receiver<crate::browser_receive::Content>,
     released: bool,
 }
 impl WorkerOwner {
@@ -101,12 +189,16 @@ impl WorkerOwner {
             resource: self.resource.clone(),
             reservation: AtomicU64::new(0),
             finished: AtomicBool::new(false),
+            native_lost: AtomicBool::new(false),
+            publication: Mutex::new(Publication::default()),
         });
         let (reply, receive) = mpsc::sync_channel(1);
+        let (content_send, content) = mpsc::sync_channel(1);
         let offer = Offer {
             shared: shared.clone(),
             reply: Some(reply),
             completed: false,
+            content: Some(content_send),
         };
         self.send
             .try_send(offer)
@@ -114,6 +206,7 @@ impl WorkerOwner {
         Ok(WorkerPreparation {
             shared,
             receive,
+            content,
             released: false,
         })
     }
@@ -189,7 +282,7 @@ impl Offer {
         mut request: Request,
         binding: Binding,
         current: Current,
-    ) -> Result<(), ErrorCode> {
+    ) -> Result<NativeEndpoint, ErrorCode> {
         self.shared.current()?;
         self.shared.reserved()?;
         avesra_core::browser_reading::validate_dispatch(&request, self.permit())?;
@@ -201,6 +294,11 @@ impl Offer {
             return Err(ErrorCode::Stale);
         }
         request.remaining_ms = request.remaining_ms.min(self.shared.current()?);
+        self.shared
+            .publication
+            .lock()
+            .map_err(|_| ErrorCode::Unavailable)?
+            .context = Some(request.context.clone());
         self.reply
             .take()
             .ok_or(ErrorCode::Stale)?
@@ -211,20 +309,60 @@ impl Offer {
             })
             .map_err(|_| ErrorCode::Unavailable)?;
         self.completed = true;
-        Ok(())
+        Ok(NativeEndpoint {
+            shared: self.shared.clone(),
+            content: self.content.take(),
+        })
     }
 }
 impl Drop for Offer {
     fn drop(&mut self) {
         if !self.completed {
             self.shared.preparation.withdraw();
+            self.shared.finished.store(true, Ordering::SeqCst);
         }
         // The consumer must retain Offer inside the actual preparation job.
         // Losing its async caller must not drop it ahead of blocking inspection.
-        self.shared.finished.store(true, Ordering::SeqCst);
+        // Successful preparation now includes installing the paired endpoint;
+        // its final operation (or failure Drop) acknowledges actual completion.
     }
 }
 impl WorkerPreparation {
+    pub(crate) fn publish(&self, permit: PublicationPermit) -> Result<(), ErrorCode> {
+        self.shared.current()?;
+        self.shared.reserved()?;
+        let mut slot = self
+            .shared
+            .publication
+            .lock()
+            .map_err(|_| ErrorCode::Unavailable)?;
+        if slot.terminal || slot.attempted || slot.context.is_none() {
+            return Err(ErrorCode::Stale);
+        }
+        slot.attempted = true;
+        slot.held = Some(permit);
+        Ok(())
+    }
+    pub(crate) fn close_publication(&self) {
+        if let Ok(mut slot) = self.shared.publication.lock() {
+            slot.terminal = true;
+            slot.held.take();
+            slot.published.take();
+        }
+    }
+    pub(crate) fn finished(&self) -> bool {
+        self.shared.finished.load(Ordering::SeqCst)
+    }
+    pub(crate) fn native_lost(&self) -> bool {
+        self.shared.native_lost.load(Ordering::SeqCst)
+    }
+    pub(crate) fn try_content(&self) -> Result<Option<crate::browser_receive::Content>, ErrorCode> {
+        match self.content.try_recv() {
+            Ok(value) => Ok(Some(value)),
+            Err(mpsc::TryRecvError::Empty) => Ok(None),
+            Err(mpsc::TryRecvError::Disconnected) => Err(ErrorCode::Unavailable),
+        }
+    }
     pub fn try_prepared(&self) -> Result<Option<Prepared>, ErrorCode> {
         match self.receive.try_recv() {
             Ok(prepared) => Ok(Some(prepared)),
