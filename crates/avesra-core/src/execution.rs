@@ -29,6 +29,8 @@ pub enum EffectObservation {
         process_id: Option<u32>,
         window: Option<u64>,
         image_matched: bool,
+        #[serde(default)]
+        focus_verified: Option<bool>,
     },
     Volume {
         before: VolumeLevel,
@@ -48,6 +50,7 @@ impl EffectObservation {
                 process_id,
                 window,
                 image_matched,
+                focus_verified,
             } => {
                 if action.payload
                     != (avesra_contracts::ActionPayload::LaunchApp { app_id: *app_id })
@@ -58,6 +61,7 @@ impl EffectObservation {
                     || (window.is_some() && (!image_matched || process_id.is_none()))
                     || (outcome == Outcome::Success
                         && (window.is_none() || process_id.is_none() || !image_matched))
+                    || (outcome == Outcome::Success && *focus_verified == Some(false))
                 {
                     return Err(ErrorCode::Malformed);
                 }
@@ -210,6 +214,7 @@ impl ExecutionController {
             (true, _) => Outcome::UnknownEffect,
             (false, _) if cancellation.is_cancelled() => Outcome::Cancelled,
             (false, Ok(Outcome::Unsupported)) => Outcome::Unsupported,
+            (false, Ok(Outcome::NeedsInput)) => Outcome::NeedsInput,
             (false, _) => Outcome::Failed,
         };
         // This records the original dispatch's observed result even if its

@@ -16,22 +16,35 @@ use std::{
 use uuid::Uuid;
 use windows::{
     Win32::{
-        Foundation::{HANDLE, HWND, LPARAM},
+        Foundation::{
+            CloseHandle, ERROR_NO_MORE_FILES, FILETIME, HANDLE, HWND, LPARAM, WAIT_TIMEOUT,
+        },
         Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute},
         Storage::FileSystem::{
             BY_HANDLE_FILE_INFORMATION, FILE_NAME_NORMALIZED, GetFileInformationByHandle,
             GetFinalPathNameByHandleW,
         },
-        System::Threading::{PROCESS_NAME_WIN32, QueryFullProcessImageNameW},
+        System::{
+            Diagnostics::ToolHelp::{
+                CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+                TH32CS_SNAPPROCESS,
+            },
+            Threading::{
+                GetProcessTimes, OpenProcess, PROCESS_NAME_WIN32,
+                PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, QueryFullProcessImageNameW,
+                WaitForSingleObject,
+            },
+        },
         UI::{
             Input::KeyboardAndMouse::IsWindowEnabled,
             WindowsAndMessaging::{
-                EnumWindows, GW_OWNER, GetClassNameW, GetWindow, GetWindowThreadProcessId,
-                IsWindow, IsWindowVisible,
+                EnumWindows, GW_OWNER, GetClassNameW, GetForegroundWindow, GetWindow,
+                GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible,
+                SetForegroundWindow,
             },
         },
     },
-    core::{BOOL, PWSTR},
+    core::{BOOL, HRESULT, PWSTR},
 };
 
 fn path_of(file: &File) -> Result<String, ErrorCode> {
@@ -157,6 +170,30 @@ struct Windows {
     matched: Vec<u64>,
     overflow: bool,
 }
+fn main_class(window: HWND) -> Option<String> {
+    if !unsafe { IsWindow(Some(window)) }.as_bool()
+        || !unsafe { IsWindowVisible(window) }.as_bool()
+        || !unsafe { IsWindowEnabled(window) }.as_bool()
+        || unsafe { GetWindow(window, GW_OWNER) }.is_ok()
+    {
+        return None;
+    }
+    let mut cloaked = 0u32;
+    if unsafe { DwmGetWindowAttribute(window, DWMWA_CLOAKED, (&mut cloaked as *mut u32).cast(), 4) }
+        .is_err()
+        || cloaked != 0
+    {
+        return None;
+    }
+    window_class(window)
+}
+fn window_class(window: HWND) -> Option<String> {
+    let mut class = [0u16; 257];
+    let count = unsafe { GetClassNameW(window, &mut class) };
+    (count > 0 && count < 256)
+        .then(|| String::from_utf16(&class[..count as usize]).ok())
+        .flatten()
+}
 fn matches_window(window: HWND, pid: u32, class: &Option<String>) -> bool {
     let Some(expected) = class else {
         return false;
@@ -165,26 +202,269 @@ fn matches_window(window: HWND, pid: u32, class: &Option<String>) -> bool {
     unsafe {
         GetWindowThreadProcessId(window, Some(&mut actual_pid));
     }
-    if actual_pid != pid
-        || !unsafe { IsWindow(Some(window)) }.as_bool()
-        || !unsafe { IsWindowVisible(window) }.as_bool()
-        || !unsafe { IsWindowEnabled(window) }.as_bool()
-        || unsafe { GetWindow(window, GW_OWNER) }.is_ok()
-    {
-        return false;
+    actual_pid == pid && main_class(window).as_ref() == Some(expected)
+}
+struct Process(HANDLE);
+impl Drop for Process {
+    fn drop(&mut self) {
+        let _ = unsafe { CloseHandle(self.0) };
     }
-    let mut cloaked = 0u32;
-    if unsafe { DwmGetWindowAttribute(window, DWMWA_CLOAKED, (&mut cloaked as *mut u32).cast(), 4) }
-        .is_err()
-        || cloaked != 0
-    {
-        return false;
+}
+fn live_process(
+    pid: u32,
+    expected: &ExecutableIdentity,
+) -> Result<Option<(Process, u64)>, ErrorCode> {
+    let process = Process(
+        unsafe {
+            OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+                false,
+                pid,
+            )
+        }
+        .map_err(|_| ErrorCode::Unavailable)?,
+    );
+    if unsafe { WaitForSingleObject(process.0, 0) } != WAIT_TIMEOUT {
+        return Err(ErrorCode::Stale);
     }
-    let mut class = [0u16; 257];
-    let count = unsafe { GetClassNameW(window, &mut class) };
-    count > 0
-        && count < 256
-        && String::from_utf16(&class[..count as usize]).ok().as_ref() == Some(expected)
+    let mut image = [0u16; 4096];
+    let mut length = image.len() as u32;
+    unsafe {
+        QueryFullProcessImageNameW(
+            process.0,
+            PROCESS_NAME_WIN32,
+            PWSTR(image.as_mut_ptr()),
+            &mut length,
+        )
+    }
+    .map_err(|_| ErrorCode::Unavailable)?;
+    if length == 0 || length as usize >= image.len() {
+        return Err(ErrorCode::TooLarge);
+    }
+    let path = String::from_utf16(&image[..length as usize]).map_err(|_| ErrorCode::Malformed)?;
+    if !path
+        .trim_start_matches(r"\\?\")
+        .eq_ignore_ascii_case(expected.path.trim_start_matches(r"\\?\"))
+    {
+        return Ok(None);
+    }
+    if !crate::principal::same_process_context(process.0)? {
+        return Err(ErrorCode::Unauthenticated);
+    }
+    let image = open_executable(&path)?;
+    let mut info = BY_HANDLE_FILE_INFORMATION::default();
+    unsafe { GetFileInformationByHandle(HANDLE(image.as_raw_handle()), &mut info) }
+        .map_err(|_| ErrorCode::Unavailable)?;
+    let index = (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow);
+    let length = (u64::from(info.nFileSizeHigh) << 32) | u64::from(info.nFileSizeLow);
+    if info.dwVolumeSerialNumber != expected.volume
+        || index != expected.file_index
+        || length != expected.bytes
+        || path_of(&image)? != expected.path
+    {
+        return Err(ErrorCode::Stale);
+    }
+    let (mut created, mut exited, mut kernel, mut user) = (
+        FILETIME::default(),
+        FILETIME::default(),
+        FILETIME::default(),
+        FILETIME::default(),
+    );
+    unsafe { GetProcessTimes(process.0, &mut created, &mut exited, &mut kernel, &mut user) }
+        .map_err(|_| ErrorCode::Unavailable)?;
+    let created = (u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime);
+    if created == 0 {
+        return Err(ErrorCode::Malformed);
+    }
+    Ok(Some((process, created)))
+}
+#[derive(Clone)]
+pub struct WindowHint {
+    window: u64,
+    pid: u32,
+    created: u64,
+    class: String,
+    title: String,
+    image: ExecutableIdentity,
+    observed: Instant,
+}
+impl WindowHint {
+    pub fn class(&self) -> &str {
+        &self.class
+    }
+    pub fn title(&self) -> &str {
+        &self.title
+    }
+    pub fn pid(&self) -> u32 {
+        self.pid
+    }
+}
+pub struct WindowHints {
+    pub windows: Vec<WindowHint>,
+    pub complete: bool,
+}
+struct HintScan<'a> {
+    expected: &'a ExecutableIdentity,
+    class: &'a Option<String>,
+    windows: Vec<WindowHint>,
+    seen: usize,
+    complete: bool,
+    started: Instant,
+}
+unsafe extern "system" fn hint_visit(window: HWND, value: LPARAM) -> BOOL {
+    let state = unsafe { &mut *(value.0 as *mut HintScan<'_>) };
+    state.seen += 1;
+    if state.seen > 1024
+        || state.windows.len() >= 32
+        || state.started.elapsed() >= Duration::from_secs(2)
+    {
+        state.complete = false;
+        return BOOL(0);
+    }
+    let Some(class) = window_class(window) else {
+        return BOOL(1);
+    };
+    let class_matches = state.class.as_ref().is_none_or(|v| v == &class);
+    let mut pid = 0;
+    unsafe {
+        GetWindowThreadProcessId(window, Some(&mut pid));
+    }
+    match live_process(pid, state.expected) {
+        Ok(Some((_process, created))) => {
+            // A matching application with a blocked/hidden/modal/wrong-class
+            // window is not evidence of no running instance. Never spawn over it.
+            if !class_matches || main_class(window).as_ref() != Some(&class) {
+                state.complete = false;
+                return BOOL(1);
+            }
+            let mut title = [0u16; 257];
+            let size = unsafe { GetWindowTextW(window, &mut title) };
+            let title = if size > 0 && size < 256 {
+                String::from_utf16(&title[..size as usize]).unwrap_or_default()
+            } else {
+                String::new()
+            };
+            state.windows.push(WindowHint {
+                window: window.0 as usize as u64,
+                pid,
+                created,
+                class,
+                title,
+                image: state.expected.clone(),
+                observed: Instant::now(),
+            });
+        }
+        Ok(None) => {}
+        Err(_) if class_matches => state.complete = false,
+        Err(_) => {}
+    }
+    BOOL(1)
+}
+pub fn window_hints(record: &AppRecord) -> Result<WindowHints, ErrorCode> {
+    record.validate()?;
+    let LaunchIdentity::Executable(expected) = &record.launch else {
+        return Err(ErrorCode::Unsupported);
+    };
+    let mut file = open_executable(&expected.path)?;
+    if identity(
+        &mut file,
+        expected.arguments.clone(),
+        expected.working_directory.clone(),
+    )? != *expected
+    {
+        return Err(ErrorCode::Stale);
+    }
+    Ok(scan_hints(expected, &record.window_class))
+}
+fn scan_hints(expected: &ExecutableIdentity, class: &Option<String>) -> WindowHints {
+    let mut scan = HintScan {
+        expected,
+        class,
+        windows: vec![],
+        seen: 0,
+        complete: true,
+        started: Instant::now(),
+    };
+    if unsafe {
+        EnumWindows(
+            Some(hint_visit),
+            LPARAM((&mut scan as *mut HintScan<'_>) as isize),
+        )
+    }
+    .is_err()
+    {
+        scan.complete = false;
+    }
+    WindowHints {
+        windows: scan.windows,
+        complete: scan.complete,
+    }
+}
+/// Only a native-created, freshly observed hint can be attached before the new
+/// immutable record is published. This does not assert application readiness.
+pub fn bind_window_hint(record: &mut AppRecord, hint: &WindowHint) -> Result<(), ErrorCode> {
+    let LaunchIdentity::Executable(expected) = &record.launch else {
+        return Err(ErrorCode::Unsupported);
+    };
+    if hint.observed.elapsed() >= Duration::from_secs(30) || hint.image != *expected {
+        return Err(ErrorCode::Stale);
+    }
+    let Some((_process, created)) = live_process(hint.pid, expected)? else {
+        return Err(ErrorCode::Stale);
+    };
+    if created != hint.created
+        || !matches_window(
+            HWND(hint.window as usize as *mut _),
+            hint.pid,
+            &Some(hint.class.clone()),
+        )
+    {
+        return Err(ErrorCode::Stale);
+    }
+    record.window_class = Some(hint.class.clone());
+    Ok(())
+}
+fn running_instance(expected: &ExecutableIdentity) -> Result<bool, ErrorCode> {
+    let expected_name = Path::new(&expected.path)
+        .file_name()
+        .and_then(|v| v.to_str())
+        .ok_or(ErrorCode::Malformed)?;
+    let snapshot = Process(
+        unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }
+            .map_err(|_| ErrorCode::Unavailable)?,
+    );
+    let mut entry = PROCESSENTRY32W {
+        dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+        ..Default::default()
+    };
+    unsafe { Process32FirstW(snapshot.0, &mut entry) }.map_err(|_| ErrorCode::Unavailable)?;
+    let started = Instant::now();
+    let mut seen = 0;
+    loop {
+        seen += 1;
+        if seen > 2048 || started.elapsed() >= Duration::from_secs(2) {
+            return Err(ErrorCode::Unavailable);
+        }
+        let length = entry
+            .szExeFile
+            .iter()
+            .position(|v| *v == 0)
+            .ok_or(ErrorCode::Malformed)?;
+        let name =
+            String::from_utf16(&entry.szExeFile[..length]).map_err(|_| ErrorCode::Malformed)?;
+        if name.eq_ignore_ascii_case(expected_name)
+            && live_process(entry.th32ProcessID, expected)?.is_some()
+        {
+            return Ok(true);
+        }
+        match unsafe { Process32NextW(snapshot.0, &mut entry) } {
+            Ok(()) => {}
+            Err(error) if error.code() == HRESULT::from_win32(ERROR_NO_MORE_FILES.0) => {
+                return Ok(false);
+            }
+            Err(_) => return Err(ErrorCode::Unavailable),
+        }
+    }
 }
 unsafe extern "system" fn visit(window: HWND, value: LPARAM) -> BOOL {
     // EnumWindows calls synchronously while the stack-owned context is alive.
@@ -226,6 +506,33 @@ pub fn launch(
     {
         return Err(ErrorCode::Stale);
     }
+    if record.window_class.is_none() {
+        return Ok(EffectResult {
+            outcome: Outcome::NeedsInput,
+            observation: None,
+        });
+    }
+    let existing = scan_hints(expected, &record.window_class);
+    if !existing.complete
+        || existing.windows.len() > 1
+        || (!existing.windows.is_empty() && !expected.arguments.is_empty())
+    {
+        return Ok(EffectResult {
+            outcome: Outcome::NeedsInput,
+            observation: None,
+        });
+    }
+    if let Some(window) = existing.windows.first() {
+        return focus(record, window, authorize_commit);
+    }
+    // A headless, starting or inaccessible same-name instance cannot establish
+    // safe absence. Leave the task waiting for an explicit native resolution.
+    if !matches!(running_instance(expected), Ok(false)) {
+        return Ok(EffectResult {
+            outcome: Outcome::NeedsInput,
+            observation: None,
+        });
+    }
     let mut command = Command::new(&expected.path);
     command
         .raw_arg(&expected.arguments)
@@ -243,6 +550,7 @@ pub fn launch(
                 process_id: None,
                 window: None,
                 image_matched: false,
+                focus_verified: None,
             }),
         });
     };
@@ -314,6 +622,72 @@ pub fn launch(
             process_id: Some(pid),
             window: observed,
             image_matched,
+            focus_verified: None,
+        }),
+    })
+}
+fn focus(
+    record: &AppRecord,
+    hint: &WindowHint,
+    authorize: &mut dyn FnMut() -> Result<(), ErrorCode>,
+) -> Result<EffectResult, ErrorCode> {
+    let LaunchIdentity::Executable(expected) = &record.launch else {
+        return Err(ErrorCode::Unsupported);
+    };
+    if !expected.arguments.is_empty()
+        || hint.image != *expected
+        || hint.observed.elapsed() >= Duration::from_secs(30)
+    {
+        return Err(ErrorCode::Stale);
+    }
+    let window = HWND(hint.window as usize as *mut _);
+    let Some((process, created)) = live_process(hint.pid, expected)? else {
+        return Err(ErrorCode::Stale);
+    };
+    if created != hint.created || !matches_window(window, hint.pid, &record.window_class) {
+        return Err(ErrorCode::Stale);
+    }
+    if unsafe { IsIconic(window) }.as_bool() {
+        return Ok(EffectResult {
+            outcome: Outcome::NeedsInput,
+            observation: None,
+        });
+    }
+    authorize()?;
+    let mut focused = false;
+    if unsafe { WaitForSingleObject(process.0, 0) } == WAIT_TIMEOUT
+        && matches_window(window, hint.pid, &record.window_class)
+        && crate::principal::same_process_context(process.0).unwrap_or(false)
+    {
+        let _ = unsafe { SetForegroundWindow(window) };
+        let started = Instant::now();
+        while started.elapsed() < Duration::from_millis(500) {
+            if unsafe { WaitForSingleObject(process.0, 0) } != WAIT_TIMEOUT
+                || !matches_window(window, hint.pid, &record.window_class)
+                || unsafe { IsIconic(window) }.as_bool()
+            {
+                break;
+            }
+            if unsafe { GetForegroundWindow() } == window {
+                focused = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+    Ok(EffectResult {
+        outcome: if focused {
+            Outcome::Success
+        } else {
+            Outcome::UnknownEffect
+        },
+        observation: Some(EffectObservation::Application {
+            app_id: record.id,
+            catalog_revision: record.revision,
+            process_id: Some(hint.pid),
+            window: focused.then_some(hint.window),
+            image_matched: true,
+            focus_verified: Some(focused),
         }),
     })
 }

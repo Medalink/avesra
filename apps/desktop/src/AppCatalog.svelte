@@ -5,7 +5,7 @@
   import { command, native, type Runtime } from "./runtime";
   let { runtime }: { runtime: Runtime | null } = $props();
   type Alias = { id: string; revision: string; phrase: string; name: string; detail: string; available: boolean; last_success_ms: number | null };
-  type Candidate = { id: string; name: string; source: string; detail: string; arguments: string; working_directory: string | null; selectable: boolean };
+  type Candidate = { id: string; name: string; source: string; detail: string; arguments: string; working_directory: string | null; selectable: boolean; window_hints: { id: string; class: string; title: string; process_id: number }[]; selected_hint: string | null; hints_complete: boolean };
   type Scan = { candidates: Candidate[]; skipped: number; truncated: boolean };
   let panel = $state<string | null>(null);
   let aliases = $state<Alias[] | null>(null);
@@ -65,6 +65,16 @@
   function folder() { return run(async current => {
     if (!panel || !candidate) return;
     const value = await command<Candidate>("choose_app_folder", { panel, candidate: candidate.id });
+    if (mounted && current === generation && scan) scan = { ...scan, candidates: scan.candidates.map(v => v.id === value.id ? value : v) };
+  }); }
+  function observeWindows() { return run(async current => {
+    if (!panel || !candidate) return;
+    const value = await command<Candidate>("observe_app_windows", { panel, candidate: candidate.id });
+    if (mounted && current === generation && scan) scan = { ...scan, candidates: scan.candidates.map(v => v.id === value.id ? value : v) };
+  }); }
+  function chooseWindow(hint: string) { return run(async current => {
+    if (!panel || !candidate) return;
+    const value = await command<Candidate>("choose_app_window", { panel, candidate: candidate.id, hint: hint || null });
     if (mounted && current === generation && scan) scan = { ...scan, candidates: scan.candidates.map(v => v.id === value.id ? value : v) };
   }); }
   function remember() { return run(async current => {
@@ -139,6 +149,17 @@
       </div>
       {#if !candidate.selectable}<p class="av-hint text-amber-200">This native registration requires an environment that is not supported yet.</p>{/if}
       {#if !candidate.working_directory}<button class="av-btn av-btn-secondary av-btn-sm self-start" disabled={busy || !enabled || !candidate.selectable} onclick={folder}>Choose working folder</button>{/if}
+      <div class="flex flex-col gap-2">
+        <div class="flex items-center justify-between gap-3"><span class="av-hint">Expected application window</span><button class="av-btn av-btn-secondary av-btn-sm" disabled={busy || !enabled || !candidate.selectable || !candidate.working_directory} onclick={observeWindows}>Observe open windows</button></div>
+        <p class="av-hint">Open the chosen app yourself, then select its main window. This observes only matching application windows and does not focus them. Window choices expire after 30 seconds.</p>
+        {#if candidate.window_hints.length}
+          <select class="av-input av-select w-full" aria-label="Expected application window" value={candidate.selected_hint ?? ""} disabled={busy} onchange={e => chooseWindow(e.currentTarget.value)}>
+            <option value="">No window hint · opening remains unavailable</option>
+            {#each candidate.window_hints as hint}<option value={hint.id}>{hint.title || "Untitled window"} · {hint.class} · PID {hint.process_id}</option>{/each}
+          </select>
+          {#if !candidate.hints_complete}<p class="av-hint text-amber-200">Window discovery was incomplete. Only the listed native observations can be selected.</p>{/if}
+        {:else}<p class="av-hint">No eligible window is selected. Saving a name alone cannot verify opening.</p>{/if}
+      </div>
       <label class="flex flex-col gap-1.5"><span class="av-hint">Name to remember</span><input class="av-input w-full" bind:value={phrase} maxlength="64" placeholder="e.g. editor" disabled={busy} /></label>
       <SetupLock {runtime} purpose="application mapping" />
       <p class="av-hint">Create the local owner in People & Voice ID first. Verify here after reviewing the entry, then choose Remember. A fresh verification is required to forget a mapping.</p>

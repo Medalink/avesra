@@ -28,6 +28,16 @@ struct Choice {
     native: Candidate,
     cwd: Option<PathBuf>,
     discovered: Instant,
+    hints: Vec<(Uuid, avesra_windows::apps::WindowHint)>,
+    selected_hint: Option<Uuid>,
+    hints_complete: bool,
+}
+#[derive(Serialize)]
+pub struct WindowHintView {
+    id: Uuid,
+    class: String,
+    title: String,
+    process_id: u32,
 }
 #[derive(Serialize)]
 pub struct CandidateView {
@@ -38,6 +48,9 @@ pub struct CandidateView {
     arguments: String,
     working_directory: Option<String>,
     selectable: bool,
+    window_hints: Vec<WindowHintView>,
+    selected_hint: Option<Uuid>,
+    hints_complete: bool,
 }
 impl Choice {
     fn view(&self) -> CandidateView {
@@ -49,6 +62,18 @@ impl Choice {
             arguments: self.native.arguments.clone(),
             working_directory: self.cwd.as_ref().map(|v| v.to_string_lossy().into_owned()),
             selectable: self.native.selectable,
+            window_hints: self
+                .hints
+                .iter()
+                .map(|(id, hint)| WindowHintView {
+                    id: *id,
+                    class: hint.class().into(),
+                    title: hint.title().into(),
+                    process_id: hint.pid(),
+                })
+                .collect(),
+            selected_hint: self.selected_hint,
+            hints_complete: self.hints_complete,
         }
     }
 }
@@ -224,6 +249,9 @@ pub async fn scan_app_catalog(
                     cwd: value.working_directory.as_ref().map(PathBuf::from),
                     native: value,
                     discovered: Instant::now(),
+                    hints: vec![],
+                    selected_hint: None,
+                    hints_complete: false,
                 });
             }
             let candidates = choices.iter().map(Choice::view).collect();
@@ -297,6 +325,9 @@ pub async fn choose_app_folder(
                 return Err("Candidate expired; scan again".into());
             }
             choice.cwd = Some(cwd);
+            choice.hints.clear();
+            choice.selected_hint = None;
+            choice.hints_complete = false;
             Ok(choice.view())
         })
     })
@@ -327,6 +358,101 @@ pub async fn app_aliases(
     .map_err(|_| "Catalog reader stopped")?
 }
 #[tauri::command]
+pub async fn observe_app_windows(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    panel: Uuid,
+    candidate: Uuid,
+) -> Result<CandidateView, String> {
+    visible(&window)?;
+    let owner = app
+        .state::<Runtime>()
+        .catalog
+        .work
+        .clone()
+        .try_lock_owned()
+        .map_err(|_| "Application setup is busy")?;
+    let (native, cwd, discovered) = with_panel(&app, panel, |p| {
+        let choice = p
+            .candidates
+            .iter_mut()
+            .find(|v| v.id == candidate)
+            .ok_or("Candidate unavailable")?;
+        if choice.discovered.elapsed() >= Duration::from_secs(120) {
+            return Err("Candidate expired; scan again".into());
+        }
+        choice.hints.clear();
+        choice.selected_hint = None;
+        choice.hints_complete = false;
+        Ok((
+            choice.native.clone(),
+            choice.cwd.clone().ok_or("Choose a working folder first")?,
+            choice.discovered,
+        ))
+    })?;
+    tauri::async_runtime::spawn(async move {
+        let _owner = owner;
+        let actor = crate::owner::current_actor(&app).await?;
+        with_panel(&app, panel, |_| Ok(()))?;
+        let hints = tokio::task::spawn_blocking(move || {
+            let record = native.select(actor, &cwd)?;
+            avesra_windows::apps::window_hints(&record)
+        })
+        .await
+        .map_err(|_| "Window observer stopped")?
+        .map_err(|_| "Application window identity unavailable")?;
+        with_panel(&app, panel, |p| {
+            let choice = p
+                .candidates
+                .iter_mut()
+                .find(|v| v.id == candidate && v.discovered == discovered)
+                .ok_or("Candidate changed")?;
+            if discovered.elapsed() >= Duration::from_secs(120) {
+                return Err("Candidate expired; scan again".into());
+            }
+            choice.hints = hints
+                .windows
+                .into_iter()
+                .map(|v| (Uuid::new_v4(), v))
+                .collect();
+            choice.hints_complete = hints.complete;
+            Ok(choice.view())
+        })
+    })
+    .await
+    .map_err(|_| "Window observer coordinator stopped")?
+}
+#[tauri::command]
+pub fn choose_app_window(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    panel: Uuid,
+    candidate: Uuid,
+    hint: Option<Uuid>,
+) -> Result<CandidateView, String> {
+    visible(&window)?;
+    let state = app.state::<Runtime>();
+    let _owner = state
+        .catalog
+        .work
+        .try_lock()
+        .map_err(|_| "Application setup is busy")?;
+    with_panel(&app, panel, |p| {
+        let choice = p
+            .candidates
+            .iter_mut()
+            .find(|v| v.id == candidate)
+            .ok_or("Candidate unavailable")?;
+        if choice.discovered.elapsed() >= Duration::from_secs(120)
+            || hint.is_some_and(|id| !choice.hints.iter().any(|v| v.0 == id))
+        {
+            return Err("Window hint changed; observe again".into());
+        }
+        choice.selected_hint = hint;
+        Ok(choice.view())
+    })
+}
+#[tauri::command]
 pub async fn remember_app(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
@@ -345,7 +471,7 @@ pub async fn remember_app(
         .try_lock_owned()
         .map_err(|_| "Application setup is busy")?;
     let proof = proof(&app, panel)?;
-    let (native, cwd, discovered) = with_panel(&app, panel, |p| {
+    let (native, cwd, discovered, hint) = with_panel(&app, panel, |p| {
         let choice = p
             .candidates
             .iter()
@@ -358,6 +484,17 @@ pub async fn remember_app(
             choice.native.clone(),
             choice.cwd.clone().ok_or("Choose a working folder first")?,
             choice.discovered,
+            choice
+                .selected_hint
+                .map(|id| {
+                    choice
+                        .hints
+                        .iter()
+                        .find(|v| v.0 == id)
+                        .map(|v| v.1.clone())
+                        .ok_or("Window hint unavailable")
+                })
+                .transpose()?,
         ))
     })?;
     tauri::async_runtime::spawn(async move {
@@ -367,11 +504,19 @@ pub async fn remember_app(
             return Err("Management verification expired".into());
         }
         with_panel(&app, panel, |_| Ok(()))?;
-        let record = tokio::task::spawn_blocking(move || native.select(actor, &cwd))
-            .await
-            .map_err(|_| "Selection worker stopped")?
-            .map_err(|_| "Application metadata changed or cannot be selected; scan again")?;
+        let selected_hint = hint.clone();
+        let record = tokio::task::spawn_blocking(move || {
+            let mut record = native.select(actor, &cwd)?;
+            if let Some(hint) = selected_hint {
+                avesra_windows::apps::bind_window_hint(&mut record, &hint)?;
+            }
+            Ok::<_, ErrorCode>(record)
+        })
+        .await
+        .map_err(|_| "Selection worker stopped")?
+        .map_err(|_| "Application metadata changed or cannot be selected; scan again")?;
         let mut authorize = authorization(app.clone(), panel, actor, proof)?;
+        let mut confirmed_record = record.clone();
         let result = receive(
             &app,
             CatalogCommand::Remember {
@@ -380,6 +525,9 @@ pub async fn remember_app(
                 authorize: Box::new(move || {
                     if discovered.elapsed() >= Duration::from_secs(120) {
                         return Err(ErrorCode::Expired);
+                    }
+                    if let Some(hint) = &hint {
+                        avesra_windows::apps::bind_window_hint(&mut confirmed_record, hint)?;
                     }
                     authorize()
                 }),
