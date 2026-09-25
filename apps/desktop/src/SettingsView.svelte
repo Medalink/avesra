@@ -3,6 +3,7 @@
   import Pairing from "./Pairing.svelte";
   import SetupLock from "./SetupLock.svelte";
   import VoiceDesigner from "./VoiceDesigner.svelte";
+  import ShortcutSettings from "./ShortcutSettings.svelte";
   import EnrollmentView from "./EnrollmentView.svelte";
   import type { SignalFrame } from "./Signal.svelte";
   import type { Runtime, Settings, AudioDevice } from "./runtime";
@@ -287,20 +288,7 @@
               >
             </div>
           </section>
-          <section class="section">
-            <span class="av-kicker">Shortcuts</span>
-            {#each [["Microphone mute", "Ctrl + Shift + M"], ["Deafen", "Ctrl + Shift + D"], ["Show overlay", "Ctrl + Shift + A"], ["Push to talk", "Ctrl + Space"]] as shortcut}
-              <div class="row">
-                <span class="av-label">{shortcut[0]}</span><span
-                  class="av-kbd opacity-50">{shortcut[1]}</span
-                >
-              </div>
-            {/each}
-            <p class="av-hint">
-              Suggested shortcuts. Global registration is not available yet; use
-              the overlay and tray controls.
-            </p>
-          </section>
+          <ShortcutSettings {runtime} />
           <VoiceDesigner {runtime} {saving} {update} />
           <section class="section">
             <span class="av-kicker">Learning & action chimes</span

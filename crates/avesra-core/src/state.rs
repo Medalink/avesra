@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 #[serde(deny_unknown_fields)]
 pub struct Settings {
     #[serde(default)]
+    pub shortcuts: crate::shortcuts::Shortcuts,
+    #[serde(default)]
     pub audio_device_schema: u16,
     pub microphone: Option<String>,
     pub speaker: Option<String>,
@@ -22,6 +24,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            shortcuts: crate::shortcuts::Shortcuts::default(),
             audio_device_schema: 1,
             microphone: None,
             speaker: None,
@@ -40,6 +43,7 @@ impl Default for Settings {
 }
 impl Settings {
     pub fn validate(&self) -> Result<(), ErrorCode> {
+        self.shortcuts.validate()?;
         if self.audio_device_schema != 1
             || self.chime_volume > 100
             || self.speech_volume > 100

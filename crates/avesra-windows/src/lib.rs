@@ -14,6 +14,8 @@ mod resampling;
 #[cfg(windows)]
 pub mod session;
 #[cfg(windows)]
+pub mod shortcuts;
+#[cfg(windows)]
 pub mod volume;
 
 #[derive(Debug, Clone, Serialize)]

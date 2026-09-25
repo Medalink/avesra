@@ -1,5 +1,8 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
+export type ShortcutAction = "mute" | "deafen" | "overlay";
+export type Chord = { control: boolean; alt: boolean; shift: boolean; key: number };
 export type Settings = {
+  shortcuts: Record<ShortcutAction, Chord | null>;
   audio_device_schema: number;
   microphone: string | null;
   speaker: string | null;

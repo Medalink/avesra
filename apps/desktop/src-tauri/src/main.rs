@@ -4,6 +4,7 @@ mod media;
 mod preview;
 mod profiles;
 mod setup;
+mod shortcuts;
 mod voice;
 mod voices;
 use avesra_core::{
@@ -61,9 +62,20 @@ struct Runtime {
     health: tokio::sync::Mutex<()>,
     preview: tokio::sync::Mutex<()>,
     voice_panel: Mutex<Option<uuid::Uuid>>,
+    hotkeys: Mutex<Option<avesra_windows::shortcuts::Hotkeys>>,
+    shortcut_edit: tokio::sync::Mutex<()>,
+    shortcut_recording: Mutex<Option<shortcuts::Recording>>,
+    shortcut_focus_generation: std::sync::atomic::AtomicU64,
 }
 impl Runtime {
     fn publish(&self, local: &LocalState) {
+        if local.locked
+            && let Ok(mut slot) = self.shortcut_recording.lock()
+        {
+            self.shortcut_focus_generation
+                .fetch_add(1, Ordering::SeqCst);
+            *slot = None;
+        }
         if !local.connected
             && let Ok(mut session) = self.acknowledged_session.lock()
         {
@@ -194,6 +206,11 @@ async fn save_settings(
             || settings.paused != local.settings.paused
         {
             return Err("Use local controls to change listening modes".into());
+        }
+        if settings.shortcuts != local.settings.shortcuts {
+            return Err(
+                "Shortcuts changed. Refresh settings and use the native shortcut editor.".into(),
+            );
         }
         let pending = enqueue(&state, settings.clone())?;
         if settings.speaker != local.settings.speaker || settings.profile != local.settings.profile
@@ -434,6 +451,7 @@ fn main() {
                 directory.join("native-actions.db"),
                 Vec::new(),
             )?;
+            let initial_shortcuts = local.settings.shortcuts.clone();
             app.manage(Runtime {
                 turns: Mutex::new(avesra_core::voice::TurnGate::default()),
                 acknowledged_session: Mutex::new(None),
@@ -449,7 +467,29 @@ fn main() {
                 health: tokio::sync::Mutex::new(()),
                 preview: tokio::sync::Mutex::new(()),
                 voice_panel: Mutex::new(None),
+                hotkeys: Mutex::new(None),
+                shortcut_edit: tokio::sync::Mutex::new(()),
+                shortcut_recording: Mutex::new(None),
+                shortcut_focus_generation: std::sync::atomic::AtomicU64::new(1),
             });
+            let hotkey_app = app.handle().clone();
+            let hotkeys =
+                avesra_windows::shortcuts::Hotkeys::spawn(initial_shortcuts, move |action| {
+                    shortcuts::pressed(&hotkey_app, action)
+                });
+            match hotkeys {
+                Ok(value) => {
+                    if let Ok(mut slot) = app.state::<Runtime>().hotkeys.lock() {
+                        *slot = Some(value);
+                    }
+                }
+                Err(_) => {
+                    let _ = app.emit(
+                        "runtime-error",
+                        "Global shortcuts unavailable; overlay and tray controls remain available.",
+                    );
+                }
+            }
             if let Some(window) = app.get_webview_window("settings") {
                 let handle = window.hwnd()?;
                 let app_handle = app.handle().clone();
@@ -516,6 +556,9 @@ fn main() {
                         }
                     }
                     "quit" => {
+                        if let Ok(mut owner) = app.state::<Runtime>().hotkeys.lock() {
+                            owner.take();
+                        }
                         if let Ok(mut local) = app.state::<Runtime>().local.lock() {
                             local.apply(LocalControl::Quit);
                             app.state::<Runtime>().publish(&local);
@@ -528,6 +571,16 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            if window.label() == "settings"
+                && matches!(
+                    event,
+                    tauri::WindowEvent::Focused(false)
+                        | tauri::WindowEvent::CloseRequested { .. }
+                        | tauri::WindowEvent::Destroyed
+                )
+            {
+                shortcuts::cancel_recording(window.app_handle());
+            }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() == "settings" {
                     setup::cancel_native(window.app_handle());
@@ -537,6 +590,10 @@ fn main() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            shortcuts::shortcut_status,
+            shortcuts::set_shortcut,
+            shortcuts::begin_shortcut_recording,
+            shortcuts::end_shortcut_recording,
             preview::preview_voice,
             voices::open_voice_panel,
             voices::close_voice_panel,
