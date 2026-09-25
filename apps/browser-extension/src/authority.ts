@@ -3,6 +3,7 @@ import type { Authority } from "./protocol.js";
 // Transport context only: no method creates an origin grant or page capability.
 // Future semantic work must also hold native-issued scope/document authority.
 export class ObservationAuthority {
+  private readonly owner = Symbol("native browser connection");
   private latest: Authority | null = null;
   private history: Authority | null = null;
   private revision = 0;
@@ -39,11 +40,11 @@ export class ObservationAuthority {
   // recheck immediately before and after every future asynchronous operation.
   snapshot() {
     if (this.disposed || performance.now() >= this.deadline || !this.latest) return null;
-    return { ...this.latest, observation_revision: this.revision };
+    return { ...this.latest, observation_revision: this.revision, owner: this.owner };
   }
   current(value: ReturnType<ObservationAuthority["snapshot"]>) {
     const actual = this.snapshot();
-    return !!value && !!actual && value.selection === actual.selection && value.action_epoch === actual.action_epoch && value.observation_revision === actual.observation_revision;
+    return !!value && !!actual && value.owner === this.owner && value.selection === actual.selection && value.action_epoch === actual.action_epoch && value.observation_revision === actual.observation_revision;
   }
   dispose() { this.latest = null; this.disposed = true; clearTimeout(this.timer); }
 }
