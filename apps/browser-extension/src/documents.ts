@@ -1,4 +1,5 @@
 import * as p from "./protocol.js";
+import { acquireBrowserJob } from "./browser-job.js";
 import { ObservationAuthority } from "./authority.js";
 
 export type Candidate = { tab: number; window: number; frame: 0; document: string; url: string };
@@ -15,9 +16,6 @@ export function request(value: unknown): value is Request {
 }
 function sameCandidate(a: Candidate, b: Candidate) { return a.tab === b.tab && a.window === b.window && a.frame === b.frame && a.document === b.document && a.url === b.url; }
 function nativeId(value: unknown): value is number { return p.counter(value) && value <= 2147483647; }
-// One actual Chrome API operation across connection replacement. Disposal revokes
-// publication immediately but cannot cancel Chrome's pending promise.
-let actualJob: symbol | null = null;
 type Job = { request: Request; deadline: number; revision: number; owner: ReturnType<ObservationAuthority["snapshot"]>; session: string; generation: number; reply: Reply | null; sent: boolean };
 export class Documents {
   private disposed = false;
@@ -48,10 +46,10 @@ export class Documents {
     if (!owner) return;
     const job: Job = { request: value, deadline: performance.now() + value.remaining_ms, revision: this.revision, owner, session, generation, reply: null, sent: false };
     this.job = job;
-    if (actualJob !== null) { this.publish(job, { state: "unavailable" }); return; }
-    const token = Symbol("owned Chrome metadata operation"); actualJob = token;
+    const actual = acquireBrowserJob();
+    if (!actual) { this.publish(job, { state: "unavailable" }); return; }
     void this.run(job).then(outcome => this.publish(job, outcome)).catch(() => this.publish(job, { state: "unavailable" }))
-      .finally(() => { if (actualJob === token) actualJob = null; });
+      .finally(() => actual.settle());
   }
   private publish(job: Job, outcome: Outcome) {
     if (this.current(job)) job.reply = { request: job.request.request, scope: job.request.scope, observation_revision: job.revision, outcome };
