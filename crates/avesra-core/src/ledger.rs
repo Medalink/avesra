@@ -128,6 +128,11 @@ impl Store {
         session: &DispatchSession,
         now_ms: u64,
     ) -> Result<(), ErrorCode> {
+        if let Some(owner) = crate::browser_jobs::current(&self.connection)?
+            && owner.context.dispatch.uuid() != permit.dispatch_id
+        {
+            return Err(ErrorCode::InvalidTransition);
+        }
         crate::conversations::validate_linked_dispatch(&self.connection, &permit.action, session)?;
         if !session.active
             || session.actor_id != permit.action.actor_id
@@ -562,6 +567,9 @@ impl Store {
             return Err(ErrorCode::Unauthenticated);
         }
         let tx = sql(self.connection.transaction())?;
+        if crate::browser_jobs::current(&tx)?.is_some() {
+            return Err(ErrorCode::InvalidTransition);
+        }
         let (body,state):(String,String)=sql(tx.query_row("SELECT a.body,s.state FROM action_heads h JOIN action_revisions a ON a.revision=h.revision JOIN steps s ON s.id=h.step_id WHERE h.step_id=?1 AND a.dispatch_id IS NULL AND a.cancel_requested=0",[step.to_string()],|r|Ok((r.get(0)?,r.get(1)?))))?;
         if decode::<TaskState>(&state)? != TaskState::Queued {
             return Err(ErrorCode::InvalidTransition);

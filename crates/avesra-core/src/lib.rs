@@ -9,6 +9,7 @@ pub mod store;
 pub mod voice;
 
 pub mod apps;
+pub mod browser_jobs;
 pub mod browser_reading;
 pub mod browser_scopes;
 pub mod owner;

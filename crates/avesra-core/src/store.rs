@@ -19,7 +19,7 @@ impl Store {
                     |r| Ok((r.get(0)?, r.get(1)?)),
                 )
                 .map_err(|_| ErrorCode::Storage)?;
-            if count != 1 || !matches!(version, Some(1..=7)) {
+            if count != 1 || !matches!(version, Some(1..=8)) {
                 return Err(ErrorCode::Unsupported);
             }
             version.ok_or(ErrorCode::Unsupported)? as u64
@@ -37,6 +37,10 @@ impl Store {
             0
         };
         crate::conversations::check_schema(&connection, version)?;
+        crate::browser_jobs::check_schema(&connection, version)?;
+        if version >= 8 {
+            crate::browser_jobs::current(&connection)?;
+        }
         connection
             .execute_batch(
                 "PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;",
@@ -62,7 +66,7 @@ impl Store {
           CREATE TABLE IF NOT EXISTS native_finalizations(dispatch_id TEXT PRIMARY KEY REFERENCES dispatch_bindings(dispatch_id), target_id TEXT NOT NULL, action_revision TEXT NOT NULL REFERENCES action_revisions(revision), actor_id TEXT NOT NULL, outcome TEXT NOT NULL, at_ms INTEGER NOT NULL);
           CREATE INDEX IF NOT EXISTS native_finalization_lookup ON native_finalizations(target_id,actor_id,outcome);
           DELETE FROM schema_version;
-          INSERT INTO schema_version VALUES(7);
+          INSERT INTO schema_version VALUES(8);
         ").map_err(|_|ErrorCode::Storage)?;
         if version < 5 {
             tx.execute_batch(crate::conversations::SCHEMA)
@@ -78,7 +82,18 @@ impl Store {
             tx.execute_batch(crate::conversations::REPLY_SCHEMA)
                 .map_err(|_| ErrorCode::Storage)?;
         }
-        crate::conversations::check_schema(&tx, 7)?;
+        if version < 8 {
+            tx.execute_batch(crate::browser_jobs::SCHEMA)
+                .map_err(|_| ErrorCode::Storage)?;
+        }
+        crate::conversations::check_schema(&tx, 8)?;
+        crate::browser_jobs::check_schema(&tx, 8)?;
+        crate::browser_jobs::current(&tx)?;
+        tx.execute(
+            "UPDATE browser_read_owner SET state='uncertain' WHERE state='pending'",
+            [],
+        )
+        .map_err(|_| ErrorCode::Storage)?;
         tx.execute(
             "UPDATE conversation_plans SET state='suspended' WHERE state='pending'",
             [],
