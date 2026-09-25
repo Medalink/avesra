@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { command, native, type Runtime } from "./runtime";
-  let { runtime }: { runtime: Runtime | null } = $props();
+  let { runtime, purpose = "owner or people management" }: { runtime: Runtime | null; purpose?: string } = $props();
   type Status = { local_authentication: string; authentication_seconds_remaining: number; enrollment: string; reason: string };
   let status = $state<Status | null>(null);
   let busy = $state(false);
@@ -45,7 +45,7 @@
 <div class="flex items-center gap-3 bg-white/[0.03] px-3.5 py-3 ring-1 ring-white/10 ring-inset">
   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="shrink-0 text-zinc-300" aria-hidden="true"><rect x="5" y="11" width="14" height="10"></rect><path d="M8 11V8a4 4 0 0 1 8 0v3"></path></svg>
   <span class="min-w-0 flex-1 text-[12.5px] leading-[18px] text-zinc-300">
-    {unlocked ? `Windows verified · ${status?.authentication_seconds_remaining}s remaining. Choose the owner or people management action below.` : "Owner, people and permission management is locked. Verify with Windows Hello here. It locks again when Settings closes."}
+    {unlocked ? `Windows verified · ${status?.authentication_seconds_remaining}s remaining. Choose the ${purpose} action.` : `Protected ${purpose} is locked. Verify with Windows Hello here. It locks again when Settings closes.`}
   </span>
   {#if unlocked}
     <button class="av-btn av-btn-ghost av-btn-sm" onclick={() => lock().catch(e => error = String(e))}>Lock</button>

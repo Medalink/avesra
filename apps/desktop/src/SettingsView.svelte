@@ -5,6 +5,7 @@
   import VoiceDesigner from "./VoiceDesigner.svelte";
   import ShortcutSettings from "./ShortcutSettings.svelte";
   import EnrollmentView from "./EnrollmentView.svelte";
+  import AppCatalog from "./AppCatalog.svelte";
   import type { SignalFrame } from "./Signal.svelte";
   import type { Runtime, Settings, AudioDevice } from "./runtime";
   import { command, native } from "./runtime";
@@ -507,10 +508,8 @@
               system/network settings.
             </p>
           </section>
-          <section class="section">
-            <span class="av-kicker">Learned aliases & routines</span>
-            <p class="av-hint">No aliases or routines have been learned.</p>
-          </section>
+          <AppCatalog {runtime} />
+          <section class="section"><span class="av-kicker">Routines</span><p class="av-hint">Routine learning is unavailable.</p></section>
         {:else if section === "memory"}
           <div
             class="av-seg self-start"

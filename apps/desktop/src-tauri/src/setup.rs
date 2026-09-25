@@ -24,7 +24,11 @@ impl ManagementProof {
         };
         self.current_locked(state, &local)
     }
-    fn current_locked(&self, state: &Runtime, local: &avesra_core::state::LocalState) -> bool {
+    pub(crate) fn current_locked(
+        &self,
+        state: &Runtime,
+        local: &avesra_core::state::LocalState,
+    ) -> bool {
         !local.locked
             && local.connected
             && self.0.verified_at.elapsed() < Duration::from_secs(60)

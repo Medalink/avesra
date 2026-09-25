@@ -1,4 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+mod catalog;
 mod connection;
 mod media;
 mod owner;
@@ -49,6 +50,7 @@ struct WriteSettings {
     reply: oneshot::Sender<Result<(), String>>,
 }
 struct Runtime {
+    catalog: catalog::CatalogSetup,
     turns: Mutex<avesra_core::voice::TurnGate>,
     acknowledged_session: Mutex<Option<connection::SessionIdentity>>,
     setup: setup::Setup,
@@ -71,6 +73,9 @@ struct Runtime {
 }
 impl Runtime {
     fn publish(&self, local: &LocalState) {
+        if local.locked || !local.connected {
+            self.catalog.invalidate();
+        }
         if local.locked
             && let Ok(mut slot) = self.shortcut_recording.lock()
         {
@@ -447,14 +452,15 @@ fn main() {
             let (modes, _) = tokio::sync::watch::channel(ModeSnapshot::from(&local));
             let media = media::MediaWorker::spawn(app.handle().clone())?;
             media.publish(&local);
-            // Native target catalog and accepted-intent producer remain closed
-            // until authenticated setup. No model/webview can populate them.
+            // Volume targets and accepted-intent ingress remain closed. Native
+            // authenticated Settings can register immutable application aliases.
             let effects = avesra_windows::effects::NativeEffects::spawn(
                 directory.join("native-actions.db"),
                 Vec::new(),
             )?;
             let initial_shortcuts = local.settings.shortcuts.clone();
             app.manage(Runtime {
+                catalog: catalog::CatalogSetup::default(),
                 turns: Mutex::new(avesra_core::voice::TurnGate::default()),
                 acknowledged_session: Mutex::new(None),
                 setup: setup::Setup::default(),
@@ -586,6 +592,7 @@ fn main() {
             }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() == "settings" {
+                    window.app_handle().state::<Runtime>().catalog.invalidate();
                     setup::cancel_native(window.app_handle());
                 }
                 api.prevent_close();
@@ -593,6 +600,13 @@ fn main() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            catalog::open_app_catalog,
+            catalog::close_app_catalog,
+            catalog::scan_app_catalog,
+            catalog::choose_app_folder,
+            catalog::app_aliases,
+            catalog::remember_app,
+            catalog::forget_app_alias,
             shortcuts::shortcut_status,
             owner::owner_status,
             owner::create_owner,

@@ -103,7 +103,10 @@ impl Drop for Apartment {
 }
 /// Explicit local folder choice only. This modal call retains its owning worker
 /// until it returns; cancellation revokes publication, not a claim to stop COM.
-pub fn choose_working_directory(owner: isize) -> Result<PathBuf, ErrorCode> {
+pub fn choose_working_directory(
+    owner: isize,
+    authorize: &mut dyn FnMut() -> Result<(), ErrorCode>,
+) -> Result<PathBuf, ErrorCode> {
     if owner == 0 {
         return Err(ErrorCode::Malformed);
     }
@@ -125,6 +128,7 @@ pub fn choose_working_directory(owner: isize) -> Result<PathBuf, ErrorCode> {
                     | FOS_DONTADDTORECENT,
             )
             .map_err(|_| ErrorCode::Unavailable)?;
+        authorize()?;
         dialog
             .Show(Some(HWND(owner as *mut _)))
             .map_err(|_| ErrorCode::Denied)?;
