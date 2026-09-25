@@ -18,6 +18,8 @@ The owner must be able to speak these requests and see Avesra complete them on t
 
 These are mandatory live end-to-end outcomes. A model server, overlay, passing unit tests, mocked app, or dispatched click is not proof of completion. See `owner-workflows` and acceptance cases A24–A26 in Plan 001.
 
+Stopped-work handoff and next-step boundaries: [Plan 001 handoff](001-handoff.md). The owner stopped implementation; existing code was published to main. Do not resume without a new request.
+
 ## Execution order
 
 | Plan | Outcome | Priority | Effort | Dependencies | Status |

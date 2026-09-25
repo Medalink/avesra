@@ -1,6 +1,6 @@
 # Plan 001 execution review
 
-Execution began 2026-09-24 from `f085d25cc4e8b4ee59da7c6d7e710ce5d9ecc5ae`, in isolated worktree `C:\Users\medal\.codex\worktrees\avesra-plan-001\Avesra`, branch `codex/avesra-plan-001`. The primary checkout remains untouched. The owner requires specs and code only, without automated tests, and matching the approved designs.
+Execution began 2026-09-24 from `f085d25cc4e8b4ee59da7c6d7e710ce5d9ecc5ae`, in isolated worktree `C:\Users\medal\.codex\worktrees\avesra-plan-001\Avesra`, branch `codex/avesra-plan-001`. Implementation was isolated during execution. At the owner's explicit request, accumulated source and evidence through `b8be270` were subsequently fast-forwarded and pushed to `main` on 2026-09-25. See [the stopped-work handoff](001-handoff.md). The owner requires specs and code only, without automated tests, and matching the approved designs.
 
 Status: IN PROGRESS. No full-plan approval or live owner-workflow completion is claimed.
 
