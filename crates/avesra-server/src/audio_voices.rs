@@ -111,9 +111,9 @@ impl AudioClient {
         description: &str,
     ) -> Result<Candidate, ErrorCode> {
         if text.trim().is_empty()
-            || text.len() > 512
+            || text.chars().count() > 512
             || description.trim().is_empty()
-            || description.len() > 1024
+            || description.chars().count() > 1024
         {
             return Err(ErrorCode::Malformed);
         }

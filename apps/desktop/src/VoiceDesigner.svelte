@@ -18,51 +18,57 @@
   let previewText = $state("");
   let mounted = true;
   let operation = 0;
+  let publication = 0;
   const referenceText = "This is Avesra. Here is a short preview of the voice you described.";
   const selected = $derived(status?.candidates.find(c => c.identity?.id === status?.selected?.id && c.identity?.revision === status?.selected?.revision) ?? null);
   const shown = $derived(candidate ?? selected);
   const available = $derived(native && !!panel && !!runtime?.connected && !runtime?.locked);
-  const count = $derived(Array.from(description).length);
+  const count = $derived(description.length);
   const isSelected = $derived(!!candidate?.identity && candidate.identity.id === status?.selected?.id && candidate.identity.revision === status?.selected?.revision);
-  $effect(() => { const connected = runtime?.connected; const current = panel; if (current && connected) untrack(() => { if (!busy) void refresh(); }); if (!connected) untrack(() => { status = null; }); });
+  $effect(() => { const connected = runtime?.connected; const locked = runtime?.locked; const current = panel; if (current && connected && !locked) untrack(() => { if (!busy) void refresh(); }); if (!connected || locked) untrack(() => { publication++; status = null; candidate = null; note = ""; previewText = ""; }); });
   async function call(value: Record<string, unknown>): Promise<Result> {
     if (!panel) throw new Error("Voice settings are not ready.");
     return command<Result>("voice_operation", { panel, command: value });
   }
   async function refresh() {
     if (!available || busy) return;
-    const token = ++operation; busy = "refresh"; error = "";
-    try { const result = await call({ operation: "status" }); if (mounted && token === operation && result.kind === "status") status = result.value; }
-    catch (e) { if (mounted && token === operation) error = String(e); }
+    const token = ++operation; const visible = publication; busy = "refresh"; error = "";
+    try { const result = await call({ operation: "status" }); if (mounted && token === operation && visible === publication && result.kind === "status") status = result.value; }
+    catch (e) { if (mounted && token === operation && visible === publication) error = String(e); }
     finally { if (mounted && token === operation) busy = ""; }
   }
   async function change(value: Record<string, unknown>, kind: string) {
     if (!available || busy) return;
-    const token = ++operation; busy = kind; error = ""; note = "";
+    const token = ++operation; const visible = publication; busy = kind; error = ""; note = "";
     try {
       const result = await call(value);
-      if (!mounted || token !== operation) return;
+      if (!mounted || token !== operation || visible !== publication) return;
       if (result.kind === "candidate") { const c = result.value; candidate = { id: c.identity.id, revision: c.identity.revision, state: "available", identity: c.identity, description: c.description, text: c.text, created_at_ms: c.created_at_ms }; note = "Candidate generated. Preview its reference before selecting."; }
       else { candidate = null; note = "Voice setting updated."; }
       const fresh = await call({ operation: "status" });
-      if (mounted && token === operation && fresh.kind === "status") status = fresh.value;
+      if (mounted && token === operation && visible === publication && fresh.kind === "status") status = fresh.value;
     } catch (e) {
-      if (mounted && token === operation) { error = `${String(e)} No automatic retry was made. Refresh to check the current selection.`; status = null; }
+      if (mounted && token === operation && visible === publication) { error = `${String(e)} Refresh to check whether the change was saved.`; status = null; }
     } finally { if (mounted && token === operation) busy = ""; }
   }
   async function preview() {
     if (!available || busy || !shown?.identity) return;
-    const token = ++operation; busy = "preview"; error = ""; note = ""; previewText = shown.text ?? "";
-    try { const result = await command<string>("preview_voice", { panel, voice: shown.identity }); if (mounted && token === operation) note = result; }
-    catch (e) { if (mounted && token === operation) error = String(e); }
+    const token = ++operation; const visible = publication; busy = "preview"; error = ""; note = ""; previewText = shown.text ?? "";
+    try { const result = await command<string>("preview_voice", { panel, voice: shown.identity }); if (mounted && token === operation && visible === publication) note = result; }
+    catch (e) { if (mounted && token === operation && visible === publication) error = String(e); }
     finally { if (mounted && token === operation) busy = ""; }
+  }
+  async function openPanel() {
+    if (!native || busy || panel) return;
+    busy = "opening"; error = "";
+    try { const id = await command<string>("open_voice_panel"); if (mounted) panel = id; else void command("close_voice_panel", { panel: id }).catch(() => {}); }
+    catch (e) { if (mounted) error = String(e); }
+    finally { if (mounted) busy = ""; }
+    if (mounted && panel && available) void refresh();
   }
   onMount(() => {
     mounted = true;
-    if (native) void command<string>("open_voice_panel").then(id => {
-      if (mounted) panel = id;
-      else void command("close_voice_panel", { panel: id }).catch(() => {});
-    }).catch(e => { if (mounted) error = String(e); });
+    if (native) void openPanel();
     return () => { mounted = false; operation++; if (panel && native) void command("close_voice_panel", { panel }).catch(() => {}); };
   });
 </script>
@@ -80,16 +86,16 @@
     </button>
     <button type="button" class="av-btn av-btn-ghost av-btn-sm" aria-expanded={designerOpen} onclick={() => designerOpen = !designerOpen}>{designerOpen ? "Close designer" : "Design"}</button>
   </div>
-  {#if previewText}<div class="av-card flex items-center gap-3 px-3.5 py-2.5"><span class="min-w-0 flex-1 text-[12px] leading-[17px] text-zinc-300">“{previewText}”</span><span class="shrink-0 font-mono text-[10.5px] text-zinc-400">{busy === "preview" ? "Reference preview" : "Generated reference"}</span></div>{/if}
+  {#if previewText}<div class={`flex h-11 items-center gap-3 px-3 ring-1 ring-inset transition-colors ${busy === "preview" ? "bg-red-500/[0.06] ring-red-500/30" : "bg-black/20 ring-white/[0.06]"}`}><span class="min-w-0 flex-1 truncate text-[12px] leading-[17px] text-zinc-300" title={previewText}>“{previewText}”</span><span class="shrink-0 font-mono text-[10.5px] text-zinc-400">{busy === "preview" ? "Reference preview" : "Generated reference"}</span></div>{/if}
   {#if designerOpen}
     <div class="av-rise av-card flex flex-col gap-2.5 p-3.5">
       <label class="av-label" for="vdesc">Describe the voice</label>
-      <textarea id="vdesc" rows="3" class="av-input" bind:value={description} disabled={!!busy} aria-invalid={count > 1024}></textarea>
-      <div class="flex items-center justify-between gap-3"><span class="av-hint">Describe tone, pace and character. Creates a generated reference.</span><span class="font-mono text-[10.5px] text-zinc-400">{count}/1024</span></div>
+      <textarea id="vdesc" rows="3" class={`av-input av-textarea resize-none${count > 280 ? " av-invalid" : ""}`} bind:value={description} disabled={!!busy} aria-invalid={count > 280}></textarea>
+      <div class="flex items-center justify-between gap-3"><span class={`text-[11.5px] leading-4 ${count > 280 ? "text-red-400" : "text-zinc-400"}`}>{count > 280 ? "Shorten the description to 280 characters or fewer." : "Used once to generate a voice. The saved preset is reused for replies."}</span><span class={`shrink-0 font-mono text-[10.5px] ${count > 280 ? "text-red-400" : "text-zinc-400"}`}>{count} / 280</span></div>
       <p class="av-hint">Reference text: “{referenceText}”</p>
       {#if status?.candidates.length}
         <label class="av-label" for="voice-candidate">Saved candidates</label>
-        <select id="voice-candidate" class="av-input" disabled={!!busy} value={candidate ? `${candidate.id}:${candidate.revision}` : ""} onchange={e => { candidate = status?.candidates.find(c => `${c.id}:${c.revision}` === e.currentTarget.value) ?? null; if (candidate?.description) description = candidate.description; }}>
+        <select id="voice-candidate" class="av-input av-select" disabled={!!busy} value={candidate ? `${candidate.id}:${candidate.revision}` : ""} onchange={e => { candidate = status?.candidates.find(c => `${c.id}:${c.revision}` === e.currentTarget.value) ?? null; if (candidate?.description) description = candidate.description; }}>
           <option value="">Choose a candidate</option>{#each status.candidates as c}<option value={`${c.id}:${c.revision}`}>{c.description ?? "Unavailable candidate"} · {c.id.slice(0,8)}</option>{/each}
         </select>
       {/if}
@@ -99,11 +105,11 @@
           <button class="av-btn av-btn-ghost av-btn-sm" disabled={!available || !!busy || isSelected} onclick={() => change({ operation: "discard", id: candidate!.id, revision: candidate!.revision }, "discard")}>Discard</button>
           <button class="av-btn av-btn-primary av-btn-sm" disabled={!available || !!busy || !candidate.identity || isSelected || !status} onclick={() => change({ operation: "select", voice: candidate!.identity, expected_selection: status?.selection_revision }, "select")}>Use this voice</button>
         {/if}
-        <button class="av-btn av-btn-secondary av-btn-sm" disabled={!available || !!busy || !description.trim() || count > 1024} onclick={() => change({ operation: "generate", text: referenceText, description }, "generate")}>{busy === "generate" ? "Generating…" : "Generate"}</button>
+        <button class="av-btn av-btn-secondary av-btn-sm" disabled={!available || !!busy || !description.trim() || count > 280} onclick={() => change({ operation: "generate", text: referenceText, description }, "generate")}>{busy === "generate" ? "Generating…" : "Generate"}</button>
       </div>
     </div>
   {/if}
-  <div class="flex items-center gap-2"><button class="av-btn av-btn-ghost av-btn-sm" disabled={!available || !!busy} onclick={refresh}>{busy === "refresh" ? "Refreshing…" : "Refresh status"}</button>{#if status?.selection_revision}<button class="av-btn av-btn-ghost av-btn-sm" disabled={!available || !!busy} onclick={() => change({ operation: "clear", expected_selection: status!.selection_revision }, "clear")}>Clear selection</button>{/if}<span class="av-hint">Preview plays the generated reference, without selecting it.</span></div>
+  <div class="flex items-center gap-2"><button class="av-btn av-btn-ghost av-btn-sm" disabled={!native || !!busy || !!runtime?.locked || !runtime?.connected} onclick={() => panel ? refresh() : openPanel()}>{busy === "refresh" ? "Refreshing…" : "Refresh status"}</button>{#if status?.selection_revision}<button class="av-btn av-btn-ghost av-btn-sm" disabled={!available || !!busy} onclick={() => change({ operation: "clear", expected_selection: status!.selection_revision }, "clear")}>Clear selection</button>{/if}<span class="av-hint">Preview plays the generated reference, without selecting it.</span></div>
   {#if error}<p class="av-hint text-amber-200" role="alert">{error}</p>{/if}
   {#if note}<p class="av-hint" role="status">{note}</p>{/if}
   <div class="grid grid-cols-2 gap-5">
