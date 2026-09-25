@@ -1,0 +1,14 @@
+[package]
+name = "avesra-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+avesra-contracts.workspace = true
+avesra-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+axum = "0.8.9"
+[lints]
+workspace = true

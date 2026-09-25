@@ -1,0 +1,17 @@
+[package]
+name = "avesra-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+[dependencies]
+tauri = { version = "2.11.6", features = ["tray-icon"] }
+avesra-contracts.workspace = true
+avesra-core.workspace = true
+avesra-windows.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+[lints]
+workspace = true

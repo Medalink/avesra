@@ -1,0 +1,9 @@
+html{font-size:16px;}
+@import '@fontsource-variable/geist';
+@import '@fontsource-variable/geist-mono';
+@import '../../../design/tailwind/input.css';
+@source './';
+body,#app{width:100%;height:100%;overflow:hidden;background:transparent;font-family:'Geist Variable',Geist,system-ui,sans-serif;color:#f4f4f5;font-size:13px;}
+:root{--font-sans:'Geist Variable',Geist,system-ui,sans-serif;--font-mono:'Geist Mono Variable','Geist Mono',monospace;}
+button,input,select{font:inherit;}button{cursor:pointer;}button:disabled{cursor:not-allowed;}input[type=range]{accent-color:#bb0e4f;}p,h1,h2{margin:0;}h2{font-size:13px;font-weight:500;}.section{display:flex;flex-direction:column;gap:12px;}.row{display:flex;align-items:center;justify-content:space-between;gap:16px;}.muted{color:#a1a1aa;}.line{border-top:1px solid #ffffff0f;}.warning{border:1px solid #fbbf2433;background:#fbbf2409;color:#fde68a;padding:10px 12px;font-size:12px;line-height:18px;}.empty{border:1px solid #ffffff14;background:#ffffff03;padding:18px;display:flex;flex-direction:column;gap:8px;}.caption{font-family:var(--font-mono);font-size:10.5px;letter-spacing:.02em;}.reveal{opacity:0;pointer-events:none;}.overlay:hover .reveal,.overlay:focus-within .reveal{opacity:1;pointer-events:auto;}@media(prefers-reduced-motion:reduce){*{transition:none!important;}}
+

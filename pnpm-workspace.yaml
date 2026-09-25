@@ -1,0 +1,8 @@
+packages:
+  - apps/desktop
+  - apps/browser-extension
+allowBuilds:
+  esbuild: true
+  '@tailwindcss/oxide': true
+minimumReleaseAgeExclude:
+  - vite@8.3.1

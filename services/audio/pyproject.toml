@@ -1,0 +1,9 @@
+[project]
+name = "avesra-audio"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+dependencies = []
+description = "Avesra audio deployment contract; serving runtimes are not yet qualified"
+
+[tool.uv]
+package = false

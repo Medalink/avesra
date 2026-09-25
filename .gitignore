@@ -1,0 +1,12 @@
+/target/
+/artifacts/
+**/node_modules/
+**/dist/
+**/.venv/
+**/__pycache__/
+*.db
+*.db-shm
+*.db-wal
+.env
+*.pem
+/apps/desktop/src-tauri/gen/
