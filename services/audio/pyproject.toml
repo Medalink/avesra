@@ -3,7 +3,12 @@ name = "avesra-audio"
 version = "0.1.0"
 requires-python = ">=3.12,<3.13"
 dependencies = []
-description = "Avesra audio deployment contract; serving runtimes are not yet qualified"
+description = "Bounded Spark audio lane workers; runtime qualification is separate from implementation"
+
+[project.optional-dependencies]
+speaker = ["speechbrain==1.1.1"]
+asr = ["nemo_toolkit[asr]==3.0.0"]
+tts = ["qwen-tts==0.1.1", "transformers==4.57.3", "accelerate==1.12.0"]
 
 [tool.uv]
 package = false

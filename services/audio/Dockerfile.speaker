@@ -1,0 +1,9 @@
+# Candidate runtime only; pin the built image digest after qualification.
+FROM vllm/vllm-openai@sha256:fc120ece0a388cc0aa1caad4a9f1cd92113484ab7ec2fd0efadd62585be05bf8
+COPY speaker.requirements.txt /opt/speaker.requirements.txt
+RUN python3 -m pip install --no-deps --no-cache-dir -r /opt/speaker.requirements.txt \
+    && python3 -m pip freeze > /opt/avesra-audio-runtime.txt
+WORKDIR /opt/avesra-audio
+COPY avesra_audio ./avesra_audio
+ENV HF_HUB_OFFLINE=1 HF_HUB_DISABLE_TELEMETRY=1 TOKENIZERS_PARALLELISM=false OMP_NUM_THREADS=2
+ENTRYPOINT ["python3", "-m", "avesra_audio.service"]

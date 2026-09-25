@@ -1,0 +1,12 @@
+# Exact package delta from the immutable base image, inspected on Spark ARM64.
+speechbrain==1.1.1
+HyperPyYAML==1.2.3
+joblib==1.6.0
+ruamel.yaml==0.18.17
+ruamel.yaml.clib==0.2.15
+scipy==1.18.1
+soundfile==0.14.0
+nvidia-nccl-cu13==2.29.7
+PyJWT==2.13.0
+cryptography==50.0.1
+six==1.17.0

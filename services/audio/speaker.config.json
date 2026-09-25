@@ -1,0 +1,6 @@
+{
+  "lane": "speaker",
+  "model_path": "/models/spkrec-ecapa-voxceleb",
+  "model_revision": "0f99f2d0ebe89ac095bcc5903c4dd8f72b367286",
+  "cache_path": "/cache/speaker"
+}
