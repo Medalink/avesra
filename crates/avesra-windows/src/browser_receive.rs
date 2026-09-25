@@ -63,9 +63,69 @@ impl Settlement {
         &self.context
     }
 }
+/// Received only on the actual authenticated current connection. No raw-body
+/// getter, Deserialize implementation or caller-supplied constructor exists.
+pub struct Content {
+    reply: browser::reading::Reply,
+}
+impl Content {
+    pub fn context(&self) -> &browser::reading::Context {
+        &self.reply.context
+    }
+    /// Both owners stay borrowed through one-use consumption. This prerequisite
+    /// cannot transfer evidence beyond the live worker/resource reservation.
+    pub fn finalize<'a, 'store>(
+        self,
+        execution: &'a mut avesra_core::browser_execution::ReadExecution<'store>,
+        current: &'a mut dyn FnMut() -> Result<(), ErrorCode>,
+    ) -> Result<ReadReply<'a, 'store>, ErrorCode> {
+        let result = (|| {
+            current()?;
+            execution.finalize_content(&self.reply)?;
+            current()?;
+            execution.content_current()
+        })();
+        if let Err(error) = result {
+            execution.withdraw_content();
+            return Err(error);
+        }
+        Ok(ReadReply {
+            reply: Some(self.reply),
+            execution,
+            current,
+        })
+    }
+}
+/// Borrowed untrusted evidence, not a transferable effect/publication permit.
+pub struct ReadReply<'a, 'store> {
+    reply: Option<browser::reading::Reply>,
+    execution: &'a mut avesra_core::browser_execution::ReadExecution<'store>,
+    current: &'a mut dyn FnMut() -> Result<(), ErrorCode>,
+}
+impl ReadReply<'_, '_> {
+    pub fn consume(mut self) -> Result<browser::reading::Reply, ErrorCode> {
+        self.execution.content_current()?;
+        (self.current)()?;
+        self.execution.content_current()?;
+        self.reply.take().ok_or(ErrorCode::Stale)
+    }
+}
+impl Drop for ReadReply<'_, '_> {
+    fn drop(&mut self) {
+        if self.reply.is_some() {
+            self.execution.withdraw_content();
+        }
+    }
+}
 pub enum Incoming {
     Message(Client),
     Authentication(Authentication),
+    Content {
+        session: Id,
+        sequence: u64,
+        observation_revision: u64,
+        content: Content,
+    },
     Settlement {
         session: Id,
         sequence: u64,
@@ -246,10 +306,48 @@ impl ReceiveOwner {
                     },
                 }
             }
-            Client::Poll { .. }
-            | Client::ScopeResult { .. }
-            | Client::DocumentResult { .. }
-            | Client::ReadResult { .. } => Incoming::Message(message),
+            Client::ReadResult {
+                session,
+                sequence,
+                observation_revision,
+                reply,
+            } => {
+                reply.context.validate()?;
+                let authenticated = self
+                    .authenticated
+                    .as_ref()
+                    .ok_or(ErrorCode::Unauthenticated)?;
+                let (actor, app) = self
+                    .authenticated_binding
+                    .ok_or(ErrorCode::Unauthenticated)?;
+                if reply.context.pairing != authenticated.pairing
+                    || reply.context.actor != actor
+                    || reply.context.browser_app != app
+                {
+                    return Err(ErrorCode::Unauthenticated);
+                }
+                if reply.context.browser_session != self.session
+                    || reply.context.browser_generation != self.generation
+                {
+                    // Same authenticated pairing, withdrawn old connection:
+                    // consume its contiguous envelope without minting content.
+                    Incoming::Message(Client::Poll {
+                        session,
+                        sequence,
+                        observation_revision,
+                    })
+                } else {
+                    Incoming::Content {
+                        session,
+                        sequence,
+                        observation_revision,
+                        content: Content { reply },
+                    }
+                }
+            }
+            Client::Poll { .. } | Client::ScopeResult { .. } | Client::DocumentResult { .. } => {
+                Incoming::Message(message)
+            }
             Client::Disconnect { session } if session == self.session => {
                 // Terminal message: no subsequent send/receive may reuse the owner.
                 return Ok(Incoming::Message(message));

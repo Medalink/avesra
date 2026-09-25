@@ -23,6 +23,9 @@ pub struct VolumeLevel {
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum EffectObservation {
+    BrowserRead {
+        observation: Box<crate::browser_reading::Observation>,
+    },
     PackagedApplication {
         app_id: Uuid,
         catalog_revision: Uuid,
@@ -55,7 +58,16 @@ impl EffectObservation {
         action: &avesra_contracts::Action,
         outcome: Outcome,
     ) -> Result<(), ErrorCode> {
+        if matches!(self, Self::BrowserRead { .. })
+            && serde_json::to_vec(self)
+                .map_err(|_| ErrorCode::Malformed)?
+                .len()
+                > 4096
+        {
+            return Err(ErrorCode::TooLarge);
+        }
         match self {
+            Self::BrowserRead { observation } => observation.validate(action, outcome),
             Self::PackagedApplication {
                 app_id,
                 catalog_revision,

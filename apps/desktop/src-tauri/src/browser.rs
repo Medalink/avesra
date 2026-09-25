@@ -867,6 +867,21 @@ async fn run(
             with_attempt(app, id, generation, |_, _, _| Ok(()))?;
             let message = match incoming {
                 avesra_windows::browser_receive::Incoming::Message(message) => message,
+                avesra_windows::browser_receive::Incoming::Content {
+                    session,
+                    sequence,
+                    observation_revision,
+                    content,
+                } => {
+                    // No live publication/result channel exists yet. Consume the
+                    // envelope without exposing authenticated raw page evidence.
+                    drop(content);
+                    Client::Poll {
+                        session,
+                        sequence,
+                        observation_revision,
+                    }
+                }
                 avesra_windows::browser_receive::Incoming::Settlement {
                     session,
                     sequence,

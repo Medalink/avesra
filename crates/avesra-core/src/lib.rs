@@ -13,5 +13,6 @@ pub mod browser_execution;
 pub mod browser_jobs;
 pub mod browser_reading;
 pub mod browser_scopes;
+mod observation_schema;
 pub mod owner;
 pub mod shortcuts;

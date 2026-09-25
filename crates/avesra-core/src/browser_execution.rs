@@ -2,13 +2,13 @@
 //! No native transport or settlement authority is constructed in this module.
 use crate::{
     browser_jobs,
-    execution::{Cancellation, now_ms},
+    execution::{Cancellation, EffectObservation, now_ms},
     ledger::{DispatchPermit, DispatchSession},
     store::Store,
 };
 use avesra_contracts::{
     ActionPayload, ErrorCode, Outcome,
-    browser::reading::{Context, LIFETIME_MS, Request},
+    browser::reading::{Context, LIFETIME_MS, Reply, Request},
 };
 use rusqlite::{TransactionBehavior, params};
 use std::{
@@ -88,6 +88,7 @@ pub struct PublishedRequest {
     request: Request,
     deadline: Instant,
     cancellation: Cancellation,
+    phase: Arc<AtomicU8>,
 }
 impl PublicationPermit {
     /// The native coordinator calls only after its exact current context check,
@@ -104,6 +105,7 @@ impl PublicationPermit {
             request: self.request.take().ok_or(ErrorCode::Stale)?,
             deadline: self.deadline,
             cancellation: self.cancellation.clone(),
+            phase: self.phase.clone(),
         })
     }
 }
@@ -117,7 +119,9 @@ impl Drop for PublicationPermit {
 }
 impl PublishedRequest {
     pub fn request(&self) -> Result<Request, ErrorCode> {
-        if self.cancellation.is_cancelled() {
+        if self.cancellation.is_cancelled()
+            || self.phase.load(Ordering::SeqCst) != POSSIBLY_PUBLISHED
+        {
             return Err(ErrorCode::Stale);
         }
         let remaining = self
@@ -149,8 +153,10 @@ pub struct ReadExecution<'a> {
     attempted: bool,
     preparation_taken: bool,
     marker: Option<(Uuid, Context)>,
+    authorized: Option<Request>,
     phase: Arc<AtomicU8>,
     finished: bool,
+    finalization_attempted: bool,
 }
 impl<'a> ReadExecution<'a> {
     pub(crate) fn begin(
@@ -192,8 +198,10 @@ impl<'a> ReadExecution<'a> {
             attempted: false,
             preparation_taken: false,
             marker: None,
+            authorized: None,
             phase: Arc::new(AtomicU8::new(NO_PERMIT)),
             finished: false,
+            finalization_attempted: false,
         })
     }
     pub fn permit(&self) -> &DispatchPermit {
@@ -318,6 +326,7 @@ impl<'a> ReadExecution<'a> {
         self.current()?;
         native_current()?;
         request.remaining_ms = request.remaining_ms.min(self.remaining_ms()?);
+        self.authorized = Some(request.clone());
         self.phase.store(HELD, Ordering::SeqCst);
         Ok((
             MarkerLease {
@@ -355,6 +364,67 @@ impl<'a> ReadExecution<'a> {
         self.marker = None;
         self.phase.store(SETTLED, Ordering::SeqCst);
         Ok(receipt)
+    }
+    /// Original content authority only. After durable finalization this remains
+    /// checked until the borrowed native reply is consumed; no renewed budget.
+    pub fn content_current(&self) -> Result<(), ErrorCode> {
+        self.current()?;
+        if self.phase.load(Ordering::SeqCst) != SETTLED || self.marker.is_some() {
+            return Err(ErrorCode::InvalidTransition);
+        }
+        Ok(())
+    }
+    pub fn withdraw_content(&self) {
+        self.cancellation.cancel();
+    }
+    /// Correlates untrusted data and records the exact result on this actual
+    /// claimed owner. This is NOT native receive authentication and produces no
+    /// text capability. Native Content must retain its own private Reply.
+    pub fn finalize_content(&mut self, reply: &Reply) -> Result<(), ErrorCode> {
+        if self.finished || self.finalization_attempted {
+            return Err(ErrorCode::InvalidTransition);
+        }
+        self.finalization_attempted = true;
+        self.content_current()?;
+        let request = self.authorized.as_ref().ok_or(ErrorCode::Stale)?;
+        crate::browser_reading::validate_reply(request, reply, &self.permit)?;
+        let observation = EffectObservation::BrowserRead {
+            observation: Box::new(crate::browser_reading::Observation::from_reply(
+                request, reply,
+            )?),
+        };
+        observation.validate(&self.permit.action, Outcome::Success)?;
+        self.store
+            .validate_dispatch(&self.permit, &self.session, now_ms()?)?;
+        self.content_current()?;
+        let cancellation = self.cancellation.clone();
+        let (started, admitted_ms, deadline) = (self.started, self.admitted_ms, self.deadline);
+        let mut current = || {
+            let elapsed =
+                u64::try_from(started.elapsed().as_millis()).map_err(|_| ErrorCode::Expired)?;
+            if cancellation.is_cancelled()
+                || Instant::now() >= deadline
+                || now_ms()?.abs_diff(admitted_ms.saturating_add(elapsed)) > 1000
+            {
+                return Err(ErrorCode::Stale);
+            }
+            Ok(())
+        };
+        self.store.finish_observed_action_checked(
+            self.permit.dispatch_id,
+            &self.session,
+            Outcome::Success,
+            Some(&observation),
+            now_ms()?,
+            Some(crate::ledger::ReadFinalCheck {
+                permit: &self.permit,
+                current: &mut current,
+            }),
+        )?;
+        self.finished = true;
+        // Withdrawal may race commit. Preserve immutable history but withhold
+        // the native transient handle when withdrawal wins this later check.
+        self.content_current()
     }
     /// Proven never-issued/returned publication creates no settlement receipt.
     pub fn finish_unpublished(
