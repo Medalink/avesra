@@ -202,6 +202,43 @@ pub fn load(directory: &Path) -> Result<PairingRecord, String> {
     record.validate()?;
     Ok(record)
 }
+
+#[derive(Serialize)]
+pub struct SavedPairing {
+    pub file_revision: String,
+    pub device_id: Option<Uuid>,
+    pub readable: bool,
+}
+pub fn saved_pairing(directory: &Path) -> Result<Option<SavedPairing>, String> {
+    use std::io::Read;
+    let path = directory.join("spark-pairing.dpapi");
+    let file = match std::fs::File::open(&path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err("Saved pairing cannot be read".into()),
+    };
+    let mut bytes = Vec::new();
+    file.take(131_073)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "Saved pairing cannot be read")?;
+    if bytes.len() > 131_072 {
+        return Err("Saved pairing exceeds size limit".into());
+    }
+    let record = load(directory).ok();
+    Ok(Some(SavedPairing {
+        file_revision: hex::encode(Sha256::digest(bytes)),
+        device_id: record.as_ref().map(|value| value.device_id),
+        readable: record.is_some(),
+    }))
+}
+pub fn forget(directory: &Path, revision: &str) -> Result<(), String> {
+    let current = saved_pairing(directory)?.ok_or("No saved pairing")?;
+    if revision != current.file_revision {
+        return Err("Saved pairing changed. Review it again before removal.".into());
+    }
+    std::fs::remove_file(directory.join("spark-pairing.dpapi"))
+        .map_err(|_| "Unable to remove saved pairing".into())
+}
 pub async fn run(
     app: tauri::AppHandle,
     record: PairingRecord,

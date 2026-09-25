@@ -186,6 +186,11 @@ async fn pair_spark(
 }
 #[tauri::command]
 async fn connect_spark(app: tauri::AppHandle) -> Result<(), String> {
+    let state = app.state::<Runtime>();
+    let _guard = state
+        .pairing
+        .try_lock()
+        .map_err(|_| "Pairing management already in progress")?;
     let generation = app
         .state::<Runtime>()
         .connection_generation
@@ -198,6 +203,39 @@ async fn connect_spark(app: tauri::AppHandle) -> Result<(), String> {
         .await
         .map_err(|_| "Credential loading failed")??;
     start_connection(&app, record, generation)
+}
+#[tauri::command]
+async fn saved_pairing(app: tauri::AppHandle) -> Result<Option<connection::SavedPairing>, String> {
+    let directory = app
+        .path()
+        .app_data_dir()
+        .map_err(|_| "Local data directory unavailable")?;
+    tauri::async_runtime::spawn_blocking(move || connection::saved_pairing(&directory))
+        .await
+        .map_err(|_| "Pairing inspection failed")?
+}
+#[tauri::command]
+async fn forget_spark(
+    app: tauri::AppHandle,
+    file_revision: String,
+    understand_revocation: bool,
+) -> Result<(), String> {
+    if !understand_revocation {
+        return Err("Review the server revocation requirement first".into());
+    }
+    let state = app.state::<Runtime>();
+    let _guard = state
+        .pairing
+        .try_lock()
+        .map_err(|_| "Pairing management already in progress")?;
+    disconnect_spark(app.clone(), app.state::<Runtime>())?;
+    let directory = app
+        .path()
+        .app_data_dir()
+        .map_err(|_| "Local data directory unavailable")?;
+    tauri::async_runtime::spawn_blocking(move || connection::forget(&directory, &file_revision))
+        .await
+        .map_err(|_| "Pairing removal failed")?
 }
 #[tauri::command]
 fn disconnect_spark(app: tauri::AppHandle, state: tauri::State<'_, Runtime>) -> Result<(), String> {
@@ -339,6 +377,8 @@ fn main() {
             save_settings,
             pair_spark,
             connect_spark,
+            saved_pairing,
+            forget_spark,
             disconnect_spark
         ])
         .run(tauri::generate_context!())

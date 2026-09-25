@@ -1,6 +1,6 @@
 # Protocol v1
 
-Transport is authenticated TLS WebSocket; plaintext LAN action/media transport is forbidden. An authenticated connection must negotiate version, device/session identity and epochs before application messages. The contract library validates schema and freshness but does not authenticate a peer itself; callers must supply trusted session state from transport authentication. No action transport is enabled until authentication is implemented.
+Transport is authenticated TLS WebSocket; plaintext LAN action/media transport is forbidden. An authenticated connection must negotiate version, device/session identity and epochs before application messages. The contract library validates schema and freshness but does not authenticate a peer itself; callers must supply trusted session state from transport authentication. Authenticated control transport is implemented; action admission remains closed until owner setup and executor wiring.
 
 Control JSON has a 65,536-byte limit. Unknown fields, message variants, versions and invalid UUID identities fail closed. Sequence numbers must strictly increase within the authenticated session. Device/session/epoch mismatches are stale. An action expires at `now >= expires_at_ms`; valid duration is at most 30 seconds. Persisted wall-clock expiration does not replace monotonic process deadlines.
 
@@ -16,11 +16,11 @@ Trace records contain opaque correlation IDs, stage, host, deployment/config rev
 
 | Surface | Scope |
 | --- | --- |
-| `decode_control` / `Envelope::validate` | Wire parser and freshness validation; no authenticated server route yet |
+| `decode_control` / `Envelope::validate` | Wire parser and freshness validation used by the authenticated TLS control route |
 | `PolicyContext::authorize` | Pure authorization used before dispatch; trusted context must be established by controller/local executor |
 | `LocalState::apply` | Local control invalidation; cannot grant readiness |
-| `Store` | Sole SQLite writer, validated settings and task transitions |
-| Tauri typed commands | Local settings/control operations only; no arbitrary execution or voice acceptance |
+| `Store` | Sole SQLite writer, validated settings and durable accepted-intent/action/approval/dispatch lifecycle |
+| Tauri typed commands | Local settings, controls and protected Spark pairing management; no arbitrary execution or voice acceptance |
 | MV3 native bridge | Explicit user connection; rejects web-page-originated requests |
 
 No automated contract tests are created under the owner's instruction. This inventory documents enforcement responsibilities and implementation boundaries.
@@ -38,3 +38,11 @@ Typed action arguments and action/accepted-intent revisions are immutable author
 VPN connection changes network state and requires exact local approval. Navigation arguments must be canonical HTTPS URLs without embedded credentials or whitespace/control characters. Read-page targets must be canonical HTTPS origins only. Cancel targets cannot be nil; Hello carries at most the seven known lanes without duplicates, including the initial handshake. Existing application databases with no version marker, multiple version rows, or unsupported versions are rejected before initialization/recovery writes.
 
 The configured Spark endpoint may use an owner-selected DNS name or IP address on HTTPS port 9474; its verified certificate must include the same DNS/IP subject alternative name. There is no global DNS override or certificate bypass. The setup default reflects the currently discovered Spark address, but the saved endpoint is explicit and editable before pairing. A disconnect invalidates pending pair/load generations as well as active sockets, so a delayed result cannot reconnect silently.
+
+## Durable execution ledger (schema 2)
+
+`accept_intent` records the final controller-accepted actor, ordered exact payload list and explicit-submit scope. It is not exposed as a remotely supplied authority. `propose_action` stores immutable UUID revisions and the current head for each ordered step; changed arguments need a new accepted intent. `seal_task` requires the complete step count and freezes the plan before any claim. Grants are immutable scoped records; replacing scope means revoke plus new grant. Local approvals bind full arguments/revision and are revoked or consumed once.
+
+`claim_action` checks durable scope, current grant/approval, expiry, active authenticated session, sealed uncancelled plan and prior-step success in a single transaction. It commits a unique dispatch and exact actor/device/session/epoch binding before an effect is sent. Duplicate claims cannot issue another permit. `finish_action` requires the same binding and a currently running step. Cancellation stops queued work and marks running dispatches for cancellation; a late verified success records the real effect without resurrecting the cancelled task. Crash recovery turns running steps/tasks into unknown effects and queued/waiting work into suspended state.
+
+`reconcile_action` is reserved for authenticated local management with observed postcondition evidence; it resolves waiting/unknown outcomes without issuing an effect. Remaining work stays suspended and requires a new accepted task. No mutation can be blindly resumed by changing its state. The previous generic task-transition escape hatch is removed. These are durable core APIs; controller/owner-management wiring and live execution remain incomplete. No live database migration or effect workflow is claimed from static compilation.

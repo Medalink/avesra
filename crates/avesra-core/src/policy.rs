@@ -1,6 +1,8 @@
 use avesra_contracts::{Action, ActionPayload, ErrorCode, Operation};
 use uuid::Uuid;
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Grant {
     pub id: Uuid,
     pub actor_id: Uuid,
@@ -8,6 +10,8 @@ pub struct Grant {
     pub operations: Vec<Operation>,
     pub revoked: bool,
 }
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Approval {
     pub id: Uuid,
     pub actor_id: Uuid,

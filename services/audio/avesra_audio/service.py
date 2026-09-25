@@ -62,8 +62,10 @@ class Service:
     def current(self, generation, key, epoch, deadline):
         return generation == self.generation and self.sessions.get(key, (None,))[0] == epoch and time.monotonic() < deadline
 
-    async def stop(self):
+    async def stop(self, expected_generation=None):
         async with self.lifecycle:
+            if expected_generation is not None and expected_generation != self.generation:
+                return self.state != "termination_pending"
             self.generation += 1
             process = self.process
             pipe, self.pipe = self.pipe, None
@@ -159,7 +161,7 @@ class Service:
         if operation == "cancel":
             if self.active != (key, request["request_id"]):
                 return {"error": "unknown_request"}
-            stopped = await self.stop()
+            stopped = await self.stop(self.generation)
             return {"outcome": "cancelled" if stopped else "termination_pending"}
         if self.active is not None:
             return {"error": "busy"}
@@ -177,7 +179,7 @@ class Service:
                     if not self.current(generation, key, epoch, deadline):
                         raise ValueError("stale_reply")
                     if "error" in result:
-                        await self.stop()
+                        await self.stop(generation)
                         return result
                     self.state = "loaded_unqualified"
                 return {"state": self.state}
@@ -197,7 +199,7 @@ class Service:
             return result
         except (Exception, asyncio.CancelledError):
             if generation == self.generation:
-                await self.stop()
+                await self.stop(generation)
             return {"error": "cancelled_or_unavailable"}
         finally:
             payload = None

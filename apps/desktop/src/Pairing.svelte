@@ -9,6 +9,38 @@
   let verified = $state(false);
   let busy = $state(false);
   let message = $state("");
+  let removal = $state<{
+    file_revision: string;
+    device_id: string | null;
+    readable: boolean;
+  } | null>(null);
+  let understood = $state(false);
+  async function reviewRemoval() {
+    try {
+      removal = await command("saved_pairing");
+      understood = false;
+      if (!removal) message = "No saved pairing.";
+    } catch (e) {
+      message = String(e);
+    }
+  }
+  async function forget() {
+    if (!removal || !understood) return;
+    busy = true;
+    try {
+      await command("forget_spark", {
+        fileRevision: removal.file_revision,
+        understandRevocation: understood,
+      });
+      removal = null;
+      message =
+        "Local pairing removed. Server revocation remains a separate operation.";
+    } catch (e) {
+      message = String(e);
+    } finally {
+      busy = false;
+    }
+  }
   async function reconnect() {
     busy = true;
     message = "";
@@ -65,6 +97,40 @@
       >{connected ? "Connected" : "Disconnected"}</span
     >
   </div>
+  <button
+    class="av-btn av-btn-ghost av-btn-sm mt-2"
+    disabled={!native || busy}
+    onclick={reviewRemoval}>Manage saved pairing</button
+  >
+  {#if removal}
+    <div class="mt-3 border-t border-white/10 pt-3 flex flex-col gap-3">
+      <p class="av-hint">
+        Removing this PC's saved credential disconnects it. It does not revoke
+        the credential on Spark. Revoke the device through your authenticated
+        Spark administration session.
+      </p>
+      <p class="caption break-all">
+        Device: {removal.device_id ??
+          "Unavailable — saved credential cannot be decrypted"}
+      </p>
+      <label class="flex items-start gap-2 text-[12px] text-zinc-300"
+        ><input
+          type="checkbox"
+          bind:checked={understood}
+          class="mt-0.5 accent-[#960b3f]"
+        />I understand that server revocation must be completed separately.</label
+      >
+      <div class="flex gap-2">
+        <button
+          class="av-btn av-btn-secondary"
+          disabled={!understood || busy}
+          onclick={forget}>Remove local pairing</button
+        ><button class="av-btn av-btn-ghost" onclick={() => (removal = null)}
+          >Cancel</button
+        >
+      </div>
+    </div>
+  {/if}
   <div class="mt-3 flex gap-2">
     {#if connected}<button class="av-btn av-btn-secondary" onclick={disconnect}
         >Disconnect</button
