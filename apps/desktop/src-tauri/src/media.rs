@@ -402,8 +402,12 @@ impl MediaWorker {
             clear_playback = config.playback_epoch != local.playback_epoch
                 || config.playback != playback
                 || config.output != local.settings.speaker;
-            self.capture_gate.publish(capture, local.capture_epoch);
-            self.playback_gate.publish(playback, local.playback_epoch);
+            if clear_capture {
+                self.capture_gate.publish(capture, local.capture_epoch);
+            }
+            if clear_playback {
+                self.playback_gate.publish(playback, local.playback_epoch);
+            }
             let capture_deadline = if voice_window {
                 config.capture_deadline
             } else {
