@@ -1,6 +1,6 @@
 //! One companion-owned worker. No device opens until native runtime gates pass.
 use avesra_core::state::LocalState;
-use avesra_windows::audio::{AudioFrame, Capture, MediaGate, Playback};
+use avesra_windows::audio::{AudioFrame, Capture, MediaGate, Playback, PlaybackFrame};
 use serde::Serialize;
 use std::{
     collections::VecDeque,
@@ -66,7 +66,7 @@ pub struct MediaWorker {
     capture_gate: Arc<MediaGate>,
     playback_gate: Arc<MediaGate>,
     outbound: Arc<Mutex<VecDeque<AudioFrame>>>,
-    inbound: Arc<Mutex<VecDeque<AudioFrame>>>,
+    inbound: Arc<Mutex<VecDeque<PlaybackFrame>>>,
     shutdown: Arc<AtomicBool>,
 }
 impl MediaWorker {
@@ -92,7 +92,7 @@ impl MediaWorker {
         let capture_gate = Arc::new(MediaGate::default());
         let playback_gate = Arc::new(MediaGate::default());
         let outbound = Arc::new(Mutex::new(VecDeque::<AudioFrame>::with_capacity(64)));
-        let inbound = Arc::new(Mutex::new(VecDeque::<AudioFrame>::with_capacity(64)));
+        let inbound = Arc::new(Mutex::new(VecDeque::<PlaybackFrame>::with_capacity(64)));
         let shutdown = Arc::new(AtomicBool::new(false));
         let value = Self {
             configuration: configuration.clone(),
