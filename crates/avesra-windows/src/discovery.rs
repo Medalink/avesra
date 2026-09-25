@@ -137,6 +137,7 @@ fn link(path: &Path) -> Result<Candidate, ErrorCode> {
     let held = OpenOptions::new()
         .read(true)
         .share_mode(1)
+        .custom_flags(0x00200000) // FILE_FLAG_OPEN_REPARSE_POINT: inspect the link itself.
         .open(path)
         .map_err(|_| ErrorCode::Unavailable)?;
     let metadata = held.metadata().map_err(|_| ErrorCode::Unavailable)?;
@@ -193,6 +194,10 @@ pub fn start_menu() -> Result<Discovery, ErrorCode> {
     let mut queue: Vec<(PathBuf, usize)> = Vec::new();
     let mut seen = 0;
     for folder in [FOLDERID_Programs, FOLDERID_CommonPrograms] {
+        if started.elapsed() >= Duration::from_secs(5) {
+            result.truncated = true;
+            return Ok(result);
+        }
         let raw = unsafe { SHGetKnownFolderPath(&folder, KF_FLAG_DONT_VERIFY, None) }
             .map_err(|_| ErrorCode::Unavailable)?;
         let value = unsafe { raw.to_string() };
@@ -207,6 +212,10 @@ pub fn start_menu() -> Result<Discovery, ErrorCode> {
         }
     }
     while let Some((directory, depth)) = queue.pop() {
+        if started.elapsed() >= Duration::from_secs(5) {
+            result.truncated = true;
+            return Ok(result);
+        }
         let metadata = match std::fs::symlink_metadata(&directory) {
             Ok(v) => v,
             Err(_) => {
@@ -299,6 +308,10 @@ pub fn registered_apps() -> Result<Discovery, ErrorCode> {
     let path = windows::core::w!("Software\\Microsoft\\Windows\\CurrentVersion\\App Paths");
     for (root, label) in [(HKEY_CURRENT_USER, "HKCU"), (HKEY_LOCAL_MACHINE, "HKLM")] {
         for (view, bits) in [(KEY_WOW64_64KEY, "64"), (KEY_WOW64_32KEY, "32")] {
+            if started.elapsed() >= Duration::from_secs(5) {
+                result.truncated = true;
+                return Ok(result);
+            }
             let mut key = HKEY::default();
             if unsafe { RegOpenKeyExW(root, path, None, KEY_READ | view, &mut key) }
                 != ERROR_SUCCESS
@@ -328,6 +341,9 @@ pub fn registered_apps() -> Result<Discovery, ErrorCode> {
                 };
                 if status == ERROR_NO_MORE_ITEMS {
                     break;
+                }
+                if index == 511 {
+                    result.truncated = true;
                 }
                 if status != ERROR_SUCCESS {
                     result.skipped += 1;
