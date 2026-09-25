@@ -7,6 +7,7 @@ import multiprocessing as mp
 import os
 from pathlib import Path
 import socket
+import signal
 import stat
 import struct
 import time
@@ -260,6 +261,8 @@ async def serve(config_path, socket_path):
     os.umask(0o077)
     service = Service(config)
     server = await asyncio.start_unix_server(service.connection, path=path, limit=MAX_PACKET + 4, backlog=8)
+    task = asyncio.current_task()
+    asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, task.cancel)
     try:
         async with server:
             await server.serve_forever()
