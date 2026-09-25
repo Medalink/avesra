@@ -4,6 +4,7 @@ pub mod enrollment;
 pub mod execution;
 pub mod ledger;
 pub mod policy;
+pub mod sound;
 pub mod state;
 pub mod store;
 pub mod voice;

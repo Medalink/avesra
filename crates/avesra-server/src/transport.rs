@@ -39,6 +39,7 @@ mod voice_setup;
 #[path = "voice_stream.rs"]
 mod voice_stream;
 struct ServerState {
+    easy_pairing: Arc<crate::discovery::PairingWindow>,
     #[cfg(unix)]
     planner_admission: Arc<Semaphore>,
     #[cfg(unix)]
@@ -120,7 +121,11 @@ struct SessionReply {
     session_id: Uuid,
     status: &'static str,
 }
-pub fn router(auth: AuthStore, directory: &std::path::Path) -> Result<Router, String> {
+pub fn router(
+    auth: AuthStore,
+    directory: &std::path::Path,
+    easy_pairing: Arc<crate::discovery::PairingWindow>,
+) -> Result<Router, String> {
     #[cfg(unix)]
     let speaker = audio_client(directory, "speaker")?;
     #[cfg(unix)]
@@ -133,6 +138,7 @@ pub fn router(auth: AuthStore, directory: &std::path::Path) -> Result<Router, St
     let _ = directory;
     let router = Router::new()
         .route("/pair", post(pair))
+        .route("/pair-local", post(pair_local))
         .route("/control", get(control))
         .route("/actors", post(actors))
         .route("/actors/cancel", post(cancel_actor))
@@ -144,7 +150,10 @@ pub fn router(auth: AuthStore, directory: &std::path::Path) -> Result<Router, St
         )
         .route("/planner/cancel", post(cancel_planner))
         .route("/speaker", get(speaker_health).post(speaker_infer))
-        .route("/voice-analysis", post(voice_analysis))
+        .route(
+            "/voice-analysis",
+            get(voice_analysis_health).post(voice_analysis),
+        )
         .route("/voice-stream", get(voice_stream_upgrade))
         .route("/voice-preview", get(voice_preview_upgrade))
         .route("/normal-speech", get(normal_speech_upgrade))
@@ -154,6 +163,7 @@ pub fn router(auth: AuthStore, directory: &std::path::Path) -> Result<Router, St
         )
         .layer(DefaultBodyLimit::max(1024))
         .with_state(Arc::new(ServerState {
+            easy_pairing,
             auth: Mutex::new(auth),
             #[cfg(unix)]
             planner_admission: Arc::new(Semaphore::new(2)),
@@ -410,6 +420,32 @@ async fn voice_analysis(
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     analyze(auth, request, true).await
 }
+async fn voice_analysis_health(
+    State(auth): State<Shared>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    authenticate_headers(auth.clone(), &headers).await?;
+    #[cfg(unix)]
+    {
+        let _permit = auth
+            .speaker_health_admission
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| StatusCode::TOO_MANY_REQUESTS)?;
+        let speaker = auth
+            .speaker
+            .as_ref()
+            .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+        let asr = auth.asr.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+        let (speaker, asr) = tokio::try_join!(speaker.health(), asr.health())
+            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+        Ok(Json(
+            serde_json::json!({"version":1,"speaker":speaker,"asr":asr}),
+        ))
+    }
+    #[cfg(not(unix))]
+    Err(StatusCode::SERVICE_UNAVAILABLE)
+}
 async fn analyze(
     auth: Shared,
     request: axum::extract::Request,
@@ -630,14 +666,52 @@ async fn pair(
         .map_err(|_| StatusCode::TOO_MANY_REQUESTS)?;
     let result = tokio::task::spawn_blocking(move || {
         let _permit = permit;
-        auth.auth
-            .lock()
-            .map_err(|_| "Unavailable".to_string())?
-            .pair(&request.code)
+        let mut store = auth.auth.lock().map_err(|_| "Unavailable".to_string())?;
+        let result = store.pair(&request.code)?;
+        auth.easy_pairing.close();
+        Ok::<_, String>(result)
     })
     .await
     .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     let (device_id, credential) = result.map_err(|_| StatusCode::UNAUTHORIZED)?;
+    Ok(Json(PairResponse {
+        version: 1,
+        device_id,
+        credential,
+    }))
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LocalPairRequest {}
+async fn pair_local(
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    State(auth): State<Shared>,
+    Json(_request): Json<LocalPairRequest>,
+) -> Result<Json<PairResponse>, StatusCode> {
+    if !matches!(remote.ip(), std::net::IpAddr::V4(ip) if avesra_contracts::discovery::local_address(ip))
+    {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let permit = auth
+        .admission
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| StatusCode::TOO_MANY_REQUESTS)?;
+    let (device_id, credential) = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        let mut store = auth
+            .auth
+            .lock()
+            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+        if !auth.easy_pairing.take() {
+            return Err(StatusCode::FORBIDDEN);
+        }
+        store
+            .pair_local()
+            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)
+    })
+    .await
+    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)??;
     Ok(Json(PairResponse {
         version: 1,
         device_id,

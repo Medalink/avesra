@@ -18,13 +18,16 @@ The owner must be able to speak these requests and see Avesra complete them on t
 
 These are mandatory live end-to-end outcomes. A model server, overlay, passing unit tests, mocked app, or dispatched click is not proof of completion. See `owner-workflows` and acceptance cases A24–A26 in Plan 001.
 
-Stopped-work handoff and next-step boundaries: [Plan 001 handoff](001-handoff.md). The owner stopped implementation; existing code was published to main. Do not resume without a new request.
+Handoff and next-step boundaries: [Plan 001 handoff](001-handoff.md). The owner resumed implementation on 2026-09-25 with a focus on real UI and screenshots. Current companion work is on `codex/companion-onboarding` in the primary checkout; see [native UI evidence](../docs/evidence/companion-ui.md). The latest instruction prohibits Computer Use: inspect through the Tauri bridge and hidden WebView instead. Full assistant qualification remains incomplete.
 
 ## Execution order
 
 | Plan | Outcome | Priority | Effort | Dependencies | Status |
 | --- | --- | --- | --- | --- | --- |
 | [001](001-single-spark-assistant.md) | Build and verify Avesra on Spark2 with Local Studio, a Windows companion, optional client GPU acceleration and per-stage metrics | P1 | L, multiple milestones | Hardware/app preflight in M0 | IN PROGRESS on `codex/avesra-plan-001`; foundations and initial native UI built, authenticated transport under implementation |
+| [002](002-voice-atmosphere.md) | Add native voice character, looping atmosphere, stereo mixing and an easy live bypass | P1 | L, staged | Existing Plan 001 preview/output ownership; normal speech retains its qualification gates | IN PROGRESS — Digital sound approved and saved as defaults; adjustable pitch and animated overlay implemented. Human audition/approval remains deferred. |
+
+Plan 002 records the owner's 2026-09-25 sound-design request: Digital as the default preset, Human as the second preset, an easy off toggle and permission to expand the app. It can start with explicit generated-reference preview without waiting for every Plan 001 milestone. It does not mark normal voice readiness complete or change Plan 001's existing execution status.
 
 Read the entire plan before implementation. Execute its milestones in order, retain verification evidence, and update this index only when the corresponding evidence exists. Planning does not authorize deployment, account access, production changes, or publication by itself.
 

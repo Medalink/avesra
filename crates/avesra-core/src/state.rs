@@ -13,6 +13,8 @@ fn default_interface_scale() -> u16 {
 #[serde(deny_unknown_fields)]
 pub struct Settings {
     #[serde(default)]
+    pub sound: crate::sound::SoundSettings,
+    #[serde(default)]
     pub shortcuts: crate::shortcuts::Shortcuts,
     #[serde(default)]
     pub audio_device_schema: u16,
@@ -34,6 +36,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            sound: crate::sound::SoundSettings::default(),
             shortcuts: crate::shortcuts::Shortcuts::default(),
             audio_device_schema: 1,
             microphone: None,
@@ -54,6 +57,7 @@ impl Default for Settings {
 }
 impl Settings {
     pub fn validate(&self) -> Result<(), ErrorCode> {
+        self.sound.validate()?;
         self.shortcuts.validate()?;
         if self.audio_device_schema != 1
             || self.chime_volume > 100
@@ -88,6 +92,14 @@ pub fn valid_audio_device_id(value: &str) -> bool {
 }
 
 #[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectionPhase {
+    Disconnected,
+    Connecting,
+    Connected,
+    Error,
+}
+#[derive(Clone, Debug, Serialize)]
 pub struct LocalState {
     pub revision: u64,
     pub settings: Settings,
@@ -95,9 +107,15 @@ pub struct LocalState {
     pub playback_epoch: u64,
     pub action_epoch: u64,
     pub connected: bool,
+    pub connection_phase: ConnectionPhase,
+    pub connection_error: Option<String>,
     pub enrolled: bool,
     pub voice_ready: bool,
     pub enrollment_capture: bool,
+    pub microphone_check: bool,
+    #[serde(skip)]
+    pub microphone_check_epoch: Option<u64>,
+    pub capture_error: Option<String>,
     pub locked: bool,
     pub active_task: bool,
     pub status: String,
@@ -126,9 +144,14 @@ impl LocalState {
             playback_epoch: 1,
             action_epoch: 1,
             connected: false,
+            connection_phase: ConnectionPhase::Disconnected,
+            connection_error: None,
             enrolled: false,
             voice_ready: false,
             enrollment_capture: false,
+            microphone_check: false,
+            microphone_check_epoch: None,
+            capture_error: None,
             locked: false,
             active_task: false,
             status: String::new(),
@@ -138,15 +161,32 @@ impl LocalState {
         value
     }
     pub fn capture_allowed(&self) -> bool {
-        self.connected
+        !self.microphone_check
+            && self.connected
             && ((self.enrolled && self.voice_ready) || self.enrollment_capture)
             && !self.locked
             && !self.settings.explicit_mute
             && !self.settings.deafened
             && !self.settings.paused
     }
+    pub fn microphone_check_allowed(&self) -> bool {
+        self.microphone_check
+            && !self.locked
+            && !self.settings.explicit_mute
+            && !self.settings.deafened
+            && !self.settings.paused
+            && self.settings.microphone.is_some()
+    }
     pub fn apply(&mut self, control: LocalControl) {
+        if matches!(
+            control,
+            LocalControl::Lock | LocalControl::Disconnect | LocalControl::Quit
+        ) {
+            self.connection_phase = ConnectionPhase::Disconnected;
+            self.connection_error = None;
+        }
         self.enrollment_capture = false;
+        self.microphone_check = false;
         match control {
             LocalControl::Mute => self.settings.explicit_mute = true,
             LocalControl::Unmute => self.settings.explicit_mute = false,
@@ -187,6 +227,16 @@ impl LocalState {
         self.refresh();
     }
     pub fn refresh(&mut self) {
+        if self.microphone_check_epoch != Some(self.capture_epoch) {
+            self.microphone_check = false;
+        }
+        if !self.microphone_check {
+            self.microphone_check_epoch = None;
+        }
+        if self.connected {
+            self.connection_phase = ConnectionPhase::Connected;
+            self.connection_error = None;
+        }
         self.revision = self.revision.saturating_add(1);
         let (status, reason) = if self.locked {
             (
@@ -199,12 +249,17 @@ impl LocalState {
             ("deafened", "Microphone and assistant sound are off.")
         } else if self.settings.explicit_mute {
             ("muted", "Microphone is off.")
+        } else if self.microphone_check {
+            (
+                "checking",
+                "Checking microphone locally. No audio is saved or sent.",
+            )
         } else if !self.connected {
             ("disconnected", "Pair the Spark to connect Avesra.")
         } else if self.enrollment_capture {
             (
                 "enrolling",
-                "Recording an explicit enrollment phrase. Cancel or mute to stop.",
+                "Recording an explicit voice setup phrase. Cancel or mute to stop.",
             )
         } else if !self.enrolled {
             (

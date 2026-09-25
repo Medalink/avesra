@@ -77,6 +77,22 @@ impl AuthStore {
         self.connection.execute("INSERT INTO pairing VALUES(1,?1,?2,0) ON CONFLICT(id) DO UPDATE SET hash=excluded.hash,expires_ms=excluded.expires_ms,attempts=0",params![digest(&code),expires]).map_err(|_|"Unable to create pairing code")?;
         Ok(code)
     }
+    pub fn has_devices(&self) -> Result<bool, String> {
+        self.connection
+            .query_row("SELECT EXISTS(SELECT 1 FROM devices)", [], |row| row.get(0))
+            .map_err(|_| "Device records unavailable".into())
+    }
+    pub fn pair_local(&mut self) -> Result<(Uuid, String), String> {
+        let device = Uuid::new_v4();
+        let token = secret();
+        self.connection
+            .execute(
+                "INSERT INTO devices(id,hash,created_ms) VALUES(?1,?2,?3)",
+                params![device.to_string(), digest(&token), now_ms()?],
+            )
+            .map_err(|_| "Pairing unavailable")?;
+        Ok((device, token))
+    }
     pub fn pair(&mut self, code: &str) -> Result<(Uuid, String), String> {
         if code.len() != 64 || !code.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err("Pairing rejected".into());

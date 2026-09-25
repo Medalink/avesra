@@ -1,4 +1,5 @@
 mod auth;
+mod discovery;
 pub mod reasoning;
 mod transport;
 use axum::{Json, Router, routing::get};
@@ -72,12 +73,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("Pairing code written to {}. Expires in five minutes. Read it locally; never add it to logs or source.",file.display());
         },
         [_,command,directory,device]if command=="revoke"=>{let mut store=auth::AuthStore::open(&Path::new(directory).join("authentication.db"))?;store.revoke(uuid::Uuid::parse_str(device)?)?;println!("Device revoked.");},
-        [_,command,directory]if command=="serve"=>{
+        [_,command,directory,options @ ..]if command=="serve"=>{
+            if options.len() > 1 || options.first().is_some_and(|value| value != "--pairing" && value != "--manual-pairing") { return Err("Use serve <directory> [--pairing | --manual-pairing]".into()); }
             let directory=Path::new(directory);let tls=axum_server::tls_rustls::RustlsConfig::from_pem_file(directory.join("server-cert.pem"),directory.join("server-key.pem")).await?;
             let auth=auth::AuthStore::open(&directory.join("authentication.db"))?;
-            let app=transport::router(auth,directory)?.route("/health",get(status));
+            let open = match options.first().map(String::as_str) { Some("--pairing") => true, Some("--manual-pairing") => false, _ => !auth.has_devices()? };
+            let pairing=std::sync::Arc::new(discovery::PairingWindow::new(open));
+            let certificate=std::fs::read_to_string(directory.join("server-cert.pem"))?;
+            let discovery_pairing=pairing.clone();
+            tokio::spawn(async move { if let Err(error)=discovery::serve(certificate,discovery_pairing).await { eprintln!("{error}; manual pairing remains available"); } });
+            let app=transport::router(auth,directory,pairing)?.route("/health",get(status));
+            if open { eprintln!("Local easy pairing is open for one PC for five minutes. Choose this Spark in the companion."); }
             eprintln!("Avesra TLS control listening on port 9474; owner setup required; actions disabled");
-            axum_server::bind_rustls("0.0.0.0:9474".parse::<std::net::SocketAddr>()?,tls).serve(app.into_make_service()).await?;
+            axum_server::bind_rustls("0.0.0.0:9474".parse::<std::net::SocketAddr>()?,tls).serve(app.into_make_service_with_connect_info::<std::net::SocketAddr>()).await?;
         },
         [_]=>{let listener=tokio::net::TcpListener::bind("127.0.0.1:9473").await?;eprintln!("Avesra loopback health on 9473; use serve for configured TLS transport");axum::serve(listener,Router::new().route("/health",get(status))).with_graceful_shutdown(async{let _=tokio::signal::ctrl_c().await;}).await?;},
         _=>return Err("Usage: avesra-server [init <new-private-directory> <dns-name> | pair-code <directory> | serve <directory> | revoke <directory> <device-uuid>]".into())

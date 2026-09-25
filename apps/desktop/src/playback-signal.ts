@@ -60,7 +60,7 @@ export class PlaybackSignal {
       return;
     }
     if (e.epoch !== this.epoch || (this.output !== null && e.output !== this.output)) return;
-    if (e.type !== "sample" || Object.keys(e).length !== 8 || (e.purpose !== "preview" && e.purpose !== "reply") ||
+    if (e.type !== "sample" || Object.keys(e).length !== 9 || typeof e.speech !== "boolean" || (e.purpose !== "preview" && e.purpose !== "reply") ||
       !finite(e.submittedAt) || !finite(e.expiresAt) || Math.abs(e.expiresAt - e.submittedAt - 250) > 0.001 ||
       !Array.isArray(e.samples) || e.samples.length !== 32 ||
       e.samples.some(v => typeof v !== "number" || !Number.isFinite(v) || Math.abs(v) > 1)) return;
@@ -74,7 +74,8 @@ export class PlaybackSignal {
     const deadline = e.expiresAt + clock.offset;
     if (now >= deadline || deadline > now + 250) return;
     this.expires = Math.min(deadline, clock.expires);
+    if (!e.speech) { this.frame = null; return; }
     this.frame = { kind: "speaking", source: "assistant", samples: e.samples, sequence: e.sequence,
-      capturedAt: e.submittedAt, playbackEpoch: e.epoch, outputId: e.output, purpose: e.purpose };
+      capturedAt: e.submittedAt, displayExpiresAt: this.expires, playbackEpoch: e.epoch, outputId: e.output, purpose: e.purpose };
   }
 }

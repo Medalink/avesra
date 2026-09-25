@@ -114,7 +114,7 @@ async fn preview_owned(
         .map_err(|_| "Invalid generated voice identity")?;
     let state = app.state::<Runtime>();
     let mut owner = crate::output::Owner::reserve(&app)?;
-    let (lease, gain) = {
+    let lease = {
         let mut local = state.local.lock().map_err(|_| "Local state unavailable")?;
         if !state
             .voice_panel
@@ -151,7 +151,7 @@ async fn preview_owned(
             withdrawn,
         };
         let _ = app.emit("runtime-state", local.clone());
-        (lease, f32::from(local.settings.speech_volume) / 100.0)
+        lease
     };
     // Device opening and current output acknowledgment precede any Play request.
     let ready = async {
@@ -185,18 +185,13 @@ async fn preview_owned(
     let result = tokio::select! {
         biased;
         _=monitor=>Err("Preview permission changed".into()),
-        value=tokio::time::timeout(Duration::from_secs(65),play(&lease,&record,voice,gain))=>value.map_err(|_|"Preview expired".to_string())?,
+        value=tokio::time::timeout(Duration::from_secs(65),play(&lease,&record,voice))=>value.map_err(|_|"Preview expired".to_string())?,
     };
     lease.stop();
     owner.finish().await?;
     result.map(|_| "Final preview samples submitted to the output device".into())
 }
-async fn play(
-    lease: &Lease,
-    record: &PairingRecord,
-    voice: VoiceIdentity,
-    gain: f32,
-) -> Result<(), String> {
+async fn play(lease: &Lease, record: &PairingRecord, voice: VoiceIdentity) -> Result<(), String> {
     let mut socket = connection::voice_socket(record, MediaEndpoint::Preview).await?;
     lease.current(true)?;
     let request = PreviewRequest {
@@ -292,7 +287,7 @@ async fn play(
                     }
                     let mut pcm = [0i16; 480];
                     for (dst, src) in pcm.iter_mut().zip(&samples) {
-                        *dst = (f32::from(*src) * gain).round() as i16;
+                        *dst = *src;
                     }
                     pending = Some(PlaybackFrame {
                         epoch: lease.epoch,
@@ -300,8 +295,9 @@ async fn play(
                         sequence,
                         captured: (origin + due).min(now),
                         deadline: origin
-                            + Duration::from_secs_f64(total as f64 / 24000.0)
-                            + Duration::from_secs(2),
+                            + (Duration::from_secs_f64(total as f64 / 24000.0)
+                                + Duration::from_secs(4))
+                            .min(Duration::from_secs(32)),
                         device_time: None,
                         rate: PlaybackRate::Pcm24000,
                         samples: pcm,
@@ -364,7 +360,7 @@ async fn play(
                             tokio::time::sleep(Duration::from_millis(5)).await;
                         }
                     };
-                    tokio::time::timeout(Duration::from_millis(1200), drain)
+                    tokio::time::timeout(Duration::from_millis(3100), drain)
                         .await
                         .map_err(|_| "Output drain expired")??;
                     return Ok(());

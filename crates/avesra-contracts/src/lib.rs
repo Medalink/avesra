@@ -2,6 +2,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 pub mod actors;
+pub mod discovery;
 pub mod media;
 pub mod planner;
 pub mod preview;

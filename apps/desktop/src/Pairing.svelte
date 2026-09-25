@@ -1,6 +1,9 @@
 <script lang="ts">
-  import { command, native } from "./runtime";
-  let { connected = false }: { connected?: boolean } = $props();
+  import { onMount } from "svelte";
+  import { command, native, sparkConnection, type Runtime } from "./runtime";
+  let { runtime }: { runtime: Runtime | null } = $props();
+  const spark = $derived(sparkConnection(runtime));
+  const connected = $derived(spark.connected);
   let expanded = $state(false);
   let url = $state("https://192.168.50.11:9474");
   let certificate = $state("");
@@ -9,6 +12,61 @@
   let verified = $state(false);
   let busy = $state(false);
   let message = $state("");
+  type Spark = {
+    id: string;
+    name: string;
+    address: string;
+    pairing_open: boolean;
+  };
+  let sparks = $state<Spark[]>([]);
+  let scanning = $state(false);
+  let scanned = $state(false);
+  let scanError = $state("");
+  let mounted = false;
+  let generation = 0;
+  async function scan() {
+    if (!native || scanning || busy || spark.connecting) return;
+    const current = ++generation;
+    scanning = true;
+    scanned = false;
+    scanError = "";
+    sparks = [];
+    try {
+      const found = await command<Spark[]>("discover_sparks", { hint: url });
+      if (mounted && current === generation) {
+        sparks = found;
+        scanned = true;
+      }
+    } catch (e) {
+      if (mounted && current === generation) scanError = String(e);
+    } finally {
+      if (mounted && current === generation) scanning = false;
+    }
+  }
+  async function useSpark(spark: Spark) {
+    if (busy || scanning) return;
+    busy = true;
+    message = "";
+    try {
+      await command("pair_discovered_spark", { id: spark.id });
+      sparks = [];
+    } catch (e) {
+      message = String(e);
+      sparks = [];
+      scanned = false;
+    } finally {
+      busy = false;
+    }
+  }
+  onMount(() => {
+    mounted = true;
+    if (!connected && !spark.connecting) void scan();
+    return () => {
+      mounted = false;
+      generation++;
+      if (native) void command("cancel_spark_discovery").catch(() => {});
+    };
+  });
   let removal = $state<{
     file_revision: string;
     device_id: string | null;
@@ -46,7 +104,6 @@
     message = "";
     try {
       await command("connect_spark");
-      message = "Connecting securely…";
     } catch (e) {
       message = String(e);
     } finally {
@@ -63,7 +120,6 @@
       });
       code = "";
       expanded = false;
-      message = "Paired. Connecting securely…";
     } catch (e) {
       message = String(e);
     } finally {
@@ -73,7 +129,7 @@
   async function disconnect() {
     try {
       await command("disconnect_spark");
-      message = "Disconnected. Your protected pairing is retained.";
+      message = "Your protected pairing is retained for the next app launch.";
     } catch (e) {
       message = String(e);
     }
@@ -85,21 +141,78 @@
     <div>
       <h2>Single Spark</h2>
       <p class="av-hint mt-1">
-        {connected
-          ? "Authenticated encrypted control connection."
-          : "Pair using the certificate from your Spark."}
+Your saved Spark reconnects automatically when Avesra starts.
       </p>
     </div>
-    <span
-      class="av-chip ring-white/15"
-      class:text-amber-200={!connected}
-      class:text-zinc-300={connected}
-      >{connected ? "Connected" : "Disconnected"}</span
-    >
   </div>
+  {#if !connected && !spark.connecting}
+    <div class="mt-4 border-t border-white/10 pt-4">
+      <div class="flex items-center gap-3">
+        <div class="flex-1">
+          <h2>Find your Spark</h2>
+          <p class="av-hint mt-1">
+            Your PC and Spark should be on the same network.
+          </p>
+        </div>
+        <button
+          class="av-btn av-btn-primary"
+          disabled={!native || scanning || busy}
+          onclick={scan}
+          >{scanning
+            ? "Searching…"
+            : scanned
+              ? "Scan again"
+              : "Find my Spark"}</button
+        >
+      </div>
+      {#if scanning}<p class="av-hint mt-4" role="status">
+          Looking for nearby Avesra servers…
+        </p>
+      {:else if scanError}<p class="warning mt-4" role="alert">{scanError}</p>
+      {:else if scanned && sparks.length === 0}<div
+          class="mt-4 bg-white/[0.025] p-3 ring-1 ring-white/10 ring-inset"
+        >
+          <h2>No Spark found yet</h2>
+          <p class="av-hint mt-1">
+            Make sure Avesra is running on your Spark, then scan again. Older
+            servers need the discovery update. You can also connect manually
+            below.
+          </p>
+        </div>{/if}
+      {#each sparks as spark}
+        <div
+          class="mt-3 flex items-center gap-3 bg-white/[0.03] p-3 ring-1 ring-white/10 ring-inset"
+        >
+          <div class="min-w-0 flex-1">
+            <h2 class="truncate">{spark.name}</h2>
+            <p class="caption mt-1 text-zinc-400">{spark.address}</p>
+            <p class="av-hint mt-1">
+              {spark.pairing_open
+                ? "Available for this PC"
+                : "Found · pairing is closed"}
+            </p>
+          </div>
+          <button
+            class="av-btn av-btn-primary"
+            disabled={!spark.pairing_open || busy || scanning}
+            onclick={() => useSpark(spark)}
+            >{busy ? "Connecting…" : "Use this Spark"}</button
+          >
+        </div>
+        {#if !spark.pairing_open}<p class="av-hint mt-2">
+            Open pairing on this Spark, then scan again. Advanced pairing is
+            also available.
+          </p>{/if}
+      {/each}
+      {#if sparks.length}<p class="av-hint mt-3">
+          Choose a device you recognize. Avesra remembers its certificate and
+          keeps the connection encrypted.
+        </p>{/if}
+    </div>
+  {/if}
   <button
     class="av-btn av-btn-ghost av-btn-sm mt-2"
-    disabled={!native || busy}
+    disabled={!native || busy || spark.connecting}
     onclick={reviewRemoval}>Manage saved pairing</button
   >
   {#if removal}
@@ -132,15 +245,17 @@
     </div>
   {/if}
   <div class="mt-3 flex gap-2">
-    {#if connected}<button class="av-btn av-btn-secondary" onclick={disconnect}
-        >Disconnect</button
+    {#if connected || spark.connecting}<button class="av-btn av-btn-secondary" onclick={disconnect}
+        >{spark.connecting ? "Cancel connection" : "Disconnect"}</button
       >{:else}<button
-        class="av-btn av-btn-primary"
-        disabled={!native || busy}
-        onclick={() => (expanded = !expanded)}>Pair Spark</button
+        class="av-btn av-btn-ghost"
+        disabled={!native || busy || spark.connecting}
+        aria-expanded={expanded}
+        onclick={() => (expanded = !expanded)}
+        >{expanded ? "Hide advanced" : "Advanced · manual pairing"}</button
       ><button
         class="av-btn av-btn-secondary"
-        disabled={!native || busy}
+        disabled={!native || busy || spark.connecting}
         onclick={reconnect}>Reconnect</button
       >{/if}
   </div>
@@ -205,7 +320,7 @@
       <button
         type="submit"
         class="av-btn av-btn-primary self-start"
-        disabled={!verified || busy}
+        disabled={!verified || busy || spark.connecting}
         >{busy ? "Pairing…" : "Pair securely"}</button
       >
       <p class="av-hint">

@@ -22,10 +22,21 @@ body,
   --font-sans: "Geist Variable", Geist, system-ui, sans-serif;
   --font-mono: "Geist Mono Variable", "Geist Mono", monospace;
 }
-button,
-input,
-select {
-  font: inherit;
+@layer base {
+  button,
+  input,
+  select {
+    font: inherit;
+  }
+  p,
+  h1,
+  h2 {
+    margin: 0;
+  }
+  h2 {
+    font-size: 13px;
+    font-weight: 500;
+  }
 }
 button {
   cursor: pointer;
@@ -35,15 +46,6 @@ button:disabled {
 }
 input[type="range"] {
   accent-color: #bb0e4f;
-}
-p,
-h1,
-h2 {
-  margin: 0;
-}
-h2 {
-  font-size: 13px;
-  font-weight: 500;
 }
 .section {
   display: flex;

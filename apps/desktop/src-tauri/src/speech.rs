@@ -212,7 +212,7 @@ async fn run(
         return Err("Output preparation expired".into());
     }
     registration(app, &admission, &pairing, prep_deadline).await?;
-    let gain = {
+    {
         let mut local = state
             .local
             .lock()
@@ -238,7 +238,6 @@ async fn run(
             admission.withdrawn.clone(),
         )?;
         let _ = app.emit("runtime-state", local.clone());
-        f32::from(local.settings.speech_volume) / 100.0
     };
     // New output epoch must be acknowledged, but unrelated mic epochs may change.
     let ready = async {
@@ -274,7 +273,7 @@ async fn run(
         app,
         &admission,
         admission.deadline,
-        play(app, &admission, &mut socket, &request, gain, &mut sent),
+        play(app, &admission, &mut socket, &request, &mut sent),
     )
     .await;
     // Logical stop precedes remote cancellation and actual device retirement.
@@ -319,7 +318,6 @@ async fn play(
     admission: &Admission,
     socket: &mut Socket,
     request: &speech::Request,
-    gain: f32,
     sent: &mut bool,
 ) -> Result<Submitted, String> {
     let encoded = serde_json::to_string(request).map_err(|_| "Output request encoding failed")?;
@@ -403,7 +401,7 @@ async fn play(
                 }
                 let mut pcm = [0i16; 480];
                 for (dst, src) in pcm.iter_mut().zip(samples) {
-                    *dst = (f32::from(src) * gain).round() as i16;
+                    *dst = src;
                 }
                 pending = Some(PlaybackFrame {
                     epoch: context.playback_epoch,
@@ -470,7 +468,7 @@ async fn play(
                         tokio::time::sleep(Duration::from_millis(5)).await;
                     }
                 };
-                tokio::time::timeout(Duration::from_millis(1200), drain)
+                tokio::time::timeout(Duration::from_millis(3100), drain)
                     .await
                     .map_err(|_| "Output drain expired")??;
                 return Ok(Submitted { samples });

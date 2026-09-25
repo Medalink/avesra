@@ -35,6 +35,7 @@ struct Renderer {
     source_done: bool,
     padding: usize,
     emitted: u64,
+    lead_remaining: usize,
     output: [f32; 3840],
     output_len: usize,
     output_index: usize,
@@ -61,6 +62,7 @@ impl Renderer {
             source_done: false,
             padding: 0,
             emitted: 0,
+            lead_remaining: 0,
             output: [0.0; 3840],
             output_len: 0,
             output_index: 0,
@@ -82,6 +84,7 @@ impl Renderer {
         self.source_done = false;
         self.padding = 0;
         self.emitted = 0;
+        self.lead_remaining = 0;
         self.output.fill(0.0);
         self.output_len = 0;
         self.output_index = 0;
@@ -116,7 +119,7 @@ impl Renderer {
         &mut self,
         receiver: &Receiver<PlaybackFrame>,
         epoch: u64,
-    ) -> Result<Option<(f32, Binding, bool)>, ErrorCode> {
+    ) -> Result<Option<(f32, Binding, bool, bool)>, ErrorCode> {
         if self.binding.is_none() {
             if self.waiting.is_none() {
                 self.waiting = receiver.try_recv().ok();
@@ -172,10 +175,15 @@ impl Renderer {
             };
             self.binding = Some(binding);
             self.admit(first, binding)?;
+            self.lead_remaining = self.output_rate as usize * 120 / 1000;
         }
         let binding = self.binding.ok_or(ErrorCode::Malformed)?;
         if binding.epoch != epoch || Instant::now() >= binding.deadline {
             return Err(ErrorCode::Expired);
+        }
+        if self.lead_remaining > 0 {
+            self.lead_remaining -= 1;
+            return Ok(Some((0.0, binding, false, false)));
         }
         while self.output_index == self.output_len {
             self.output_len = 0;
@@ -233,8 +241,20 @@ impl Renderer {
         if last {
             self.clear();
         }
-        Ok(Some((value, binding, last)))
+        Ok(Some((value, binding, last, true)))
     }
+}
+
+pub(crate) struct OutputContext {
+    pub reference: SyncSender<Box<PlaybackReference>>,
+    pub recycled: Receiver<Box<PlaybackReference>>,
+    pub control: Arc<crate::sound::SoundControl>,
+    pub gate: Arc<MediaGate>,
+}
+struct Tail {
+    binding: Binding,
+    remaining: usize,
+    total: usize,
 }
 
 pub(crate) fn output_stream<T: Sample + SizedSample + FromSample<f32>>(
@@ -242,112 +262,200 @@ pub(crate) fn output_stream<T: Sample + SizedSample + FromSample<f32>>(
     config: &StreamConfig,
     rate: PlaybackRate,
     receiver: Receiver<PlaybackFrame>,
-    reference: SyncSender<PlaybackReference>,
-    gate: Arc<MediaGate>,
+    context: OutputContext,
 ) -> Result<Stream, ErrorCode>
 where
     f32: FromSample<T>,
 {
+    let OutputContext {
+        reference,
+        recycled,
+        control,
+        gate,
+    } = context;
     let channels = usize::from(config.channels);
     let output_rate = config.sample_rate;
     let reference_size = output_rate as usize / 50;
     let mut renderer = Renderer::new(rate, output_rate)?;
-    let mut pending: Option<PlaybackReference> = None;
+    let mut mixer = crate::sound::Mixer::new(output_rate, &control)?;
+    let mut pending: Option<Box<PlaybackReference>> = None;
+    let mut tail: Option<Tail> = None;
+    let mut invalidated = false;
     let error_gate = gate.clone();
     device
         .build_output_stream(
             config,
             move |output: &mut [T], info: &cpal::OutputCallbackInfo| {
                 let epoch = gate.epoch();
-                let mut invalidated = !gate.current(epoch);
-                if invalidated {
-                    renderer.clear();
-                    pending = None;
-                    for _ in 0..MAX_AUDIO_QUEUE {
-                        if receiver.try_recv().is_err() {
-                            break;
-                        }
-                    }
-                }
                 for (offset, frame) in output.chunks_exact_mut(channels).enumerate() {
-                    if !gate.current(epoch) && !invalidated {
-                        renderer.clear();
-                        pending = None;
-                        invalidated = true;
-                        for _ in 0..MAX_AUDIO_QUEUE {
-                            if receiver.try_recv().is_err() {
-                                break;
+                    // Recheck authority per sample. A cosmetic fade never delays stop.
+                    if !gate.current(epoch) {
+                        if !invalidated {
+                            renderer.clear();
+                            mixer.reset();
+                            tail = None;
+                            if let Some(record) = pending.as_mut() {
+                                record.valid_samples = 0;
                             }
+                            for _ in 0..MAX_AUDIO_QUEUE {
+                                if receiver.try_recv().is_err() {
+                                    break;
+                                }
+                            }
+                            invalidated = true;
                         }
+                        frame.fill(T::from_sample(0.0));
+                        continue;
                     }
-                    let value = if gate.current(epoch) {
-                        renderer.next(&receiver, epoch)
-                    } else {
-                        Ok(None)
-                    };
-                    let (sample, binding) = match value {
-                        Ok(Some((value, binding, last))) if gate.current(epoch) => {
-                            (value, Some((binding, last)))
+                    if offset % 32 == 0 {
+                        mixer.sync(&control);
+                    }
+                    let value = if let Some(active) = tail.as_mut() {
+                        if Instant::now() >= active.binding.deadline {
+                            Err(ErrorCode::Expired)
+                        } else {
+                            let elapsed = active.total - active.remaining;
+                            let hold = (output_rate as usize / 5).min(active.total / 4);
+                            let progress = (elapsed.saturating_sub(hold) as f32
+                                / (active.total - hold).max(1) as f32)
+                                .clamp(0.0, 1.0);
+                            let taper = 1.0 - progress * progress * (3.0 - 2.0 * progress);
+                            active.remaining -= 1;
+                            let last = active.remaining == 0;
+                            Ok(Some((0.0, active.binding, false, last, taper, false)))
                         }
-                        Ok(_) => (0.0, None),
+                    } else {
+                        renderer.next(&receiver, epoch).map(|sample| {
+                            sample.map(|(value, binding, last, speech)| {
+                                if last {
+                                    // Reserve the existing conservative device-drain estimate
+                                    // inside the original source deadline; never extend it.
+                                    let available = binding
+                                        .deadline
+                                        .saturating_duration_since(Instant::now())
+                                        .saturating_sub(Duration::from_millis(1100));
+                                    let count = if mixer.has_tail() {
+                                        (available.min(Duration::from_millis(1800)).as_secs_f64()
+                                            * f64::from(output_rate))
+                                            as usize
+                                    } else {
+                                        0
+                                    };
+                                    if count > 0 {
+                                        tail = Some(Tail {
+                                            binding,
+                                            remaining: count,
+                                            total: count,
+                                        });
+                                    }
+                                }
+                                (value, binding, last, last && tail.is_none(), 1.0, speech)
+                            })
+                        })
+                    };
+                    let Some((sample, binding, speech_last, mix_last, taper, speech)) = (match value
+                    {
+                        Ok(value) => value,
                         Err(_) => {
                             gate.close_attempt();
-                            renderer.clear();
-                            pending = None;
-                            (0.0, None)
+                            None
                         }
+                    }) else {
+                        frame.fill(T::from_sample(0.0));
+                        continue;
                     };
-                    let submitted = T::from_sample(sample);
-                    for channel in frame {
-                        *channel = submitted;
+                    let mut mixed = mixer.tick(sample, taper);
+                    if channels != 2 {
+                        mixed = [(mixed[0] + mixed[1]) * 0.5; 2];
                     }
-                    if let Some((binding, last)) = binding {
-                        let record = pending.get_or_insert_with(|| PlaybackReference {
-                            final_submitted: false,
-                            drain_until: None,
-                            epoch,
-                            utterance: binding.utterance,
-                            submitted: Instant::now(),
-                            device_time: info.timestamp().playback.add(Duration::from_secs_f64(
-                                offset as f64 / f64::from(output_rate),
-                            )),
-                            sample_rate: output_rate,
-                            samples: [0.0; 3840],
-                            valid_samples: 0,
+                    if mixed
+                        .iter()
+                        .any(|value| !value.is_finite() || value.abs() > 1.000_001)
+                    {
+                        gate.close_attempt();
+                        frame.fill(T::from_sample(0.0));
+                        continue;
+                    }
+                    // Acquire fixed storage before committing output. On backpressure
+                    // keep ownership locally; no box/buffer is destroyed in processing.
+                    if pending.is_none() {
+                        pending = recycled.try_recv().ok();
+                    }
+                    let Some(record) = pending.as_mut() else {
+                        gate.close_attempt();
+                        frame.fill(T::from_sample(0.0));
+                        continue;
+                    };
+                    if !gate.current(epoch) {
+                        frame.fill(T::from_sample(0.0));
+                        continue;
+                    }
+                    let submitted = [
+                        T::from_sample(mixed[0].clamp(-1.0, 1.0)),
+                        T::from_sample(mixed[1].clamp(-1.0, 1.0)),
+                    ];
+                    for (channel, destination) in frame.iter_mut().enumerate() {
+                        *destination = submitted[usize::from(channels == 2 && channel == 1)];
+                    }
+                    if record.valid_samples == 0 {
+                        record.epoch = epoch;
+                        record.utterance = binding.utterance;
+                        record.submitted = Instant::now();
+                        record.speech = speech;
+                        record.final_submitted = false;
+                        record.mix_final_submitted = false;
+                        record.drain_until = None;
+                        record.component_peaks = [0.0; 3];
+                        record.device_time = info.timestamp().playback.add(
+                            Duration::from_secs_f64(offset as f64 / f64::from(output_rate)),
+                        );
+                    }
+                    if record.utterance != binding.utterance
+                        || record.epoch != binding.epoch
+                        || record.speech != speech
+                    {
+                        gate.close_attempt();
+                        continue;
+                    }
+                    record.samples[record.valid_samples] = [
+                        f32::from_sample(submitted[0]),
+                        f32::from_sample(submitted[1]),
+                    ];
+                    record.valid_samples += 1;
+                    for (peak, level) in record.component_peaks.iter_mut().zip(mixer.levels()) {
+                        *peak = peak.max(level);
+                    }
+                    record.final_submitted = speech_last;
+                    record.mix_final_submitted = mix_last;
+                    if mix_last {
+                        let timestamp = info.timestamp();
+                        let delay = timestamp
+                            .playback
+                            .duration_since(&timestamp.callback)
+                            .and_then(|delay| {
+                                delay.checked_add(Duration::from_secs_f64(
+                                    (offset + 1) as f64 / f64::from(output_rate),
+                                ))
+                            })
+                            .filter(|delay| *delay <= Duration::from_secs(1))
+                            .unwrap_or(Duration::from_secs(1));
+                        let drained = Instant::now() + delay + Duration::from_millis(50);
+                        if drained > binding.deadline {
+                            gate.close_attempt();
+                        }
+                        record.drain_until = Some(drained);
+                        tail = None;
+                        mixer.reset();
+                    }
+                    if (record.valid_samples == reference_size || speech_last || mix_last)
+                        && let Some(record) = pending.take()
+                        && let Err(error) = reference.try_send(record)
+                    {
+                        pending = Some(match error {
+                            std::sync::mpsc::TrySendError::Full(record)
+                            | std::sync::mpsc::TrySendError::Disconnected(record) => record,
                         });
-                        if record.utterance != binding.utterance || record.epoch != binding.epoch {
-                            gate.close_attempt();
-                            pending = None;
-                            continue;
-                        }
-                        record.samples[record.valid_samples] = f32::from_sample(submitted);
-                        record.valid_samples += 1;
-                        record.final_submitted = last;
-                        if last {
-                            // CPAL reports an estimate, not audible confirmation.
-                            // Unknown/excessive estimates use a bounded1s fallback.
-                            let timestamp = info.timestamp();
-                            let delay = timestamp
-                                .playback
-                                .duration_since(&timestamp.callback)
-                                .and_then(|delay| {
-                                    delay.checked_add(Duration::from_secs_f64(
-                                        (offset + 1) as f64 / f64::from(output_rate),
-                                    ))
-                                })
-                                .filter(|delay| *delay <= Duration::from_secs(1))
-                                .unwrap_or(Duration::from_secs(1));
-                            record.drain_until =
-                                Some(Instant::now() + delay + Duration::from_millis(50));
-                        }
-                        if (record.valid_samples == reference_size || last)
-                            && let Some(record) = pending.take()
-                            && reference.try_send(record).is_err()
-                        {
-                            gate.close_attempt();
-                        }
-                    } else {
-                        pending = None;
+                        gate.close_attempt();
                     }
                 }
             },

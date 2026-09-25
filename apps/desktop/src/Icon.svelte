@@ -1,6 +1,8 @@
 <script lang="ts">
   let { name, size = 16 }: { name: string; size?: number } = $props();
   const paths: Record<string, string> = {
+    atmosphere: "M3 12h2l2-7 3 14 3-16 3 14 2-5h3",
+    setup: "M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z",
     mic_off:
       "M15 9V6a3 3 0 0 0-5.7-1.3M9 9v3a3 3 0 0 0 4.8 2.4M19 11a7 7 0 0 1-.9 3.4M16.2 17.4A7 7 0 0 1 5 11M12 18v3M3 3l18 18",
     deafen_off:

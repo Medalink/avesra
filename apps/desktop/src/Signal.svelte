@@ -5,8 +5,11 @@
     kind: "human" | "thinking" | "speaking";
     source: "owner" | "other" | "background" | "assistant";
     samples: number[];
+    rms?: number;
+    peak?: number;
     sequence: number;
     capturedAt: number;
+    displayExpiresAt?: number;
     captureEpoch?: number;
     playbackEpoch?: number;
     outputId?: string;
@@ -35,7 +38,7 @@
     }
   });
   const effectiveFrame = $derived(reduced ? (frozenFrame ?? frame) : frame);
-  let render: ((value: SignalFrame | null) => void) | undefined;
+  let render = $state<((value: SignalFrame | null) => void) | undefined>();
   const color = $derived(
     frame?.kind === "speaking" || frame?.kind === "thinking"
       ? "#e0115f"
@@ -56,7 +59,22 @@
       .join(" ");
   });
   $effect(() => {
-    if (visible && pageVisible) render?.(effectiveFrame);
+    const value = effectiveFrame;
+    const draw = render;
+    if (!visible || !pageVisible || !draw) return;
+    draw(value);
+    if (reduced || value?.kind !== "speaking") return;
+    let animation = 0;
+    const animate = () => {
+      if (value.displayExpiresAt !== undefined && performance.now() >= value.displayExpiresAt) {
+        draw(null);
+        return;
+      }
+      draw(value);
+      animation = requestAnimationFrame(animate);
+    };
+    animation = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(animation);
   });
   onMount(() => {
     const media = matchMedia("(prefers-reduced-motion: reduce)");
@@ -154,8 +172,10 @@
       render = (value) => {
         if (!visible || document.hidden) return;
         const dpr = Math.min(devicePixelRatio, 2);
-        canvas.width = Math.round(canvas.clientWidth * dpr);
-        canvas.height = Math.round(canvas.clientHeight * dpr);
+        const width = Math.round(canvas.clientWidth * dpr);
+        const height = Math.round(canvas.clientHeight * dpr);
+        if (canvas.width !== width) canvas.width = width;
+        if (canvas.height !== height) canvas.height = height;
         gl.viewport(0, 0, canvas.width, canvas.height);
         gl.clearColor(0, 0, 0, 0);
         gl.clear(gl.COLOR_BUFFER_BIT);
@@ -204,7 +224,7 @@
           u.uMode,
           value.kind === "thinking" ? 1 : value.kind === "speaking" ? 3 : 2,
         );
-        gl.uniform1f(u.uTime, reduced ? 0 : value.capturedAt / 1000);
+        gl.uniform1f(u.uTime, reduced ? 0 : (value.kind === "speaking" ? performance.now() : value.capturedAt) / 1000);
         const rgb =
           value.kind !== "human"
             ? [0.88, 0.07, 0.37]

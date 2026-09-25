@@ -50,7 +50,7 @@ void main(){
     float va=texture2D(uBars,vec2((j0+0.5)/uN,0.5)).r;
     float vb=texture2D(uBars,vec2((j0+1.5)/uN,0.5)).r;
     float env=mix(va,vb,fr*fr*(3.0-2.0*fr))*smoothstep(0.0,0.12,x)*smoothstep(1.0,0.88,x);
-    float A=env*(cy-4.0);
+    float A=min(0.94,1.0-exp(-4.0*env))*(cy-4.0);
     vec3 rc=vec3(0.0);float ra=0.0;
     for(int k=0;k<7;k++){
       float fk=float(k)/6.0;

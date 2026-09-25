@@ -1,0 +1,7 @@
+{
+  "lane": "voice-design",
+  "model_path": "/models/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+  "model_revision": "5ecdb67327fd37bb2e042aab12ff7391903235d3",
+  "cache_path": "/cache/voice-design",
+  "voice_store": "/voices"
+}

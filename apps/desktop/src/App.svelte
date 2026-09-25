@@ -24,6 +24,21 @@
   } from "./runtime";
   let runtime = $state<Runtime | null>(null);
   let devices = $state<AudioDevice[]>([]);
+  let devicesLoading = $state(false);
+  let devicesError = $state("");
+  async function refreshDevices() {
+    if (!native || devicesLoading) return;
+    devicesLoading = true;
+    devicesError = "";
+    devices = [];
+    try {
+      devices = await command<AudioDevice[]>("audio_devices");
+    } catch (e) {
+      devicesError = `Unable to refresh audio devices: ${String(e)}`;
+    } finally {
+      devicesLoading = false;
+    }
+  }
   let error = $state("");
   let notice = $state("");
   let saving = $state(false);
@@ -104,7 +119,8 @@
     if (!captureAllowed()) signal = null;
   }
   function captureAllowed() {
-    return runtime?.connected && ((runtime.enrolled && runtime.voice_ready) || runtime.enrollment_capture) &&
+    return runtime && ((settingsWindow && runtime.microphone_check) ||
+      (runtime.connected && ((runtime.enrolled && runtime.voice_ready) || runtime.enrollment_capture))) &&
       !runtime.locked && !runtime.settings.explicit_mute &&
       !runtime.settings.deafened && !runtime.settings.paused;
   }
@@ -114,6 +130,8 @@
       !Number.isSafeInteger(next.sequence) || next.sequence <= signalSequence ||
       next.kind !== "human" || next.source !== "background" ||
       !Number.isFinite(next.capturedAt) || next.capturedAt < 0 ||
+      typeof next.rms !== "number" || !Number.isFinite(next.rms) || next.rms < 0 || next.rms > 1 ||
+      typeof next.peak !== "number" || !Number.isFinite(next.peak) || next.peak < 0 || next.peak > 1 ||
       !Array.isArray(next.samples) || next.samples.length !== 32 ||
       next.samples.some(value => !Number.isFinite(value) || Math.abs(value) > 1)) return;
     signalSequence = next.sequence;
@@ -186,7 +204,7 @@
         };
         acceptSnapshot(await command<Runtime>("runtime_snapshot"));
         await syncClock();
-        devices = await command<AudioDevice[]>("audio_devices");
+        if (settingsWindow) await refreshDevices();
       } catch (e) {
         error = String(e);
       }
@@ -207,6 +225,9 @@
     {runtime}
     {signal}
     {devices}
+    {devicesLoading}
+    {devicesError}
+    {refreshDevices}
     {error}
     {notice}
     {saving}

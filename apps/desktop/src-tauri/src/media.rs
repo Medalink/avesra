@@ -12,7 +12,7 @@ use std::{
 };
 use tauri::{Emitter, Manager};
 
-fn device_failed(app: &tauri::AppHandle, epoch: u64, output: bool) {
+fn device_failed(app: &tauri::AppHandle, epoch: u64, output: bool, reason: &'static str) {
     let Some(state) = app.try_state::<crate::Runtime>() else {
         return;
     };
@@ -28,7 +28,11 @@ fn device_failed(app: &tauri::AppHandle, epoch: u64, output: bool) {
         return;
     }
     local.voice_ready = false;
+    if !output {
+        local.capture_error = Some(reason.into());
+    }
     local.enrollment_capture = false;
+    local.microphone_check = false;
     local.capture_epoch = local.capture_epoch.saturating_add(1);
     local.playback_epoch = local.playback_epoch.saturating_add(1);
     local.refresh();
@@ -37,7 +41,7 @@ fn device_failed(app: &tauri::AppHandle, epoch: u64, output: bool) {
     drop(local);
     let _ = app.emit("signal-frame", Option::<SignalFrame>::None);
     let _ = app.emit("runtime-state", snapshot);
-    let _ = app.emit("runtime-error", "Audio device unavailable; listening and playback stopped. Review devices before retrying setup.");
+    let _ = app.emit("runtime-error", reason);
 }
 
 #[derive(Clone)]
@@ -53,6 +57,7 @@ struct OutputLease {
 struct OutputStatus {
     epoch: u64,
     ready: bool,
+    channels: u16,
     submitted: Option<uuid::Uuid>,
     output_lease: Option<uuid::Uuid>,
     drain_until: Option<Instant>,
@@ -65,6 +70,7 @@ struct Configuration {
     input: Option<String>,
     output: Option<String>,
     capture: bool,
+    microphone_check: bool,
     playback: bool,
     capture_deadline: Option<Instant>,
     voice_window: bool,
@@ -77,6 +83,8 @@ struct SignalFrame {
     kind: &'static str,
     source: &'static str,
     samples: Vec<f32>,
+    rms: f32,
+    peak: f32,
     sequence: u64,
     captured_at: f64,
     capture_epoch: u64,
@@ -85,9 +93,21 @@ struct SignalFrame {
 struct MediaHealth {
     capture: &'static str,
     playback: &'static str,
+    output_channels: Option<u16>,
     epoch: u64,
 }
+#[derive(Clone, Default, Serialize)]
+pub struct SoundDiagnostics {
+    pub output_channels: Option<u16>,
+    /// Voice, effect difference and background: linear peaks after master and
+    /// limiter, before device format conversion. Scalar metadata, not recordings.
+    pub component_peaks: [f32; 3],
+    pub speech_submitted: bool,
+    pub mix_submitted: bool,
+}
 pub struct MediaWorker {
+    sound_diagnostics: Arc<Mutex<SoundDiagnostics>>,
+    sound: Arc<avesra_windows::sound::SoundControl>,
     telemetry: Arc<crate::playback_signal::Telemetry>,
     configuration: Arc<Mutex<Configuration>>,
     capture_gate: Arc<MediaGate>,
@@ -99,6 +119,18 @@ pub struct MediaWorker {
     applied_revision: Arc<AtomicU64>,
 }
 impl MediaWorker {
+    pub fn sound_diagnostics(&self) -> Result<SoundDiagnostics, String> {
+        self.sound_diagnostics
+            .lock()
+            .map(|d| d.clone())
+            .map_err(|_| "Sound diagnostics unavailable".into())
+    }
+    pub fn output_channels(&self) -> Option<u16> {
+        self.output_status
+            .lock()
+            .ok()
+            .and_then(|s| s.ready.then_some(s.channels))
+    }
     /// Called under native local ownership after explicit Settings validation.
     pub fn open_preview(
         &self,
@@ -152,6 +184,9 @@ impl MediaWorker {
         let mut config = self.configuration.lock().map_err(|_| "Media unavailable")?;
         if config.playback_epoch != local.playback_epoch || config.output_lease.is_some() {
             return Err("Output is already owned or stale".into());
+        }
+        if let Ok(mut diagnostics) = self.sound_diagnostics.lock() {
+            *diagnostics = SoundDiagnostics::default();
         }
         config.output_lease = Some(OutputLease {
             id,
@@ -281,6 +316,14 @@ impl MediaWorker {
         }
     }
     pub fn take_capture_frame(&self, epoch: u64) -> Result<Option<AudioFrame>, String> {
+        if self
+            .configuration
+            .lock()
+            .map_err(|_| "Media state unavailable")?
+            .microphone_check
+        {
+            return Err("Microphone check is local only".into());
+        }
         if !self.capture_gate.current(epoch) {
             return Err("Capture stopped".into());
         }
@@ -301,6 +344,8 @@ impl MediaWorker {
         self.telemetry.clock()
     }
     pub fn spawn(app: tauri::AppHandle) -> std::io::Result<Self> {
+        let sound_diagnostics = Arc::new(Mutex::new(SoundDiagnostics::default()));
+        let sound = Arc::new(avesra_windows::sound::SoundControl::default());
         let telemetry = Arc::new(crate::playback_signal::Telemetry::new(app.clone()));
         let configuration = Arc::new(Mutex::new(Configuration::default()));
         let capture_gate = Arc::new(MediaGate::default());
@@ -311,6 +356,8 @@ impl MediaWorker {
         let output_status = Arc::new(Mutex::new(OutputStatus::default()));
         let applied_revision = Arc::new(AtomicU64::new(0));
         let value = Self {
+            sound_diagnostics: sound_diagnostics.clone(),
+            sound: sound.clone(),
             telemetry: telemetry.clone(),
             applied_revision: applied_revision.clone(),
             output_status: output_status.clone(),
@@ -375,7 +422,7 @@ impl MediaWorker {
                         }
                         if playback_changed && config.playback {
                             playback = config.output.as_ref().and_then(|name| {
-                                Playback::open_with_gate(
+                                Playback::open_with_sound(
                                     name,
                                     playback_gate.output_attempt(
                                         config.playback_epoch,
@@ -383,6 +430,8 @@ impl MediaWorker {
                                         config.output_lease.as_ref().and_then(|v| v.source.clone()),
                                         config.output_lease.as_ref().map(|v| v.caller.clone()),
                                     ),
+                                    avesra_windows::audio::PlaybackRate::Pcm24000,
+                                    sound.clone(),
                                 )
                                 .ok()
                             });
@@ -391,6 +440,7 @@ impl MediaWorker {
                             *status = OutputStatus {
                                 epoch: config.playback_epoch,
                                 ready: playback.is_some(),
+                                channels: playback.as_ref().map_or(0, |p| p.channels),
                                 submitted: None,
                                 output_lease: config.output_lease.as_ref().map(|v| v.id),
                                 drain_until: None,
@@ -406,14 +456,15 @@ impl MediaWorker {
                                 .is_ok_and(|value| value.revision == revision)
                         {
                             if config.capture && capture.is_none() {
-                                device_failed(&app, config.epoch, false);
+                                device_failed(&app, config.epoch, false, "Cannot open the selected microphone. Check Windows microphone access and whether another app has exclusive use, then retry.");
                             } else {
-                                device_failed(&app, config.playback_epoch, true);
+                                device_failed(&app, config.playback_epoch, true, "Speaker device unavailable; playback stopped. Review the selected speaker before retrying.");
                             }
                         }
                         let _ = app.emit(
                             "media-health",
                             MediaHealth {
+                                output_channels: playback.as_ref().map(|p| p.channels),
                                 capture: if !config.capture {
                                     "disabled"
                                 } else if capture.is_some() {
@@ -469,6 +520,8 @@ impl MediaWorker {
                                         kind: "human",
                                         source: "background",
                                         samples,
+                                        rms: frame.rms,
+                                        peak: frame.peak,
                                         sequence: frame.sequence,
                                         captured_at: frame
                                             .captured
@@ -481,7 +534,9 @@ impl MediaWorker {
                                 );
                                 last_signal = Instant::now();
                             }
-                            if let Ok(mut queue) = outbound.lock() {
+                            // Level checks publish only reduced visualization/levels.
+                            // They never enter enrollment or normal inference queues.
+                            if !config.microphone_check && let Ok(mut queue) = outbound.lock() {
                                 if !stream.gate.current(frame.epoch) {
                                     continue;
                                 }
@@ -504,12 +559,17 @@ impl MediaWorker {
                                 .capture_deadline
                                 .is_some_and(|deadline| Instant::now() >= deadline)
                         {
-                            device_failed(&app, config.epoch, false);
+                            if config.microphone_check && !stream.gate.failed() {
+                                crate::microphone_check::stop(&app, Some(config.epoch));
+                            } else {
+                                device_failed(&app, config.epoch, false, if stream.gate.failed() { stream.gate.failure_reason() } else { "Microphone capture exceeded its time limit. Retry the recording." });
+                            }
                             let _ = app.emit(
                                 "media-health",
                                 MediaHealth {
                                     capture: "unavailable",
                                     playback: "disabled",
+                                    output_channels: None,
                                     epoch: config.epoch,
                                 },
                             );
@@ -525,7 +585,7 @@ impl MediaWorker {
                         if failed || !stream.gate.current(config.playback_epoch) {
                             telemetry.retire(config.playback_epoch);
                             if failed {
-                                device_failed(&app, config.playback_epoch, true);
+                                device_failed(&app, config.playback_epoch, true, "Speaker device unavailable; playback stopped. Review the selected speaker before retrying.");
                             }
                             playback = None;
                             if let Ok(mut queue) = inbound.lock() {
@@ -562,7 +622,7 @@ impl MediaWorker {
                         }
                         // Display uses submitted samples only; echo/identity remain unqualified.
                         for _ in 0..64 {
-                            let Ok(reference) = stream.reference.try_recv() else {
+                            let Ok(mut reference) = stream.reference.try_recv() else {
                                 break;
                             };
                             if let Ok(current) = configuration.lock()
@@ -580,6 +640,12 @@ impl MediaWorker {
                                 && stream.gate.current(reference.epoch)
                             {
                                 telemetry.sample(&reference);
+                                if let Ok(mut diagnostics) = sound_diagnostics.lock() {
+                                    diagnostics.output_channels = Some(reference.channels);
+                                    for (peak, value) in diagnostics.component_peaks.iter_mut().zip(reference.component_peaks) { *peak = peak.max(value); }
+                                    diagnostics.speech_submitted |= reference.final_submitted;
+                                    diagnostics.mix_submitted |= reference.mix_final_submitted;
+                                }
                             }
                             if reference.final_submitted
                                 && stream.gate.current(reference.epoch)
@@ -587,7 +653,17 @@ impl MediaWorker {
                                 && status.epoch == reference.epoch
                             {
                                 status.submitted = Some(reference.utterance);
+                            }
+                            if reference.mix_final_submitted
+                                && stream.gate.current(reference.epoch)
+                                && let Ok(mut status) = output_status.lock()
+                                && status.epoch == reference.epoch
+                            {
                                 status.drain_until = reference.drain_until;
+                            }
+                            reference.valid_samples = 0;
+                            if stream.recycle.try_send(reference).is_err() {
+                                stream.gate.close_attempt();
                             }
                         }
                         if stream.gate.failed()
@@ -597,7 +673,7 @@ impl MediaWorker {
                                 .as_ref()
                                 .is_some_and(|v| Instant::now() >= v.deadline)
                         {
-                            device_failed(&app, config.playback_epoch, true);
+                            device_failed(&app, config.playback_epoch, true, "Speaker device unavailable; playback stopped. Review the selected speaker before retrying.");
                             telemetry.retire(config.playback_epoch);
                             playback = None;
                             if let Ok(mut status) = output_status.lock()
@@ -623,7 +699,10 @@ impl MediaWorker {
     }
     /// Called inside the serialized local-state update, before disk/network IO.
     pub fn publish(&self, local: &LocalState) {
+        self.sound
+            .publish(&local.settings.sound, local.settings.speech_volume);
         let allowed = local.capture_allowed() && local.settings.microphone.is_some();
+        let microphone_check = local.microphone_check_allowed();
         let mut clear_capture = true;
         let mut clear_playback = true;
         if let Ok(mut config) = self.configuration.lock() {
@@ -647,12 +726,14 @@ impl MediaWorker {
                 && config.epoch == local.capture_epoch
                 && allowed
                 && !local.enrollment_capture;
-            let capture = allowed && (local.enrollment_capture || voice_window);
+            let capture =
+                microphone_check || (allowed && (local.enrollment_capture || voice_window));
             if config.epoch == local.capture_epoch
                 && config.playback_epoch == local.playback_epoch
                 && config.input == local.settings.microphone
                 && config.output == local.settings.speaker
                 && config.capture == capture
+                && config.microphone_check == microphone_check
                 && config.playback == playback
                 && config.output_lease.as_ref().map(|v| v.id) == output_lease.as_ref().map(|v| v.id)
             {
@@ -671,7 +752,13 @@ impl MediaWorker {
                 self.telemetry.retire(config.playback_epoch);
                 self.playback_gate.publish(playback, local.playback_epoch);
             }
-            let capture_deadline = if voice_window {
+            let capture_deadline = if microphone_check {
+                if config.microphone_check && config.epoch == local.capture_epoch {
+                    config.capture_deadline
+                } else {
+                    Some(Instant::now() + Duration::from_secs(30))
+                }
+            } else if voice_window {
                 config.capture_deadline
             } else {
                 local
@@ -685,6 +772,7 @@ impl MediaWorker {
                 input: local.settings.microphone.clone(),
                 output: local.settings.speaker.clone(),
                 capture,
+                microphone_check,
                 playback,
                 capture_deadline,
                 voice_window,

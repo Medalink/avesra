@@ -7,37 +7,102 @@ use cpal::{
 };
 use std::sync::{
     Arc,
-    atomic::{AtomicBool, AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
     mpsc::{Receiver, SyncSender, sync_channel},
 };
 use std::time::Instant;
 
 pub const FRAME_SAMPLES: usize = 320;
-fn capture_contiguous(
-    expected: &mut Option<cpal::StreamInstant>,
-    info: &cpal::InputCallbackInfo,
-    frames: usize,
-    rate: u32,
-) -> bool {
-    if frames == 0 {
-        return true;
+
+/// QPC correlation has jitter; it is not the endpoint's integer frame counter.
+/// Both paths use these bounds without filling or dropping admitted samples.
+#[derive(Default)]
+struct CaptureTiming {
+    first_callback: Option<Instant>,
+    clock_ready: bool,
+    origin: Option<cpal::StreamInstant>,
+    previous: Option<cpal::StreamInstant>,
+    expected: Option<cpal::StreamInstant>,
+    frames: u64,
+}
+impl CaptureTiming {
+    fn begin_callback(
+        &mut self,
+        info: &cpal::InputCallbackInfo,
+        frames: usize,
+        rate: u32,
+        entered: Instant,
+    ) -> Result<bool, u8> {
+        if frames == 0 {
+            return Ok(false);
+        }
+        let first = *self.first_callback.get_or_insert(entered);
+        if !self.clock_ready
+            && entered.duration_since(first) >= std::time::Duration::from_millis(250)
+        {
+            return Err(3);
+        }
+        // WASAPI can report an uninitialized callback clock in its first packet.
+        // Never anchor or resample that pre-roll, or skip data after admission.
+        if capture_instant(info, Some(info.timestamp().capture), entered).is_none() {
+            return if self.clock_ready { Err(3) } else { Ok(false) };
+        }
+        if !self.accept(info.timestamp().capture, frames, rate) {
+            return Err(2);
+        }
+        self.clock_ready = true;
+        Ok(true)
     }
-    let start = info.timestamp().capture;
-    // At most one source sample plus 1us for QPC/duration rounding. Larger
-    // discontinuities must not be hidden by our own contiguous packet sequence.
-    let tolerance = std::time::Duration::from_nanos(1_000_000_000 / u64::from(rate) + 1000);
-    if expected.is_some_and(|previous| {
-        start
-            .duration_since(&previous)
-            .or_else(|| previous.duration_since(&start))
-            .is_none_or(|difference| difference > tolerance)
-    }) {
-        return false;
+    fn accept(&mut self, start: cpal::StreamInstant, frames: usize, rate: u32) -> bool {
+        if !(8000..=192000).contains(&rate) {
+            return false;
+        }
+        if frames == 0 {
+            return true;
+        }
+        if self.previous.is_some_and(|previous| {
+            start
+                .duration_since(&previous)
+                .is_none_or(|elapsed| elapsed.is_zero())
+        }) {
+            return false;
+        }
+        let rounding = std::time::Duration::from_nanos(1_000_000_000 / u64::from(rate) + 1000);
+        let close_to = |expected: cpal::StreamInstant, budget: std::time::Duration| {
+            start
+                .duration_since(&expected)
+                .or_else(|| expected.duration_since(&start))
+                .is_some_and(|difference| difference <= budget + rounding)
+        };
+        if self
+            .expected
+            .is_some_and(|expected| !close_to(expected, std::time::Duration::from_millis(2)))
+        {
+            return false;
+        }
+        let origin = self.origin.unwrap_or(start);
+        let Some(projected) = origin.add(std::time::Duration::from_secs_f64(
+            self.frames as f64 / f64::from(rate),
+        )) else {
+            return false;
+        };
+        if !close_to(projected, std::time::Duration::from_millis(4)) {
+            return false;
+        }
+        let Some(total) = self.frames.checked_add(frames as u64) else {
+            return false;
+        };
+        let Some(expected) = start.add(std::time::Duration::from_secs_f64(
+            frames as f64 / f64::from(rate),
+        )) else {
+            return false;
+        };
+        self.origin = Some(origin);
+        self.previous = Some(start);
+        self.expected = Some(expected);
+        self.frames = total;
+        true
     }
-    *expected = start.add(std::time::Duration::from_secs_f64(
-        frames as f64 / f64::from(rate),
-    ));
-    expected.is_some()
 }
 fn capture_instant(
     info: &cpal::InputCallbackInfo,
@@ -104,17 +169,22 @@ impl PlaybackFrame {
             && Instant::now() < self.deadline
     }
 }
-/// Submitted device-rate mono samples, before identical channel replication.
+/// Actual post-format device samples. Two channels are L/R; other layouts
+/// replicate the first value to every channel and retain an equal second value.
 pub struct PlaybackReference {
     /// Final content sample submitted, not proof of audible delivery.
     pub final_submitted: bool,
+    pub mix_final_submitted: bool,
+    pub speech: bool,
+    pub channels: u16,
+    pub component_peaks: [f32; 3],
     pub drain_until: Option<Instant>,
     pub epoch: u64,
     pub utterance: uuid::Uuid,
     pub submitted: Instant,
     pub device_time: Option<cpal::StreamInstant>,
     pub sample_rate: u32,
-    pub samples: [f32; 3840],
+    pub samples: [[f32; 2]; 3840],
     pub valid_samples: usize,
 }
 /// Shared local invalidation gate; only trusted native state should publish it.
@@ -125,6 +195,7 @@ pub struct MediaGate {
     source: Option<avesra_core::conversations::PlannerCancellation>,
     caller: Option<Arc<AtomicBool>>,
     failed: AtomicBool,
+    failure: AtomicU8,
     dropped: AtomicU64,
 }
 struct MediaPermission {
@@ -143,6 +214,7 @@ impl Default for MediaGate {
             source: None,
             caller: None,
             failed: AtomicBool::new(false),
+            failure: AtomicU8::new(0),
             dropped: AtomicU64::new(0),
         }
     }
@@ -175,6 +247,7 @@ impl MediaGate {
             source,
             caller,
             failed: AtomicBool::new(false),
+            failure: AtomicU8::new(0),
             dropped: AtomicU64::new(0),
         })
     }
@@ -211,10 +284,31 @@ impl MediaGate {
             && !self.failed.load(Ordering::Relaxed)
     }
     fn fail(&self) {
+        self.fail_with(1);
+    }
+    fn fail_with(&self, reason: u8) {
+        let _ = self
+            .failure
+            .compare_exchange(0, reason, Ordering::SeqCst, Ordering::SeqCst);
         self.failed.store(true, Ordering::SeqCst);
     }
+    pub fn failure_reason(&self) -> &'static str {
+        match self.failure.load(Ordering::SeqCst) {
+            2 => {
+                "Microphone audio timing was discontinuous. Retry the recording or choose another microphone."
+            }
+            3 => {
+                "Microphone timestamps were invalid. Retry the recording or choose another microphone."
+            }
+            4 => "Microphone sample conversion failed. Choose another microphone and retry.",
+            5 => "Microphone audio queue overflowed. Retry the recording.",
+            _ => {
+                "The microphone stream stopped. Check the selected device and Windows microphone access, then retry."
+            }
+        }
+    }
     pub fn close_attempt(&self) {
-        self.fail();
+        self.fail_with(5);
     }
 }
 pub struct Capture {
@@ -226,7 +320,9 @@ pub struct Playback {
     _stream: Stream,
     pub frames: SyncSender<PlaybackFrame>,
     /// Actual submitted playback samples are the future echo-reference input.
-    pub reference: Receiver<PlaybackReference>,
+    pub reference: Receiver<Box<PlaybackReference>>,
+    pub recycle: SyncSender<Box<PlaybackReference>>,
+    pub channels: u16,
     pub gate: Arc<MediaGate>,
 }
 fn selected(name: &str, input: bool) -> Result<cpal::Device, ErrorCode> {
@@ -331,7 +427,7 @@ where
     let mut sequence = 0u64;
     let mut device_time = None;
     let mut captured = None;
-    let mut expected_capture = None;
+    let mut timing = CaptureTiming::default();
     device
         .build_input_stream(
             config,
@@ -343,25 +439,28 @@ where
                     count = 0;
                     device_time = None;
                     captured = None;
-                    expected_capture = None;
+                    timing = CaptureTiming::default();
                     epoch = current;
                     sequence = 0;
                 }
                 if !gate.current(epoch) {
                     return;
                 }
-                if !input.len().is_multiple_of(channels)
-                    || !capture_contiguous(
-                        &mut expected_capture,
-                        info,
-                        input.len() / channels,
-                        16000,
-                    )
-                {
+                if !input.len().is_multiple_of(channels) {
                     samples.fill(0);
                     count = 0;
-                    gate.fail();
+                    gate.fail_with(2);
                     return;
+                }
+                match timing.begin_callback(info, input.len() / channels, 16000, entered) {
+                    Ok(true) => {}
+                    Ok(false) => return,
+                    Err(reason) => {
+                        samples.fill(0);
+                        count = 0;
+                        gate.fail_with(reason);
+                        return;
+                    }
                 }
                 for (offset, frame) in input.chunks_exact(channels).enumerate() {
                     if !gate.current(epoch) {
@@ -403,7 +502,7 @@ where
                                 return;
                             }
                             let Some(captured) = captured else {
-                                gate.fail();
+                                gate.fail_with(3);
                                 return;
                             };
                             let packet = AudioFrame {
@@ -448,7 +547,7 @@ where
     let mut sequence = 0u64;
     let mut origin: Option<cpal::StreamInstant> = None;
     let mut emitted = 0u64;
-    let mut expected_capture = None;
+    let mut timing = CaptureTiming::default();
     let source_rate = config.sample_rate;
     device
         .build_input_stream(
@@ -463,25 +562,29 @@ where
                     sequence = 0;
                     origin = None;
                     emitted = 0;
-                    expected_capture = None;
+                    timing = CaptureTiming::default();
                     epoch = current;
                 }
                 if !gate.current(epoch) {
                     return;
                 }
-                if !input.len().is_multiple_of(channels)
-                    || !capture_contiguous(
-                        &mut expected_capture,
-                        info,
-                        input.len() / channels,
-                        source_rate,
-                    )
-                {
+                if !input.len().is_multiple_of(channels) {
                     converter.reset();
                     samples.fill(0);
                     count = 0;
-                    gate.fail();
+                    gate.fail_with(2);
                     return;
+                }
+                match timing.begin_callback(info, input.len() / channels, source_rate, entered) {
+                    Ok(true) => {}
+                    Ok(false) => return,
+                    Err(reason) => {
+                        converter.reset();
+                        samples.fill(0);
+                        count = 0;
+                        gate.fail_with(reason);
+                        return;
+                    }
                 }
                 for (offset, frame) in input.chunks_exact(channels).enumerate() {
                     if !gate.current(epoch) {
@@ -511,7 +614,7 @@ where
                         Ok(Some(output)) => output,
                         Ok(None) => continue,
                         Err(_) => {
-                            gate.fail();
+                            gate.fail_with(4);
                             return;
                         }
                     };
@@ -544,7 +647,7 @@ where
                                 ))
                             });
                             let Some(captured) = capture_instant(info, device_time, entered) else {
-                                gate.fail();
+                                gate.fail_with(3);
                                 return;
                             };
                             let packet = AudioFrame {
@@ -583,6 +686,16 @@ impl Playback {
         gate: Arc<MediaGate>,
         rate: PlaybackRate,
     ) -> Result<Self, ErrorCode> {
+        let control = Arc::new(crate::sound::SoundControl::default());
+        control.publish(&avesra_core::sound::SoundSettings::default(), 100);
+        Self::open_with_sound(selected_name, gate, rate, control)
+    }
+    pub fn open_with_sound(
+        selected_name: &str,
+        gate: Arc<MediaGate>,
+        rate: PlaybackRate,
+        control: Arc<crate::sound::SoundControl>,
+    ) -> Result<Self, ErrorCode> {
         let device = selected(selected_name, false)?;
         let supported = native_config(&device, false, rate.hz()).or_else(|_| {
             device
@@ -595,31 +708,42 @@ impl Playback {
         }
         let (frames, receiver) = sync_channel(MAX_AUDIO_QUEUE);
         let (reference_sender, reference) = sync_channel(MAX_AUDIO_QUEUE);
+        let (recycle, recycled) = sync_channel(MAX_AUDIO_QUEUE + 1);
+        for _ in 0..=MAX_AUDIO_QUEUE {
+            recycle
+                .try_send(Box::new(PlaybackReference {
+                    final_submitted: false,
+                    mix_final_submitted: false,
+                    speech: false,
+                    channels: config.channels,
+                    component_peaks: [0.0; 3],
+                    drain_until: None,
+                    epoch: 0,
+                    utterance: uuid::Uuid::nil(),
+                    submitted: Instant::now(),
+                    device_time: None,
+                    sample_rate: config.sample_rate,
+                    samples: [[0.0; 2]; 3840],
+                    valid_samples: 0,
+                }))
+                .map_err(|_| ErrorCode::Unavailable)?;
+        }
+        let context = crate::playback::OutputContext {
+            reference: reference_sender,
+            recycled,
+            control,
+            gate: gate.clone(),
+        };
         let stream = match supported.sample_format() {
-            cpal::SampleFormat::F32 => playback_stream::<f32>(
-                &device,
-                &config,
-                rate,
-                receiver,
-                reference_sender,
-                gate.clone(),
-            ),
-            cpal::SampleFormat::I16 => playback_stream::<i16>(
-                &device,
-                &config,
-                rate,
-                receiver,
-                reference_sender,
-                gate.clone(),
-            ),
-            cpal::SampleFormat::U16 => playback_stream::<u16>(
-                &device,
-                &config,
-                rate,
-                receiver,
-                reference_sender,
-                gate.clone(),
-            ),
+            cpal::SampleFormat::F32 => {
+                crate::playback::output_stream::<f32>(&device, &config, rate, receiver, context)
+            }
+            cpal::SampleFormat::I16 => {
+                crate::playback::output_stream::<i16>(&device, &config, rate, receiver, context)
+            }
+            cpal::SampleFormat::U16 => {
+                crate::playback::output_stream::<u16>(&device, &config, rate, receiver, context)
+            }
             _ => return Err(ErrorCode::Unsupported),
         }?;
         stream.play().map_err(|_| ErrorCode::Unavailable)?;
@@ -627,20 +751,9 @@ impl Playback {
             _stream: stream,
             frames,
             reference,
+            recycle,
+            channels: config.channels,
             gate,
         })
     }
-}
-fn playback_stream<T: Sample + SizedSample + FromSample<f32>>(
-    device: &cpal::Device,
-    config: &StreamConfig,
-    rate: PlaybackRate,
-    receiver: Receiver<PlaybackFrame>,
-    reference: SyncSender<PlaybackReference>,
-    gate: Arc<MediaGate>,
-) -> Result<Stream, ErrorCode>
-where
-    f32: FromSample<T>,
-{
-    crate::playback::output_stream(device, config, rate, receiver, reference, gate)
 }

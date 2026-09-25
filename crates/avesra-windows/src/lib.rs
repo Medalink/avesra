@@ -16,6 +16,8 @@ pub mod session;
 #[cfg(windows)]
 pub mod shortcuts;
 #[cfg(windows)]
+pub mod sound;
+#[cfg(windows)]
 pub mod volume;
 
 #[derive(Debug, Clone, Serialize)]
@@ -41,11 +43,26 @@ pub fn audio_devices() -> Result<Vec<AudioDevice>, ErrorCode> {
     ] {
         let default_id = default.and_then(|device| device.id().ok());
         for device in items.map_err(|_| ErrorCode::Unavailable)? {
-            let name = device
-                .description()
-                .map_err(|_| ErrorCode::Unavailable)?
-                .name()
-                .to_string();
+            let description = device.description().map_err(|_| ErrorCode::Unavailable)?;
+            // CPAL's WASAPI name is often just "Microphone". Its extended
+            // description retains Windows' full endpoint friendly name.
+            // Display metadata must never replace the stable selection ID.
+            let name = description
+                .extended()
+                .first()
+                .map(|name| name.trim())
+                .filter(|name| !name.is_empty())
+                .map(str::to_owned)
+                .unwrap_or_else(|| {
+                    match description
+                        .driver()
+                        .map(str::trim)
+                        .filter(|driver| !driver.is_empty() && *driver != description.name())
+                    {
+                        Some(driver) => format!("{} ({driver})", description.name()),
+                        None => description.name().to_owned(),
+                    }
+                });
             let id = device.id().map_err(|_| ErrorCode::Unavailable)?;
             devices.push(AudioDevice {
                 is_default: default_id.as_ref() == Some(&id),

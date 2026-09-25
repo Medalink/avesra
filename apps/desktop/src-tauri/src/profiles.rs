@@ -24,6 +24,41 @@ pub struct CandidateSummary {
     pub segments: Option<usize>,
     pub state: &'static str,
 }
+// Native only. Never serialize this return value to the webview.
+pub fn read_candidate(directory: &Path, id: Uuid, revision: Uuid) -> Result<Candidate, String> {
+    let _lock = lock_directory(&directory.join("speaker-candidates"))?;
+    read_candidate_locked(directory, id, revision)
+}
+fn read_candidate_locked(directory: &Path, id: Uuid, revision: Uuid) -> Result<Candidate, String> {
+    use std::io::Read;
+    if id.is_nil() || revision.is_nil() {
+        return Err("Invalid candidate identity".into());
+    }
+    let path = directory
+        .join("speaker-candidates")
+        .join(format!("{id}-{revision}.dpapi"));
+    if !std::fs::symlink_metadata(&path)
+        .map_err(|_| "Candidate unavailable")?
+        .is_file()
+    {
+        return Err("Candidate is not a regular record".into());
+    }
+    let mut bytes = vec![];
+    std::fs::File::open(path)
+        .and_then(|file| file.take(32769).read_to_end(&mut bytes))
+        .map_err(|_| "Candidate unavailable")?;
+    if bytes.len() > 32768 {
+        return Err("Candidate exceeds limit".into());
+    }
+    let clear = avesra_windows::credentials::unprotect(&bytes)
+        .map_err(|_| "Candidate cannot be decrypted")?;
+    let candidate: Candidate = serde_json::from_slice(&clear).map_err(|_| "Candidate invalid")?;
+    candidate.validate().map_err(|_| "Candidate invalid")?;
+    if candidate.id != id || candidate.revision != revision {
+        return Err("Candidate identity changed".into());
+    }
+    Ok(candidate)
+}
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Selection {
@@ -75,37 +110,12 @@ pub fn select_candidate(
     microphone: &str,
     authorize: &mut dyn FnMut() -> Result<(), String>,
 ) -> Result<(), String> {
-    use std::io::Read;
-    if id.is_nil() || revision.is_nil() {
-        return Err("Invalid candidate identity".into());
-    }
     let _lock = lock_directory(&directory.join("speaker-candidates"))?;
     if selected(directory)?.is_some() {
         return Err("Clear the current selection before replacing it".into());
     }
-    let path = directory
-        .join("speaker-candidates")
-        .join(format!("{id}-{revision}.dpapi"));
-    if !std::fs::symlink_metadata(&path)
-        .map_err(|_| "Candidate unavailable")?
-        .is_file()
-    {
-        return Err("Candidate is not a regular record".into());
-    }
-    let mut bytes = vec![];
-    std::fs::File::open(path)
-        .and_then(|file| file.take(32769).read_to_end(&mut bytes))
-        .map_err(|_| "Candidate unavailable")?;
-    if bytes.len() > 32768 {
-        return Err("Candidate exceeds limit".into());
-    }
-    let clear = avesra_windows::credentials::unprotect(&bytes)
-        .map_err(|_| "Candidate cannot be decrypted")?;
-    let candidate: Candidate = serde_json::from_slice(&clear).map_err(|_| "Candidate invalid")?;
-    candidate.validate().map_err(|_| "Candidate invalid")?;
-    if candidate.id != id
-        || candidate.revision != revision
-        || candidate.microphone != microphone
+    let candidate = read_candidate_locked(directory, id, revision)?;
+    if candidate.microphone != microphone
         || candidate.model_revision != "0f99f2d0ebe89ac095bcc5903c4dd8f72b367286"
     {
         return Err("Candidate does not match this microphone and speaker model".into());
@@ -157,7 +167,6 @@ pub fn clear_selection(
     }
 }
 pub fn list_candidates(directory: &Path) -> Result<Vec<CandidateSummary>, String> {
-    use std::io::Read;
     let _lock = lock_directory(&directory.join("speaker-candidates"))?;
     let selection = selected(directory);
     let entries = match std::fs::read_dir(directory.join("speaker-candidates")) {
@@ -190,24 +199,7 @@ pub fn list_candidates(directory: &Path) -> Result<Vec<CandidateSummary>, String
         if id.is_nil() || revision.is_nil() || stem != format!("{id}-{revision}") {
             continue;
         }
-        let decoded = (|| -> Option<Candidate> {
-            if !std::fs::symlink_metadata(&path).ok()?.is_file() {
-                return None;
-            }
-            let mut bytes = vec![];
-            std::fs::File::open(&path)
-                .ok()?
-                .take(32_769)
-                .read_to_end(&mut bytes)
-                .ok()?;
-            if bytes.len() > 32_768 {
-                return None;
-            }
-            let clear = avesra_windows::credentials::unprotect(&bytes).ok()?;
-            let candidate: Candidate = serde_json::from_slice(&clear).ok()?;
-            candidate.validate().ok()?;
-            (candidate.id == id && candidate.revision == revision).then_some(candidate)
-        })();
+        let decoded = read_candidate_locked(directory, id, revision).ok();
         summaries.push(CandidateSummary {
             id,
             revision,

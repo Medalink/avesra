@@ -1,10 +1,15 @@
 <script lang="ts">
+  import { tick } from "svelte";
   import Icon from "./Icon.svelte";
+  import SetupOverview from "./SetupOverview.svelte";
+  import { sparkConnection } from "./runtime";
   import Pairing from "./Pairing.svelte";
   import SetupLock from "./SetupLock.svelte";
   import VoiceDesigner from "./VoiceDesigner.svelte";
+  import VoiceAtmosphere from "./VoiceAtmosphere.svelte";
   import ShortcutSettings from "./ShortcutSettings.svelte";
   import EnrollmentView from "./EnrollmentView.svelte";
+  import MicrophoneMeter from "./MicrophoneMeter.svelte";
   import AppCatalog from "./AppCatalog.svelte";
   import BrowserSetup from "./BrowserSetup.svelte";
   import type { SignalFrame } from "./Signal.svelte";
@@ -14,6 +19,9 @@
     runtime,
     signal,
     devices,
+    devicesLoading,
+    devicesError,
+    refreshDevices,
     error,
     notice,
     saving,
@@ -25,6 +33,9 @@
     runtime: Runtime | null;
     signal: SignalFrame | null;
     devices: AudioDevice[];
+    devicesLoading: boolean;
+    devicesError: string;
+    refreshDevices: () => Promise<void>;
     error: string;
     notice: string;
     saving: boolean;
@@ -33,7 +44,25 @@
     hide: () => Promise<void>;
     drag: (event: PointerEvent) => Promise<void>;
   } = $props();
-  let section = $state("audio");
+  const spark = $derived(sparkConnection(runtime));
+  function restoredSection() {
+    try {
+      const saved = localStorage.getItem("avesra.settings.section");
+      return saved && ["setup", "audio", "models", "profiles", "people", "awareness", "memory"].includes(saved) ? saved : "setup";
+    } catch { return "setup"; }
+  }
+  let section = $state(restoredSection());
+  let content: HTMLElement;
+  let heading: HTMLHeadingElement;
+  async function navigate(next: string, target?: string) {
+    section = next;
+    try { localStorage.setItem("avesra.settings.section", next); } catch { /* Navigation remains usable if persistence is unavailable. */ }
+    notice = "";
+    await tick();
+    heading?.focus({ preventScroll: true });
+    content?.scrollTo({ top: 0 });
+    if (target) document.getElementById(target)?.scrollIntoView({ block: "start" });
+  }
   let tab = $state("Memory");
   type SpeakerHealth = {state: string; model_revision: string; busy: boolean; streaming: boolean};
   let speakerHealth = $state<SpeakerHealth | null>(null);
@@ -69,7 +98,6 @@
     document.addEventListener("visibilitychange", visibility);
     return () => { disposed = true; clearInterval(interval); document.removeEventListener("visibilitychange", visibility); };
   });
-  const inputLevel = $derived(signal?.kind === "human" ? Math.min(1, Math.sqrt(signal.samples.reduce((sum,value)=>sum+value*value,0)/Math.max(1,signal.samples.length))) : 0);
   const sections = [
     [
       "audio",
@@ -139,7 +167,7 @@
       "Background memory driver is not connected.",
     ],
   ];
-  const meta = $derived(sections.find((s) => s[0] === section)!);
+  const meta = $derived(section === "setup" ? ["setup", "Get started", "Your setup, one step at a time."] : sections.find((s) => s[0] === section)!);
   const s = $derived(runtime?.settings);
   const interfaceScales = [100, 110, 125, 150, 175];
 </script>
@@ -155,8 +183,13 @@
       onpointerdown={drag}
       aria-label="Drag settings window">Avesra Settings</button
     >
-    <span class="av-chip bg-amber-400/10 text-amber-200 ring-amber-400/25"
-      >Spark · {runtime?.connected ? "connected" : "disconnected"}</span
+    <button
+      type="button"
+      class="av-chip transition-colors hover:bg-white/10 focus-visible:outline-1 focus-visible:outline-offset-2 focus-visible:outline-av-400 {runtime?.connected ? 'bg-white/[0.04] text-zinc-300 ring-white/10' : 'bg-red-400/5 text-red-300 ring-red-400/25'}"
+      title={spark.detail}
+      aria-label={`Spark ${spark.label}. ${spark.detail}`} aria-live="polite" aria-busy={spark.connecting}
+      onclick={() => navigate("profiles", "spark-pairing")}
+      >Spark · {spark.label}<Icon name="arrow" size={10} /></button
     ><span class="av-chip bg-white/[0.04] text-zinc-300 ring-white/10"
       >Profile · {s?.profile === "gaming" ? "Gaming" : "Single Spark"}</span
     >
@@ -169,13 +202,12 @@
       class="flex w-[200px] shrink-0 flex-col gap-0.5 border-r border-white/[0.06] bg-black/20 p-2.5"
       aria-label="Settings sections"
     >
+      <button class="av-nav-btn mb-3" aria-current={section === "setup" ? "page" : undefined} onclick={() => navigate("setup")}><span class="grid size-5 place-items-center"><Icon name="setup" /></span><span>Get started</span></button>
+      <span class="av-kicker px-2.5 pb-2 text-[9px]">Settings</span>
       {#each sections as item}<button
           class="av-nav-btn"
           aria-current={section === item[0] ? "page" : undefined}
-          onclick={() => {
-            section = item[0];
-            notice = "";
-          }}
+          onclick={() => navigate(item[0])}
           ><span class="grid size-5 place-items-center"
             ><Icon name={item[0]} /></span
           ><span class="flex-1">{item[1]}</span></button
@@ -184,17 +216,17 @@
       <div class="flex flex-col gap-0.5 px-2.5 pb-1">
         <span class="caption text-zinc-400">Avesra 0.1 · development</span><span
           class="text-[10.5px] leading-[14px] text-zinc-400"
-          >Setup is incomplete.</span
+          >{native ? runtime ? "Native Windows companion" : "Connecting to companion…" : "Browser view · controls unavailable"}</span
         >
       </div>
     </nav>
-    <main class="av-scroll min-w-0 flex-1 overflow-y-auto">
-      <div class="flex flex-col gap-6 px-6 pt-5 pb-8">
+    <main bind:this={content} class="av-scroll min-w-0 flex-1 overflow-y-auto">
+      <div class="flex flex-col {section === 'setup' ? 'gap-4' : 'gap-6'} px-6 pt-5 pb-8">
         <div class="flex flex-col gap-1">
-          <h1 class="text-[17px] font-semibold tracking-[-0.01em] text-zinc-50">
+          <h1 bind:this={heading} tabindex="-1" class="text-[17px] font-semibold tracking-[-0.01em] text-zinc-50 outline-none">
             {meta[1]}
           </h1>
-          <p class="text-[12.5px] leading-[18px] text-zinc-400">{meta[2]}</p>
+          {#if section !== "setup"}<p class="text-[12.5px] leading-[18px] text-zinc-400">{meta[2]}</p>{/if}
         </div>
         {#if error}<div
             class="border border-red-400/30 bg-red-500/5 p-3 text-[12px] text-red-300"
@@ -205,9 +237,12 @@
         {#if notice}<div class="text-[11.5px] text-zinc-400" role="status">
             {notice}
           </div>{/if}
-        {#if section === "audio"}
+        {#if section === "setup"}
+          <SetupOverview {runtime} {devices} {devicesLoading} {devicesError} {navigate} />
+        {:else if section === "audio"}
           <section class="section">
-            <span class="av-kicker">Devices</span>
+            <div class="flex items-center justify-between"><span class="av-kicker">Devices</span><button class="av-btn av-btn-secondary av-btn-sm" disabled={!native || devicesLoading} onclick={refreshDevices}>{devicesLoading ? "Refreshing…" : "Refresh devices"}</button></div>
+            {#if devicesError}<div class="warning" role="alert">{devicesError}</div>{/if}
             <div class="grid grid-cols-2 gap-4">
               <div class="flex flex-col gap-1.5">
                 <label class="av-label" for="microphone">Microphone</label
@@ -215,7 +250,7 @@
                   id="microphone"
                   class="av-input"
                   value={s?.microphone ?? ""}
-                  disabled={!s || saving}
+                  disabled={!s || saving || devicesLoading || !!devicesError}
                   onchange={(e) =>
                     update({ microphone: e.currentTarget.value || null })}
                   ><option value="">Select microphone</option>
@@ -227,23 +262,14 @@
                         : ""}</option
                     >{/each}</select
                 >
-                <div class="flex items-center gap-2">
-                  <div
-                    class="flex flex-1 gap-0.5"
-                    aria-label={signal?.kind === "human" ? runtime?.enrollment_capture ? "Measured enrollment input level" : "Measured microphone input level" : "Microphone input level unavailable"}
-                  >
-                    {#each Array(24) as _,i}<span class="h-2 flex-1 {i < Math.ceil(inputLevel*24) ? 'bg-zinc-400' : 'bg-white/10'}"
-                      ></span>{/each}
-                  </div>
-                  <span class="caption text-zinc-500">{runtime?.enrollment_capture ? "recording" : signal?.kind === "human" ? "live" : "off"}</span>
-                </div>
+                <MicrophoneMeter {runtime} {signal} />
               </div>
               <div class="flex flex-col gap-1.5">
                 <label class="av-label" for="speaker">Speakers</label><select
                   id="speaker"
                   class="av-input"
                   value={s?.speaker ?? ""}
-                  disabled={!s || saving}
+                  disabled={!s || saving || devicesLoading || !!devicesError}
                   onchange={(e) =>
                     update({ speaker: e.currentTarget.value || null })}
                   ><option value="">Select output</option>
@@ -292,7 +318,8 @@
             </div>
           </section>
           <ShortcutSettings {runtime} />
-          <VoiceDesigner {runtime} {saving} {update} />
+          <div id="voice-designer"><VoiceDesigner {runtime} /></div>
+          <VoiceAtmosphere {runtime} />
           <section class="section">
             <span class="av-kicker">Learning & action chimes</span
             >{#each [["learning_chime", "Learning chime", "After a useful memory is committed."], ["action_chime", "Action chime", "After an action outcome is verified."]] as item}<div
@@ -413,8 +440,8 @@
           </section>
           <section class="section">
             <span class="av-kicker">Machines</span>
-            <Pairing connected={!!runtime?.connected} />
-            <BrowserSetup {runtime} />
+            <div id="spark-pairing"><Pairing {runtime} /></div>
+            <div id="browser-setup"><BrowserSetup {runtime} /></div>
           </section>
           <section class="section">
             <span class="av-kicker">Display</span>
@@ -572,14 +599,6 @@
                 <h2>Local companion</h2>
                 <span class="av-chip text-zinc-300 ring-white/15"
                   >{runtime ? "Running" : "Unavailable"}</span
-                >
-              </div>
-              <div class="line my-3"></div>
-              <div class="row">
-                <span>Spark transport</span><span class="text-amber-200"
-                  >{runtime?.connected
-                    ? "Connected · owner setup required"
-                    : "Disconnected"}</span
                 >
               </div>
               <div class="line my-3"></div>

@@ -3,20 +3,26 @@ mod actor_registration;
 mod browser;
 mod catalog;
 mod connection;
+mod discovery;
 mod media;
+mod microphone_check;
 mod output;
 mod owner;
+mod phrase_capture;
 pub mod planner;
 mod playback_signal;
 mod preview;
 mod profiles;
 mod setup;
 mod shortcuts;
+mod sound;
 pub mod speech;
 mod voice;
+mod voice_check;
 mod voices;
+mod window_positions;
 use avesra_core::{
-    state::{LocalControl, LocalState, Settings},
+    state::{ConnectionPhase, LocalControl, LocalState, Settings},
     store::Store,
 };
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -56,6 +62,7 @@ struct WriteSettings {
     reply: oneshot::Sender<Result<(), String>>,
 }
 struct Runtime {
+    discovery: discovery::Discovery,
     browser: browser::BrowserSetup,
     catalog: catalog::CatalogSetup,
     turns: Mutex<avesra_core::voice::TurnGate>,
@@ -69,8 +76,10 @@ struct Runtime {
     modes: tokio::sync::watch::Sender<ModeSnapshot>,
     connection: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
     connection_generation: AtomicU64,
+    startup_connection_attempted: std::sync::atomic::AtomicBool,
     pairing: tokio::sync::Mutex<()>,
     health: tokio::sync::Mutex<()>,
+    voice_check: voice_check::State,
     preview: std::sync::Arc<tokio::sync::Mutex<()>>,
     voice_panel: Mutex<Option<uuid::Uuid>>,
     hotkeys: Mutex<Option<avesra_windows::shortcuts::Hotkeys>>,
@@ -130,6 +139,8 @@ fn runtime_snapshot(state: tauri::State<'_, Runtime>) -> Result<LocalState, Stri
         .clone())
 }
 fn invalidate_settings(app: &tauri::AppHandle) {
+    microphone_check::stop(app, None);
+    app.state::<Runtime>().discovery.invalidate();
     app.state::<Runtime>().catalog.invalidate();
     app.state::<Runtime>().browser.settings_hidden();
     setup::cancel_native(app);
@@ -142,6 +153,7 @@ fn hide_window(window: tauri::WebviewWindow) -> Result<(), String> {
         "overlay" => {}
         _ => return Err("Unknown Avesra window".into()),
     }
+    window_positions::save(window.app_handle());
     window
         .hide()
         .map_err(|_| "Window could not be hidden".into())
@@ -213,7 +225,29 @@ async fn local_control(
     state: tauri::State<'_, Runtime>,
 ) -> Result<LocalState, String> {
     let (snapshot, pending) = {
+        // Every terminal control, including direct IPC, cancels the same native
+        // connection generation as the pairing page. A late acknowledgement or
+        // startup credential load cannot revive it.
+        let mut connection = if matches!(
+            control,
+            LocalControl::Lock | LocalControl::Disconnect | LocalControl::Quit
+        ) {
+            Some(
+                state
+                    .connection
+                    .lock()
+                    .map_err(|_| "Connection manager unavailable")?,
+            )
+        } else {
+            None
+        };
         let mut local = state.local.lock().map_err(|_| "Local state unavailable")?;
+        if let Some(slot) = connection.as_mut() {
+            state.connection_generation.fetch_add(1, Ordering::SeqCst);
+            if let Some(task) = slot.take() {
+                task.abort();
+            }
+        }
         local.apply(control);
         let snapshot = local.clone();
         state.publish(&snapshot);
@@ -241,6 +275,13 @@ async fn save_settings(
         {
             return Err("Use local controls to change listening modes".into());
         }
+        if settings.sound != local.settings.sound
+            || settings.speech_volume != local.settings.speech_volume
+        {
+            return Err(
+                "Sound settings changed. Refresh and use the Voice atmosphere controls.".into(),
+            );
+        }
         if settings.shortcuts != local.settings.shortcuts {
             return Err(
                 "Shortcuts changed. Refresh settings and use the native shortcut editor.".into(),
@@ -257,6 +298,7 @@ async fn save_settings(
             || settings.speaker != local.settings.speaker
             || settings.profile != local.settings.profile
         {
+            local.microphone_check = false;
             local.enrollment_capture = false;
             local.capture_epoch = local.capture_epoch.saturating_add(1);
         }
@@ -297,9 +339,10 @@ fn start_connection(
         }
         let generation = state.connection_generation.fetch_add(1, Ordering::SeqCst) + 1;
         local.apply(LocalControl::Disconnect);
+        local.connection_phase = ConnectionPhase::Connecting;
+        local.refresh();
         state.publish(&local);
-        app.emit("runtime-state", local.clone())
-            .map_err(|_| "Unable to notify windows")?;
+        let _ = app.emit("runtime-state", local.clone());
         generation
     };
     if let Some(previous) = slot.take() {
@@ -314,11 +357,13 @@ fn start_connection(
             && state.connection_generation.load(Ordering::SeqCst) == generation
         {
             local.apply(LocalControl::Disconnect);
+            if let Err(error) = outcome {
+                local.connection_phase = ConnectionPhase::Error;
+                local.connection_error = Some(error);
+                local.refresh();
+            }
             state.publish(&local);
             let _ = app_handle.emit("runtime-state", local.clone());
-            if let Err(error) = outcome {
-                let _ = app_handle.emit("runtime-error", error);
-            }
         }
     }));
     Ok(())
@@ -343,23 +388,80 @@ async fn pair_spark(
 }
 #[tauri::command]
 async fn connect_spark(app: tauri::AppHandle) -> Result<(), String> {
+    let generation = app
+        .state::<Runtime>()
+        .connection_generation
+        .load(Ordering::SeqCst);
+    connect_saved(app, generation, false).await
+}
+async fn connect_saved(
+    app: tauri::AppHandle,
+    generation: u64,
+    startup: bool,
+) -> Result<(), String> {
     let state = app.state::<Runtime>();
     let _guard = state
         .pairing
         .try_lock()
         .map_err(|_| "Pairing management already in progress")?;
-    let generation = app
-        .state::<Runtime>()
-        .connection_generation
-        .load(Ordering::SeqCst);
-    let directory = app
-        .path()
-        .app_data_dir()
-        .map_err(|_| "Local data directory unavailable")?;
-    let record = tauri::async_runtime::spawn_blocking(move || connection::load(&directory))
+    {
+        let mut local = state.local.lock().map_err(|_| "Local state unavailable")?;
+        if local.locked || state.connection_generation.load(Ordering::SeqCst) != generation {
+            return Err("Connection request cancelled or superseded".into());
+        }
+        if local.connected || matches!(local.connection_phase, ConnectionPhase::Connecting) {
+            return Ok(());
+        }
+        local.connection_phase = ConnectionPhase::Connecting;
+        local.connection_error = None;
+        local.refresh();
+        let _ = app.emit("runtime-state", local.clone());
+    }
+    let outcome: Result<(), String> = async {
+        let directory = app
+            .path()
+            .app_data_dir()
+            .map_err(|_| "Local data directory unavailable")?;
+        let record = tauri::async_runtime::spawn_blocking(move || {
+            if startup
+                && !directory
+                    .join("spark-pairing.dpapi")
+                    .try_exists()
+                    .map_err(|_| "Saved pairing unavailable")?
+            {
+                return Ok(None);
+            }
+            connection::load(&directory).map(Some)
+        })
         .await
         .map_err(|_| "Credential loading failed")??;
-    start_connection(&app, record, generation)
+        if let Some(record) = record {
+            start_connection(&app, record, generation)?;
+        } else {
+            connection_attempt_finished(&app, generation, None);
+        }
+        Ok(())
+    }
+    .await;
+    if let Err(ref error) = outcome {
+        connection_attempt_finished(&app, generation, Some(error.clone()));
+    }
+    outcome
+}
+fn connection_attempt_finished(app: &tauri::AppHandle, generation: u64, error: Option<String>) {
+    let state = app.state::<Runtime>();
+    if let Ok(mut local) = state.local.lock()
+        && state.connection_generation.load(Ordering::SeqCst) == generation
+    {
+        local.connection_phase = if error.is_some() {
+            ConnectionPhase::Error
+        } else {
+            ConnectionPhase::Disconnected
+        };
+        local.connection_error = error;
+        local.refresh();
+        let _ = app.emit("runtime-state", local.clone());
+    }
 }
 #[tauri::command]
 async fn saved_pairing(app: tauri::AppHandle) -> Result<Option<connection::SavedPairing>, String> {
@@ -439,6 +541,17 @@ fn session_changed(app: &tauri::AppHandle, locked: bool) {
     drop(slot);
     let _ = app.emit("signal-clear", ());
     let _ = app.emit("runtime-state", snapshot);
+    if !locked
+        && !state
+            .startup_connection_attempted
+            .swap(true, Ordering::SeqCst)
+    {
+        let generation = state.connection_generation.load(Ordering::SeqCst);
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            let _ = connect_saved(app, generation, true).await;
+        });
+    }
 }
 /// Reference window sizes at 100%, matching the approved mockups in `design/`.
 const OVERLAY_SIZE: (f64, f64) = (440.0, 124.0);
@@ -462,9 +575,47 @@ fn apply_interface_scale(app: &tauri::AppHandle, percent: u16) -> tauri::Result<
 fn main() {
     let _ = rustls::crypto::ring::default_provider().install_default();
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            // Keep explicitly headless inspection configurations invisible.
+            if !app
+                .config()
+                .app
+                .windows
+                .iter()
+                .any(|window| window.label == "settings" && window.visible)
+            {
+                return;
+            }
+            if let Some(window) = app.get_webview_window("settings") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(tauri_plugin_window_state::StateFlags::POSITION)
+                .skip_initial_state("overlay")
+                .skip_initial_state("settings")
+                .build(),
+        )
         .setup(|app| {
             let directory = app.path().app_data_dir()?;
             std::fs::create_dir_all(&directory)?;
+            // Backstop simultaneous launches before the plugin's message window exists.
+            // The OS releases this lock on exit, including a crash; never delete the file.
+            let instance_lock = std::fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .read(true)
+                .write(true)
+                .open(directory.join("desktop-instance.lock"))?;
+            instance_lock.try_lock().map_err(|_| {
+                std::io::Error::other(
+                    "Avesra is already running or its startup lock is unavailable",
+                )
+            })?;
+            app.manage(instance_lock);
             let mut store = Store::open(&directory.join("avesra.db"))?;
             let settings = store.settings()?;
             let zoom = f64::from(settings.interface_scale) / 100.0;
@@ -487,6 +638,9 @@ fn main() {
             }
             if let Some(window) = app.get_webview_window("settings") {
                 window.center()?;
+            }
+            for window in app.webview_windows().values() {
+                window_positions::restore(window)?;
             }
             let (writes, receiver) = sync_channel::<WriteSettings>(32);
             let app_handle = app.handle().clone();
@@ -518,6 +672,7 @@ fn main() {
             )?;
             let initial_shortcuts = local.settings.shortcuts.clone();
             app.manage(Runtime {
+                discovery: discovery::Discovery::default(),
                 browser: browser::BrowserSetup::default(),
                 catalog: catalog::CatalogSetup::default(),
                 turns: Mutex::new(avesra_core::voice::TurnGate::default()),
@@ -530,8 +685,10 @@ fn main() {
                 modes,
                 connection: Mutex::new(None),
                 connection_generation: AtomicU64::new(0),
+                startup_connection_attempted: std::sync::atomic::AtomicBool::new(false),
                 pairing: tokio::sync::Mutex::new(()),
                 health: tokio::sync::Mutex::new(()),
+                voice_check: voice_check::State::default(),
                 preview: std::sync::Arc::new(tokio::sync::Mutex::new(())),
                 voice_panel: Mutex::new(None),
                 hotkeys: Mutex::new(None),
@@ -629,6 +786,7 @@ fn main() {
                         }
                     }
                     "quit" => {
+                        window_positions::save(app);
                         if let Ok(mut owner) = app.state::<Runtime>().hotkeys.lock() {
                             owner.take();
                         }
@@ -655,6 +813,7 @@ fn main() {
                 shortcuts::cancel_recording(window.app_handle());
             }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                window_positions::save(window.app_handle());
                 if window.label() == "settings" {
                     invalidate_settings(window.app_handle());
                 }
@@ -663,6 +822,13 @@ fn main() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            microphone_check::begin_microphone_check,
+            microphone_check::stop_microphone_check,
+            voice_check::check_saved_voice,
+            voice_check::cancel_voice_check,
+            discovery::discover_sparks,
+            discovery::cancel_spark_discovery,
+            discovery::pair_discovered_spark,
             browser::begin_browser_pairing,
             browser::connect_selected_browser,
             browser::documents::inspect_browser_documents,
@@ -722,6 +888,9 @@ fn main() {
             speaker_health,
             local_control,
             save_settings,
+            sound::update_sound,
+            sound::sound_output_channels,
+            sound::sound_diagnostics,
             pair_spark,
             connect_spark,
             saved_pairing,

@@ -19,7 +19,7 @@
     if (!native || busy || refreshing) return;
     refreshing = true;
     const generation = operationGeneration;
-    try { const next = await command<Status>("setup_status"); if (mounted && generation === operationGeneration) status = next; }
+    try { const next = await command<Status>("setup_status"); if (mounted && generation === operationGeneration) { status = next; error = ""; } }
     catch (e) { if (mounted && generation === operationGeneration) error = String(e); }
     finally { refreshing = false; }
   }
@@ -45,7 +45,7 @@
 <div class="flex items-center gap-3 bg-white/[0.03] px-3.5 py-3 ring-1 ring-white/10 ring-inset">
   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="shrink-0 text-zinc-300" aria-hidden="true"><rect x="5" y="11" width="14" height="10"></rect><path d="M8 11V8a4 4 0 0 1 8 0v3"></path></svg>
   <span class="min-w-0 flex-1 text-[12.5px] leading-[18px] text-zinc-300">
-    {unlocked ? `Windows verified · ${status?.authentication_seconds_remaining}s remaining. Choose the ${purpose} action.` : `Protected ${purpose} is locked. Verify with Windows Hello here. It locks again when Settings closes.`}
+    {unlocked ? `Windows verified · ${status?.authentication_seconds_remaining}s remaining. Choose the ${purpose} action.` : status?.local_authentication === "unavailable" ? "Windows verification is unavailable. Check Windows sign-in options before managing ownership." : purpose === "owner or people management" ? "Protected owner setup requires Windows verification. The setup actions below will ask when needed." : `Protected ${purpose} requires Windows verification. Verify with Windows Hello here before making changes.`}
   </span>
   {#if unlocked}
     <button class="av-btn av-btn-ghost av-btn-sm" onclick={() => lock().catch(e => error = String(e))}>Lock</button>

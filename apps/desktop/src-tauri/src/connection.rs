@@ -224,7 +224,19 @@ pub async fn voice_operation(
         .await
         .map_err(|_| "Voice request unavailable; refresh status before retrying")?;
     if !response.status().is_success() {
-        return Err("Voice service rejected the operation; refresh status before retrying".into());
+        return Err(match response.status() {
+            reqwest::StatusCode::SERVICE_UNAVAILABLE =>
+                "Spark's voice services are unavailable. They must be configured and running before you can generate a voice.",
+            reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN =>
+                "Your Spark session is no longer authorized. Reconnect, then refresh voice status.",
+            reqwest::StatusCode::CONFLICT =>
+                "Voice setup changed during the request. Refresh status before trying again.",
+            reqwest::StatusCode::TOO_MANY_REQUESTS =>
+                "Another voice operation is running. Wait for it to finish, then refresh status.",
+            reqwest::StatusCode::GATEWAY_TIMEOUT =>
+                "Spark did not finish the voice operation in time. Refresh status before trying again.",
+            _ => "Spark could not complete the voice operation. Refresh status before trying again.",
+        }.into());
     }
     let mut bytes = Vec::new();
     while let Some(chunk) = response
@@ -319,6 +331,28 @@ pub struct SpeakerHealth {
     last_inference_ms: Option<f64>,
 }
 
+impl SpeakerHealth {
+    fn validate(&self, lane: &str, revision: &str) -> Result<(), String> {
+        if self.version != 1
+            || self.lane != lane
+            || self.model_revision != revision
+            || !matches!(
+                self.state.as_str(),
+                "unavailable" | "loading" | "loaded_unqualified" | "termination_pending"
+            )
+            || self.permission_authority
+            || self.streaming
+            || self.cancellation != "terminate_process"
+            || self
+                .last_inference_ms
+                .is_some_and(|v| !v.is_finite() || !(0.0..=30000.0).contains(&v))
+        {
+            return Err("Configured audio service metadata is incompatible".into());
+        }
+        Ok(())
+    }
+}
+
 fn speaker_client(record: &PairingRecord) -> Result<reqwest::Client, String> {
     let cert = certificate(&record.certificate)?;
     reqwest::Client::builder()
@@ -344,22 +378,7 @@ pub async fn speaker_health(record: &PairingRecord) -> Result<SpeakerHealth, Str
         .map_err(|_| "Speaker service unavailable")?;
     let value: SpeakerHealth = serde_json::from_value(bounded_response(response).await?)
         .map_err(|_| "Invalid speaker metadata")?;
-    if value.version != 1
-        || value.lane != "speaker"
-        || value.model_revision != "0f99f2d0ebe89ac095bcc5903c4dd8f72b367286"
-        || !matches!(
-            value.state.as_str(),
-            "unavailable" | "loading" | "loaded_unqualified" | "termination_pending"
-        )
-        || value.permission_authority
-        || value.streaming
-        || value.cancellation != "terminate_process"
-        || value
-            .last_inference_ms
-            .is_some_and(|v| !v.is_finite() || !(0.0..=30000.0).contains(&v))
-    {
-        return Err("Configured speaker metadata is incompatible".into());
-    }
+    value.validate("speaker", "0f99f2d0ebe89ac095bcc5903c4dd8f72b367286")?;
     Ok(value)
 }
 pub async fn speaker_available(record: &PairingRecord) -> Result<(), String> {
@@ -367,6 +386,120 @@ pub async fn speaker_available(record: &PairingRecord) -> Result<(), String> {
         return Err("Configured speaker deployment is not available for enrollment".into());
     }
     Ok(())
+}
+pub async fn voice_analysis_available(record: &PairingRecord) -> Result<(), String> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Health {
+        version: u16,
+        speaker: SpeakerHealth,
+        asr: SpeakerHealth,
+    }
+    let response = speaker_client(record)?
+        .get(
+            endpoint(&record.url)?
+                .join("voice-analysis")
+                .map_err(|_| "Invalid Spark endpoint")?,
+        )
+        .bearer_auth(&record.credential)
+        .send()
+        .await
+        .map_err(|_| "Voice services are unreachable")?;
+    if !response.status().is_success() {
+        return Err(
+            "Spark speech recognition or speaker service is unavailable. No recording started."
+                .into(),
+        );
+    }
+    let value: Health = serde_json::from_value(bounded_response(response).await?)
+        .map_err(|_| "Invalid voice service metadata")?;
+    if value.version != 1 {
+        return Err("Incompatible voice services".into());
+    }
+    for (health, lane, revision) in [
+        (
+            value.speaker,
+            "speaker",
+            "0f99f2d0ebe89ac095bcc5903c4dd8f72b367286",
+        ),
+        (value.asr, "asr", "ebe59e5a817142986528bbbee5dba8db7b38ed50"),
+    ] {
+        health.validate(lane, revision)?;
+        if health.state != "loaded_unqualified" || health.busy {
+            return Err(format!(
+                "Spark {lane} is busy, unloaded or incompatible. No recording started."
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub struct VoiceAnalysis {
+    pub transcript: String,
+    pub embedding: Option<Vec<f32>>,
+}
+pub async fn analyze_voice(
+    record: &PairingRecord,
+    session: SessionIdentity,
+    id: Uuid,
+    pcm: Vec<u8>,
+) -> Result<VoiceAnalysis, String> {
+    use base64::Engine;
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Reply {
+        version: u16,
+        request_id: Uuid,
+        session_id: Uuid,
+        capture_epoch: u64,
+        speaker_revision: String,
+        asr_revision: String,
+        transcript: String,
+        embedding: Option<Vec<f32>>,
+        outcome: String,
+        reason: String,
+        accepted_turn: bool,
+    }
+    let payload = serde_json::json!({"version":1,"request_id":id,"session_id":session.id,
+        "capture_epoch":session.epoch,"pcm_s16le":base64::engine::general_purpose::STANDARD.encode(pcm)});
+    let response = speaker_client(record)?
+        .post(
+            endpoint(&record.url)?
+                .join("voice-analysis")
+                .map_err(|_| "Invalid Spark endpoint")?,
+        )
+        .bearer_auth(&record.credential)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|_| "Voice analysis request failed")?;
+    drop(payload);
+    let value: Reply = serde_json::from_value(bounded_response(response).await?)
+        .map_err(|_| "Invalid voice analysis response")?;
+    if value.version != 1
+        || value.request_id != id
+        || value.session_id != session.id
+        || value.capture_epoch != session.epoch
+        || value.speaker_revision != "0f99f2d0ebe89ac095bcc5903c4dd8f72b367286"
+        || value.asr_revision != "ebe59e5a817142986528bbbee5dba8db7b38ed50"
+        || value.transcript.len() > 8192
+        || value.outcome != "abstain"
+        || value.accepted_turn
+        || value
+            .embedding
+            .as_ref()
+            .is_some_and(|v| v.len() != 192 || v.iter().any(|n| !n.is_finite()))
+        || match value.embedding {
+            Some(_) => value.reason != "owner_overlap_directness_qualification_required",
+            None => value.reason != "insufficient_speech",
+        }
+    {
+        return Err("Voice analysis correlation failed".into());
+    }
+    Ok(VoiceAnalysis {
+        transcript: value.transcript,
+        embedding: value.embedding,
+    })
 }
 async fn bounded_response(mut response: reqwest::Response) -> Result<serde_json::Value, String> {
     if !response.status().is_success() {
@@ -539,7 +672,7 @@ struct SessionReply {
     session_id: Uuid,
     status: String,
 }
-fn certificate(pem: &str) -> Result<rustls::pki_types::CertificateDer<'static>, String> {
+pub(crate) fn certificate(pem: &str) -> Result<rustls::pki_types::CertificateDer<'static>, String> {
     if pem.len() > 16_384 {
         return Err("Certificate exceeds size limit".into());
     }
@@ -570,6 +703,19 @@ fn endpoint(value: &str) -> Result<reqwest::Url, String> {
     Ok(url)
 }
 pub async fn pair(input: PairInput, directory: &Path) -> Result<PairingRecord, String> {
+    pair_inner(input, directory, false).await
+}
+pub(crate) async fn pair_discovered(
+    input: PairInput,
+    directory: &Path,
+) -> Result<PairingRecord, String> {
+    pair_inner(input, directory, true).await
+}
+async fn pair_inner(
+    input: PairInput,
+    directory: &Path,
+    discovered: bool,
+) -> Result<PairingRecord, String> {
     if directory.join("spark-pairing.dpapi").exists() {
         return Err("A saved pairing already exists. Reconnect it or explicitly revoke and remove it before replacing.".into());
     }
@@ -581,10 +727,12 @@ pub async fn pair(input: PairInput, directory: &Path) -> Result<PairingRecord, S
             "Certificate fingerprint does not match. Check the server's local output.".into(),
         );
     }
-    if input.code.len() != 64 || !input.code.bytes().all(|b| b.is_ascii_hexdigit()) {
+    if !discovered && (input.code.len() != 64 || !input.code.bytes().all(|b| b.is_ascii_hexdigit()))
+    {
         return Err("Enter the complete one-time pairing code".into());
     }
     let client = reqwest::Client::builder()
+        .no_proxy()
         .tls_built_in_root_certs(false)
         .add_root_certificate(
             reqwest::Certificate::from_der(&cert).map_err(|_| "Invalid TLS certificate")?,
@@ -594,12 +742,22 @@ pub async fn pair(input: PairInput, directory: &Path) -> Result<PairingRecord, S
         .build()
         .map_err(|_| "TLS client unavailable")?;
     let mut response = client
-        .post(url.join("pair").map_err(|_| "Invalid Spark address")?)
-        .json(&serde_json::json!({"code":input.code}))
+        .post(
+            url.join(if discovered { "pair-local" } else { "pair" })
+                .map_err(|_| "Invalid Spark address")?,
+        )
+        .json(&if discovered {
+            serde_json::json!({})
+        } else {
+            serde_json::json!({"code":input.code})
+        })
         .send()
         .await
         .map_err(|_| "Secure pairing connection failed. Check Spark address and certificate.")?;
     if !response.status().is_success() {
+        if discovered {
+            return Err("This Spark is no longer accepting a new PC. Open pairing on Spark and scan again, or use Advanced.".into());
+        }
         return Err("Pairing rejected. The code may be expired, used or locked.".into());
     }
     let mut body = Vec::new();

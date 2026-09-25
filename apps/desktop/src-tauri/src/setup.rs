@@ -39,7 +39,7 @@ impl ManagementProof {
 }
 #[derive(Default)]
 pub struct Setup {
-    recording: tokio::sync::Mutex<()>,
+    pub(crate) recording: tokio::sync::Mutex<()>,
     enrollment: Mutex<Option<avesra_core::enrollment::Enrollment>>,
     context: Mutex<Option<(u64, u64)>>,
     operation: Mutex<Option<avesra_windows::authentication::Verification>>,
@@ -57,6 +57,12 @@ pub struct SetupStatus {
     next_segment: Option<avesra_core::enrollment::SegmentKind>,
 }
 impl Setup {
+    pub fn enrollment_active(&self) -> Result<bool, String> {
+        self.enrollment
+            .lock()
+            .map(|value| value.is_some())
+            .map_err(|_| "Enrollment unavailable".into())
+    }
     pub fn challenge(&self) -> u64 {
         self.generation.load(Ordering::SeqCst)
     }
@@ -189,6 +195,11 @@ pub async fn begin_enrollment(
         return Err("Open Settings to enroll".into());
     }
     let state = app.state::<Runtime>();
+    let _recording = state
+        .setup
+        .recording
+        .try_lock()
+        .map_err(|_| "Finish the current voice recording first")?;
     let proof = {
         let local = state.local.lock().map_err(|_| "Local state unavailable")?;
         state
@@ -199,6 +210,7 @@ pub async fn begin_enrollment(
     {
         let local = state.local.lock().map_err(|_| "Local state unavailable")?;
         if !proof.current_locked(&state, &local)
+            || local.microphone_check
             || !local.connected
             || local.locked
             || local.settings.paused
@@ -241,7 +253,7 @@ pub async fn begin_enrollment(
 pub fn cancel_native(app: &tauri::AppHandle) {
     cancel_native_epoch(app, None);
 }
-fn cancel_native_epoch(app: &tauri::AppHandle, expected: Option<u64>) {
+pub(crate) fn cancel_native_epoch(app: &tauri::AppHandle, expected: Option<u64>) {
     let state = app.state::<Runtime>();
     if let Ok(mut local) = state.local.lock() {
         if expected.is_some_and(|epoch| local.capture_epoch != epoch) {
@@ -417,40 +429,43 @@ pub async fn record_enrollment(
         if local.capture_epoch != epoch || !visible {
             return Err("Enrollment cancelled".into());
         }
+        local.capture_error = None;
         local.enrollment_capture = true;
         local.refresh();
         state.publish(&local);
         let _ = app.emit("runtime-state", local.clone());
     }
     let started = Instant::now();
-    let mut sequence = 0u64;
-    let mut pcm = Vec::with_capacity(256_000);
-    while pcm.len() < 256_000 {
-        if started.elapsed() > Duration::from_secs(12) {
-            return Err("Enrollment capture timed out or Settings closed".into());
-        }
-        if !state
-            .setup
-            .enrollment
-            .lock()
-            .map_err(|_| "Enrollment unavailable")?
-            .as_ref()
-            .is_some_and(|session| session.current(epoch))
-        {
-            return Err("Enrollment session expired".into());
-        }
-        if let Some(frame) = state.media.take_capture_frame(epoch)? {
-            if frame.sequence != sequence + 1 {
-                return Err("Enrollment audio lost frames; retry collection".into());
+    let phrase = crate::phrase_capture::collect(
+        &app,
+        epoch,
+        || {
+            let local = state.local.lock().map_err(|_| "Local state unavailable")?;
+            if local.capture_epoch != epoch {
+                return Err(local
+                    .capture_error
+                    .clone()
+                    .unwrap_or_else(|| "Enrollment cancelled".into()));
             }
-            sequence = frame.sequence;
-            for sample in frame.samples {
-                pcm.extend_from_slice(&sample.to_le_bytes());
+            let active = state
+                .setup
+                .enrollment
+                .lock()
+                .map_err(|_| "Enrollment unavailable")?;
+            let session = active
+                .as_ref()
+                .ok_or("Enrollment cancelled. Start enrollment again.")?;
+            if !session.current(epoch) {
+                return Err(
+                    "The five-minute enrollment session expired. Start enrollment again.".into(),
+                );
             }
-        } else {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    }
+            Ok(())
+        },
+        |_| {},
+    )
+    .await?;
+    let pcm = phrase.pcm;
     {
         let mut local = state.local.lock().map_err(|_| "Local state unavailable")?;
         if local.capture_epoch != epoch {
