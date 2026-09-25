@@ -39,7 +39,7 @@
   const status = $derived(runtime?.status ?? "disconnected");
   const speaking = $derived(signal?.kind === "speaking" && runtime?.connected && !runtime.locked && !s?.deafened && !s?.paused);
   const preview = $derived(speaking && signal?.purpose === "preview");
-  const activityLabel = $derived(speaking ? (preview ? "Voice preview" : "Replying") : runtime?.reason ?? "Native connection unavailable");
+  const activityLabel = $derived(speaking ? (preview ? "Voice preview" : signal?.purpose === "greeting" ? "Saying hello" : "Replying") : runtime?.reason ?? "Native connection unavailable");
   const statusLabel = $derived(
     (
       {

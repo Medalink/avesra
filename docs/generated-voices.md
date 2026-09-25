@@ -1,5 +1,50 @@
 # Generated voice candidates and explicit preview
 
+## Startup greeting
+
+Once per desktop process launch, after the saved Spark connection is acknowledged,
+Avesra may synthesize `Hello.` or `Hello, <remembered owner name>.` using the exact
+selected and active voice. This is an explicitly requested product greeting,
+independent of enrollment, microphone mute, normal replies and Settings visibility.
+No selected/active voice, unavailable output, deafen, pause or lock means silence.
+Wait at most 60 seconds for the initial connection; an output control change or
+disconnect cancels the attempt. Do not retry on reconnect, unlock, page changes,
+voice selection, a second-instance launch, or synthesis failure.
+
+The authenticated `/startup-greeting` route accepts only the fixed greeting shape,
+with an optional bounded plain name (at most 80 Unicode characters / 320 bytes).
+It never accepts arbitrary reply text or invokes the planner. The name must come
+from owner-scoped local memory; absent, invalid or unavailable memory falls back
+to `Hello.`. Never infer a name from the Windows account or a voice reference.
+The server constructs the sentence, verifies the voice is selected and active,
+and holds the same voice-operation exclusion as preview. Complete synthesis is
+bounded to 31 seconds and 30 seconds of PCM; truncated synthesis is discarded.
+Existing Ready/Play/Audio/End/Submitted transport, output gain, final-frame
+holdback, draining and cancellation rules apply. `/voice-preview` rejects greeting
+requests and `/startup-greeting` rejects reference-preview requests.
+
+People > Your name provides the initial explicit owner-name memory producer.
+The native `remember_owner_name` command resolves the authenticated local owner
+and persists a bounded name with that actor UUID in local SQLite settings. It
+does not change ownership, enroll a voice or grant actions. Empty input forgets
+the name. General `save_settings` cannot replace this memory; old settings default
+to no name. Startup revalidates the protected owner identity before using it.
+Conversational extraction of names remains part of the future memory pipeline.
+The startup `/voices` status read carries an optional playback epoch and uses
+output permission, so microphone-only changes cannot cancel greeting preparation.
+This alternative binding is legal only for Status; mutations keep their existing
+capture/session binding. Replies echo the optional playback epoch for correlation.
+The generated-voice TTS deployment enables `tts_streaming` for synthesis of the
+fixed greeting. Enabling that private capability does not qualify normal speech,
+owner recognition or microphone capture; the controller still owns admission.
+
+Entry points: native `startup_greeting::run` is the sole automatic producer;
+`preview::greet` owns native output; `/startup-greeting` owns fixed synthesis.
+Explicit `preview_voice` and `/voice-preview` retain reference-only behavior.
+Normal `speech::speak` and `/normal-speech` retain accepted-reply requirements.
+Validation follows Plan 001's no-automated-tests override: compile both Windows
+desktop and Unix server, format checks, and report live playback separately.
+
 2026-09-25 voice-atmosphere audition: the owner explicitly authorized playing Digital and Human and requires approval of both before completion. The owner's latest exact reference text is "Hello I am Avesra, A Very Effective Smart Reasoning Assistant. I am designed to help you manage your thoughts and ideas." It supersedes the earlier Hello Eric greeting for newly generated previews. Existing candidates retain their original reference text. Explicit Repeat preview replays the same saved take without regeneration; Stop repeating prevents the next take. Both sound presets render the same candidate through the native mixer; changing a sound preset does not select a different generated voice. Master volume and the atmosphere controls remain available during an admitted preview. This authorization is for the requested auditions and does not enable microphone capture or general voice readiness.
 
 The owner's2026-09-25 Generate attempt authorizes fixing and invoking that explicit generated-voice operation. Live service deployment and generated-candidate evidence are recorded in `operations.md`. Historical no-generation statements below describe earlier checkpoints; they do not override this later request. No playback or microphone capture was performed by the agent.

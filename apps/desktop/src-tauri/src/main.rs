@@ -17,6 +17,7 @@ mod setup;
 mod shortcuts;
 mod sound;
 pub mod speech;
+mod startup_greeting;
 mod voice;
 mod voice_check;
 mod voices;
@@ -274,6 +275,9 @@ async fn save_settings(
             || settings.paused != local.settings.paused
         {
             return Err("Use local controls to change listening modes".into());
+        }
+        if settings.owner_name != local.settings.owner_name {
+            return Err("Use the remembered name control to update your name".into());
         }
         if settings.sound != local.settings.sound
             || settings.speech_volume != local.settings.speech_volume
@@ -547,9 +551,17 @@ fn session_changed(app: &tauri::AppHandle, locked: bool) {
             .swap(true, Ordering::SeqCst)
     {
         let generation = state.connection_generation.load(Ordering::SeqCst);
+        let Ok(epoch) = state.local.lock().map(|local| local.playback_epoch) else {
+            return;
+        };
         let app = app.clone();
         tauri::async_runtime::spawn(async move {
-            let _ = connect_saved(app, generation, true).await;
+            if connect_saved(app.clone(), generation, true).await.is_ok() {
+                // Saved connection start advances both once. Any intervening
+                // Stop/output change or replacement connection suppresses hello.
+                startup_greeting::run(app, generation.saturating_add(1), epoch.saturating_add(1))
+                    .await;
+            }
         });
     }
 }
@@ -862,6 +874,7 @@ fn main() {
             shortcuts::shortcut_status,
             owner::owner_status,
             owner::create_owner,
+            owner::remember_owner_name,
             actor_registration::actor_registration_status,
             actor_registration::register_owner_with_spark,
             actor_registration::revoke_owner_registration,

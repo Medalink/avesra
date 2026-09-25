@@ -34,6 +34,7 @@ export type SoundEdit =
   | { kind: "harmonizer_depth"; preset: SoundPreset; value: number }
   | { kind: "background_texture"; preset: SoundPreset; value: SoundAmounts["background_texture"] };
 export type Settings = {
+  owner_name: { actor: string; name: string } | null;
   sound: SoundSettings;
   shortcuts: Record<ShortcutAction, Chord | null>;
   audio_device_schema: number;

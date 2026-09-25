@@ -46,6 +46,7 @@ fn device_failed(app: &tauri::AppHandle, epoch: u64, output: bool, reason: &'sta
 
 #[derive(Clone)]
 struct OutputLease {
+    purpose: crate::playback_signal::Purpose,
     id: uuid::Uuid,
     epoch: u64,
     deadline: Instant,
@@ -138,7 +139,30 @@ impl MediaWorker {
         id: uuid::Uuid,
         caller: Arc<AtomicBool>,
     ) -> Result<(), String> {
-        self.open_output(local, id, None, None, caller)
+        self.open_output(
+            local,
+            id,
+            None,
+            None,
+            caller,
+            crate::playback_signal::Purpose::Preview,
+        )
+    }
+    /// Fixed launch greeting, independent of Settings panel lifetime.
+    pub fn open_greeting(
+        &self,
+        local: &LocalState,
+        id: uuid::Uuid,
+        caller: Arc<AtomicBool>,
+    ) -> Result<(), String> {
+        self.open_output(
+            local,
+            id,
+            None,
+            None,
+            caller,
+            crate::playback_signal::Purpose::Greeting,
+        )
     }
     /// Requires the actual published source, not a reconstructed history row.
     pub fn open_reply(
@@ -161,6 +185,7 @@ impl MediaWorker {
             Some(reply.cancellation()),
             Some(local.action_epoch),
             caller,
+            crate::playback_signal::Purpose::Reply,
         )
     }
     fn open_output(
@@ -170,6 +195,7 @@ impl MediaWorker {
         source: Option<avesra_core::conversations::PlannerCancellation>,
         action_epoch: Option<u64>,
         caller: Arc<AtomicBool>,
+        purpose: crate::playback_signal::Purpose,
     ) -> Result<(), String> {
         if id.is_nil()
             || !local.connected
@@ -189,6 +215,7 @@ impl MediaWorker {
             *diagnostics = SoundDiagnostics::default();
         }
         config.output_lease = Some(OutputLease {
+            purpose,
             id,
             epoch: local.playback_epoch,
             deadline: Instant::now() + Duration::from_secs(70),
@@ -196,19 +223,7 @@ impl MediaWorker {
             action_epoch,
             caller,
         });
-        self.telemetry.open(
-            local.playback_epoch,
-            id,
-            if config
-                .output_lease
-                .as_ref()
-                .is_some_and(|v| v.source.is_some())
-            {
-                crate::playback_signal::Purpose::Reply
-            } else {
-                crate::playback_signal::Purpose::Preview
-            },
-        );
+        self.telemetry.open(local.playback_epoch, id, purpose);
         config.playback = true;
         config.revision = config.revision.saturating_add(1);
         self.playback_gate.publish(true, local.playback_epoch);
@@ -217,10 +232,9 @@ impl MediaWorker {
     /// Read under Runtime.local; setup cleanup cannot revoke accepted output.
     pub fn setup_output_owned(&self, epoch: u64) -> bool {
         self.configuration.lock().is_ok_and(|config| {
-            config
-                .output_lease
-                .as_ref()
-                .is_some_and(|v| v.epoch == epoch && v.source.is_none())
+            config.output_lease.as_ref().is_some_and(|v| {
+                v.epoch == epoch && matches!(v.purpose, crate::playback_signal::Purpose::Preview)
+            })
         })
     }
     pub fn retirement_ticket(&self) -> Result<u64, String> {

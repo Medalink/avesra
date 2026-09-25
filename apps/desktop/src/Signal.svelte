@@ -13,7 +13,7 @@
     captureEpoch?: number;
     playbackEpoch?: number;
     outputId?: string;
-    purpose?: "preview" | "reply";
+    purpose?: "preview" | "greeting" | "reply";
   };
   let {
     frame = null,

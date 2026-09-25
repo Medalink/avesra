@@ -3,6 +3,42 @@ use crate::{ErrorCode, voice::VoiceIdentity};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// Fixed product greeting, never an arbitrary speech-text ingress.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Greeting {
+    pub owner_name: Option<String>,
+}
+impl Greeting {
+    pub fn valid_name(name: &str) -> bool {
+        !name.is_empty()
+            && name.trim() == name
+            && name.len() <= 320
+            && name.chars().count() <= 80
+            && name.chars().any(char::is_alphabetic)
+            && name
+                .chars()
+                .all(|c| c.is_alphanumeric() || matches!(c, ' ' | '-' | '\'' | '’' | '.'))
+    }
+    pub fn validate(&self) -> Result<(), ErrorCode> {
+        if self
+            .owner_name
+            .as_deref()
+            .is_some_and(|name| !Self::valid_name(name))
+        {
+            return Err(ErrorCode::Malformed);
+        }
+        Ok(())
+    }
+    pub fn text(&self) -> Result<String, ErrorCode> {
+        self.validate()?;
+        Ok(match &self.owner_name {
+            Some(name) => format!("Hello, {name}."),
+            None => "Hello.".into(),
+        })
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PreviewRequest {
@@ -11,6 +47,8 @@ pub struct PreviewRequest {
     pub playback_epoch: u64,
     pub request_id: Uuid,
     pub voice: VoiceIdentity,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub greeting: Option<Greeting>,
 }
 impl PreviewRequest {
     pub fn validate(&self) -> Result<(), ErrorCode> {
@@ -21,7 +59,11 @@ impl PreviewRequest {
         {
             return Err(ErrorCode::Malformed);
         }
-        self.voice.validate()
+        self.voice.validate()?;
+        if let Some(greeting) = &self.greeting {
+            greeting.validate()?;
+        }
+        Ok(())
     }
 }
 #[derive(Serialize, Deserialize)]

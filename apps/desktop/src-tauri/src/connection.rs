@@ -193,11 +193,35 @@ pub async fn voice_operation(
     session: SessionIdentity,
     command: &avesra_contracts::voices::VoiceCommand,
 ) -> Result<VoiceResult, String> {
+    voice_operation_bound(record, session, command, None).await
+}
+pub(crate) async fn greeting_voice_status(
+    record: &PairingRecord,
+    session: SessionIdentity,
+) -> Result<VoiceResult, String> {
+    voice_operation_bound(
+        record,
+        session,
+        &avesra_contracts::voices::VoiceCommand::Status,
+        Some(session.playback_epoch),
+    )
+    .await
+}
+async fn voice_operation_bound(
+    record: &PairingRecord,
+    session: SessionIdentity,
+    command: &avesra_contracts::voices::VoiceCommand,
+    playback_epoch: Option<u64>,
+) -> Result<VoiceResult, String> {
     use avesra_contracts::voices::{Candidate, VoiceCommand, VoiceStatus};
     record.validate()?;
     command.validate().map_err(|_| "Invalid voice command")?;
     let request_id = Uuid::new_v4();
-    let body=serde_json::to_vec(&serde_json::json!({"version":1,"request_id":request_id,"session_id":session.id,"capture_epoch":session.epoch,"command":command})).map_err(|_|"Voice command encoding failed")?;
+    let mut request = serde_json::json!({"version":1,"request_id":request_id,"session_id":session.id,"capture_epoch":session.epoch,"command":command});
+    if let Some(epoch) = playback_epoch {
+        request["playback_epoch"] = epoch.into();
+    }
+    let body = serde_json::to_vec(&request).map_err(|_| "Voice command encoding failed")?;
     if body.len() > 16384 {
         return Err("Voice description exceeds transport limit".into());
     }
@@ -256,6 +280,8 @@ pub async fn voice_operation(
         request_id: Uuid,
         session_id: Uuid,
         capture_epoch: u64,
+        #[serde(default)]
+        playback_epoch: Option<u64>,
         result: serde_json::Value,
     }
     let reply: Reply = serde_json::from_slice(&bytes).map_err(|_| "Invalid voice response")?;
@@ -263,6 +289,7 @@ pub async fn voice_operation(
         || reply.request_id != request_id
         || reply.session_id != session.id
         || reply.capture_epoch != session.epoch
+        || reply.playback_epoch != playback_epoch
     {
         return Err("Stale voice response".into());
     }
@@ -575,6 +602,7 @@ pub struct PairingRecord {
 pub(crate) enum MediaEndpoint {
     Capture,
     Preview,
+    Greeting,
     Speech,
 }
 pub(crate) async fn voice_socket(
@@ -590,6 +618,7 @@ pub(crate) async fn voice_socket(
     url.set_path(match endpoint_kind {
         MediaEndpoint::Capture => "/voice-stream",
         MediaEndpoint::Preview => "/voice-preview",
+        MediaEndpoint::Greeting => "/startup-greeting",
         MediaEndpoint::Speech => "/normal-speech",
     });
     let mut roots = rustls::RootCertStore::empty();

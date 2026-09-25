@@ -156,6 +156,7 @@ pub fn router(
         )
         .route("/voice-stream", get(voice_stream_upgrade))
         .route("/voice-preview", get(voice_preview_upgrade))
+        .route("/startup-greeting", get(startup_greeting_upgrade))
         .route("/normal-speech", get(normal_speech_upgrade))
         .route(
             "/voices",
@@ -300,7 +301,22 @@ async fn voice_preview_upgrade(
 ) -> Result<Response, StatusCode> {
     #[cfg(unix)]
     {
-        voice_preview::upgrade(auth, headers, ws).await
+        voice_preview::upgrade(auth, headers, ws, false).await
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (auth, headers, ws);
+        Err(StatusCode::SERVICE_UNAVAILABLE)
+    }
+}
+async fn startup_greeting_upgrade(
+    State(auth): State<Shared>,
+    headers: HeaderMap,
+    ws: WebSocketUpgrade,
+) -> Result<Response, StatusCode> {
+    #[cfg(unix)]
+    {
+        voice_preview::upgrade(auth, headers, ws, true).await
     }
     #[cfg(not(unix))]
     {

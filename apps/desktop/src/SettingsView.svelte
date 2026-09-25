@@ -8,6 +8,7 @@
   import VoiceAtmosphere from "./VoiceAtmosphere.svelte";
   import ShortcutSettings from "./ShortcutSettings.svelte";
   import EnrollmentView from "./EnrollmentView.svelte";
+  import OwnerName from "./OwnerName.svelte";
   import MicrophoneMeter from "./MicrophoneMeter.svelte";
   import AppCatalog from "./AppCatalog.svelte";
   import BrowserSetup from "./BrowserSetup.svelte";
@@ -490,6 +491,7 @@
           </section>
         {:else if section === "people"}
           <EnrollmentView {runtime} {navigate} />
+          <OwnerName {runtime} />
           <section class="section">
             <span class="av-kicker">Other people</span>
             <p class="av-hint">

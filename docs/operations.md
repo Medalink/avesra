@@ -1,5 +1,31 @@
 # Operations
 
+2026-09-25 startup greeting: built the canonical Windows release executable with
+the launch-only greeting and People > Your name memory field. SHA256:
+`d9a1d21508de92e8f89f2898396e0011cbe1688bfda8701fdb580c644567e4ae`.
+Windows and Linux locked Clippy, frontend type/build checks, and changed Rust
+formatting checks passed. Automated tests remain excluded by Plan 001.
+
+Built the matching ARM controller with pinned Rust image
+`c52e4328faff5e497232822421cff808c46f539161783d93c0c6ea5aa6f60fe2`,
+locked Clippy and release compilation. Source, build log, previous binary and
+deployment script are under `avesra-build/startup-greeting-20260925` on `spark2`.
+Atomically replaced the existing `ui-discovery-20260925/avesra-server` binary and
+restarted `avesra-controller-enrollment-preflight.service`. The running binary
+SHA256 is `5c2004f3cf325af7268ba5757c383ef65ad01cbcc783d947c3e825bd2406210f`.
+The controller is active, pinned-certificate HTTPS health succeeds, and an
+unauthenticated HTTP/1.1 WebSocket handshake to `/startup-greeting` returns 401.
+The TLS certificate is unchanged; pairing and actor stores were not replaced.
+
+The existing generated-voice TTS configuration lacked `tts_streaming`. Verified
+the installed qwen-tts package against the adapter's pinned source hashes, saved
+the prior config beside the rollout, enabled that flag, restarted only
+`avesra-tts-voices`, and loaded its existing Base model and saved voice store.
+Private health reports loaded_unqualified, streaming true, busy false and zero
+successful inferences. Normal voice/action qualification stays closed. No app
+launch, microphone capture, synthesis, or audible greeting was performed during
+this rollout; live end-to-end greeting quality remains unverified.
+
 2026-09-25 saved-voice check: installed private mode0600 `asr-deployment.json` into the existing `/home/medalink/.local/share/avesra-controller-ip` directory, selecting `/home/medalink/.local/share/avesra-audio/run/asr.sock` at Nemotron revision `ebe59e5a817142986528bbbee5dba8db7b38ed50`. The already-running ASR container reported loaded_unqualified, streaming false and zero successful inferences before this work; no model was loaded/replaced or unrelated container changed. The controller now exposes authenticated GET /voice-analysis for same-service ASR/speaker preflight; POST remains transient inference without acceptance authority. ARM locked Clippy and release build passed using the existing target cache and pinned compiler image. Source/log/binary are under `avesra-build/voice-check-20260925`; the running binary was atomically replaced at the existing `avesra-build/ui-discovery-20260925/avesra-server` path, SHA256 `d9f4db0ec807aba58b402553b78dd9b931f7c180670aa36a69ffa02e33ec9e68`. Only the existing enrollment controller unit was restarted; it reports active. Pairing, actor records and TLS credentials were preserved. This proves configuration/build/service availability, not successful transcription, speaker qualification or automatic listening.
 
 2026-09-25 generated-voice setup: after the owner paired the companion and attempted Generate, inspection found only `speaker-deployment.json`; TTS was stopped and VoiceDesign was absent. Deployed current audio source over the existing pinned TTS runtime as local immutable image `sha256:6369ea830a12630308535fa059b1fd6c07626fdd995e13ae6e0b5a5fac9ee2ba`. Containers `avesra-tts-voices` and `avesra-voice-design-voices` use UID1000:1000, network none, 2 CPUs / 12 GiB each, GPU access, dropped capabilities and no-new-privileges. Models are existing read-only downloads; both mount the same mode0700 `/home/medalink/.local/share/avesra-audio/voices` store. Config/build evidence is under `avesra-audio/voice-setup-20260925/`; canonical config equivalents are `services/audio/tts-voices.config.json` and `services/audio/voice-design.config.json`.

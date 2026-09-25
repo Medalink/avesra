@@ -13,6 +13,8 @@ struct Request {
     request_id: Uuid,
     session_id: Uuid,
     capture_epoch: u64,
+    #[serde(default)]
+    playback_epoch: Option<u64>,
     command: Command,
 }
 pub(super) fn current(
@@ -93,6 +95,11 @@ pub(super) async fn operation(
     if request.version != 1 {
         return Err(StatusCode::BAD_REQUEST);
     }
+    if request.playback_epoch.is_some() && !matches!(request.command, Command::Status) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let output = request.playback_epoch.is_some();
+    let epoch = request.playback_epoch.unwrap_or(request.capture_epoch);
     let _permit = auth
         .voice_admission
         .clone()
@@ -102,9 +109,9 @@ pub(super) async fn operation(
         &auth,
         device,
         request.session_id,
-        request.capture_epoch,
+        epoch,
         request.request_id,
-        false,
+        output,
     )?;
     let execute = async {
         let tts = auth.tts.as_ref().ok_or(ErrorCode::Unavailable)?;
@@ -138,13 +145,8 @@ pub(super) async fn operation(
     let monitor = async {
         loop {
             tokio::time::sleep(Duration::from_secs(1)).await;
-            if !current(
-                &auth,
-                device,
-                request.session_id,
-                request.capture_epoch,
-                false,
-            ) || !active(auth.clone(), device).await
+            if !current(&auth, device, request.session_id, epoch, output)
+                || !active(auth.clone(), device).await
             {
                 return;
             }
@@ -156,24 +158,15 @@ pub(super) async fn operation(
         _=monitor=>return Err(StatusCode::CONFLICT),
         value=tokio::time::timeout(Duration::from_secs(31),execute)=>value.map_err(|_|StatusCode::GATEWAY_TIMEOUT)?.map_err(|_|StatusCode::SERVICE_UNAVAILABLE)?,
     };
-    if !current(
-        &auth,
-        device,
-        request.session_id,
-        request.capture_epoch,
-        false,
-    ) || !active(auth.clone(), device).await
-        || !current(
-            &auth,
-            device,
-            request.session_id,
-            request.capture_epoch,
-            false,
-        )
+    if !current(&auth, device, request.session_id, epoch, output)
+        || !active(auth.clone(), device).await
+        || !current(&auth, device, request.session_id, epoch, output)
     {
         return Err(StatusCode::CONFLICT);
     }
-    Ok(
-        serde_json::json!({"version":1,"request_id":request.request_id,"session_id":request.session_id,"capture_epoch":request.capture_epoch,"result":result}),
-    )
+    let mut reply = serde_json::json!({"version":1,"request_id":request.request_id,"session_id":request.session_id,"capture_epoch":request.capture_epoch,"result":result});
+    if let Some(epoch) = request.playback_epoch {
+        reply["playback_epoch"] = epoch.into();
+    }
+    Ok(reply)
 }

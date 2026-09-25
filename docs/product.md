@@ -28,6 +28,14 @@ The header is the single live Spark connection indicator. Its disconnected, conn
 
 On the first verified Windows unlock during each app launch, the native connection coordinator attempts the saved pairing once, using the same credential loader, certificate pinning, bounded handshake and generation checks as Reconnect. No saved pairing is quiet; unreadable credentials or failed connections produce actionable header detail. Explicit disconnect or a newer pairing request supersedes a pending startup attempt. Opening pages never starts another connection. Later Windows unlocks do not undo a manual disconnect. Reconnect grants no voice readiness, restores no setup proof, and replays no task.
 
+The owner-requested startup greeting follows that one saved-connection attempt.
+With a selected active voice and permitted speaker output, say `Hello.` or
+`Hello, <remembered owner name>.` once. This fixed greeting is a narrow product
+output exception to accepted-task speech; it grants no microphone, planner or
+action authority. People > Your name stores or forgets the initial owner-scoped
+name memory. See [startup greeting](generated-voices.md#startup-greeting) for
+identity, timing, cancellation and transport rules.
+
 Disconnected pairing opens with automatic local discovery and a Use this Spark action for an available server. Manual certificate/fingerprint/code entry remains under Advanced. Selection trusts the discovered certificate on first use and reuses protected pairing persistence; discovery alone does not connect or grant permissions. See [Spark discovery](spark-discovery.md) for the bounded scan and one-device pairing window.
 
 The overview derives connection, selected-and-present audio devices, enrollment and voice readiness from the native runtime and current device enumeration. Unknown state is unavailable, never complete. Voice readiness is not browser/action readiness. Browser scope and app alias review have no aggregate completion claim. There is no manually checked completion flag, simulated progress percentage or fabricated task history. A disconnected runtime prominently offers pairing; active local mute/deafen/pause/lock and runtime errors remain visible. Browser rendering is explicitly labeled without substituting a native snapshot.

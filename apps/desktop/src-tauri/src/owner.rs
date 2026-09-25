@@ -4,7 +4,7 @@ use avesra_contracts::ErrorCode;
 use avesra_core::owner::ProtectedOwner;
 use serde::{Deserialize, Serialize};
 use std::{path::Path, sync::atomic::Ordering};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use uuid::Uuid;
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -84,6 +84,53 @@ pub async fn current_actor(app: &tauri::AppHandle) -> Result<Uuid, String> {
     status
         .actor
         .ok_or("Create the authenticated local owner first".into())
+}
+
+/// A personal preference, not an ownership or voice qualification change.
+#[tauri::command]
+pub async fn remember_owner_name(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    name: String,
+) -> Result<(), String> {
+    if window.label() != "settings" || !window.is_visible().unwrap_or(false) {
+        return Err("Open Settings to remember your name".into());
+    }
+    let name = name.trim().to_owned();
+    if !name.is_empty() && !avesra_contracts::preview::Greeting::valid_name(&name) {
+        return Err("Use a name of up to 80 characters with letters, spaces, apostrophes, periods or hyphens".into());
+    }
+    let state = app.state::<Runtime>();
+    let epoch = state
+        .local
+        .lock()
+        .map_err(|_| "Local state unavailable")?
+        .capture_epoch;
+    let actor = current_actor(&app).await?;
+    if !window.is_visible().unwrap_or(false) {
+        return Err("Settings closed".into());
+    }
+    let pending = {
+        let mut local = state.local.lock().map_err(|_| "Local state unavailable")?;
+        if local.locked || local.capture_epoch != epoch {
+            return Err("Owner context changed".into());
+        }
+        let mut settings = local.settings.clone();
+        settings.owner_name = if name.is_empty() {
+            None
+        } else {
+            Some(avesra_core::state::RememberedName { actor, name })
+        };
+        settings.validate().map_err(|_| "Invalid name preference")?;
+        let pending = crate::enqueue(&state, settings.clone())?;
+        local.settings = settings;
+        local.playback_epoch = local.playback_epoch.saturating_add(1);
+        local.refresh();
+        state.publish(&local);
+        let _ = app.emit("runtime-state", local.clone());
+        pending
+    };
+    pending.await.map_err(|_| "Name writer stopped")?
 }
 #[tauri::command]
 pub async fn owner_status(

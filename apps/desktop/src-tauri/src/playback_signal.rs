@@ -13,6 +13,7 @@ const MAX_SEQUENCE: u64 = 9_007_199_254_740_991;
 #[serde(rename_all = "snake_case")]
 pub enum Purpose {
     Preview,
+    Greeting,
     Reply,
 }
 #[derive(Clone, Serialize)]

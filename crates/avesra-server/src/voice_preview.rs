@@ -20,6 +20,7 @@ pub(super) async fn upgrade(
     auth: Shared,
     headers: HeaderMap,
     ws: WebSocketUpgrade,
+    greeting: bool,
 ) -> Result<Response, StatusCode> {
     let device = authenticate_headers(auth.clone(), &headers).await?;
     if auth.tts.is_none() {
@@ -40,7 +41,7 @@ pub(super) async fn upgrade(
         .max_frame_size(2048)
         .write_buffer_size(1024)
         .max_write_buffer_size(32768)
-        .on_upgrade(move |socket| session(socket, auth, device, connection, admission)))
+        .on_upgrade(move |socket| session(socket, auth, device, connection, admission, greeting)))
 }
 async fn session(
     mut socket: WebSocket,
@@ -48,8 +49,13 @@ async fn session(
     device: Uuid,
     _connection: OwnedSemaphorePermit,
     _admission: OwnedSemaphorePermit,
+    greeting: bool,
 ) {
-    let _ = tokio::time::timeout(Duration::from_secs(70), start(&mut socket, auth, device)).await;
+    let _ = tokio::time::timeout(
+        Duration::from_secs(70),
+        start(&mut socket, auth, device, greeting),
+    )
+    .await;
     let _ = tokio::time::timeout(
         Duration::from_millis(500),
         socket.send(Message::Close(None)),
@@ -88,11 +94,19 @@ async fn send(
     .map_err(|_| ErrorCode::Expired)?
     .map_err(|_| ErrorCode::Unavailable)
 }
-async fn start(socket: &mut WebSocket, auth: Shared, device: Uuid) -> Result<(), ErrorCode> {
+async fn start(
+    socket: &mut WebSocket,
+    auth: Shared,
+    device: Uuid,
+    greeting: bool,
+) -> Result<(), ErrorCode> {
     let request: PreviewRequest =
         serde_json::from_str(&read(socket, Duration::from_secs(3)).await?)
             .map_err(|_| ErrorCode::Malformed)?;
     request.validate()?;
+    if request.greeting.is_some() != greeting {
+        return Err(ErrorCode::Denied);
+    }
     let mut permission = voice_setup::admit(
         &auth,
         device,
@@ -121,19 +135,26 @@ async fn start(socket: &mut WebSocket, auth: Shared, device: Uuid) -> Result<(),
         biased;
         _=permission.changed()=>Err(ErrorCode::Stale),
         _=monitor=>Err(ErrorCode::Stale),
-        result=stream(socket,&auth,&request)=>result,
+        result=stream(socket,&auth,device,&request)=>result,
     }
 }
 async fn stream(
     socket: &mut WebSocket,
     auth: &Shared,
+    device: Uuid,
     request: &PreviewRequest,
 ) -> Result<(), ErrorCode> {
     let lane = auth.tts.as_ref().ok_or(ErrorCode::Unavailable)?;
     let pcm = tokio::select! {
         biased;
         _=socket.recv()=>return Err(ErrorCode::Stale),
-        value=tokio::time::timeout(Duration::from_secs(31),lane.preview_voice(1,&request.voice))=>value.map_err(|_|ErrorCode::Expired)??,
+        value=tokio::time::timeout(Duration::from_secs(31),async {
+            if request.greeting.is_some() {
+                greeting_pcm(auth,device,request).await
+            } else {
+                lane.preview_voice(1,&request.voice).await
+            }
+        })=>value.map_err(|_|ErrorCode::Expired)??,
     };
     let samples = pcm.len() as u64;
     send(
@@ -181,4 +202,60 @@ async fn stream(
         return Err(ErrorCode::Stale);
     }
     Ok(())
+}
+
+async fn greeting_pcm(
+    auth: &Shared,
+    device: Uuid,
+    request: &PreviewRequest,
+) -> Result<Vec<i16>, ErrorCode> {
+    use avesra_server::audio::synthesis::{Completion, SpeechEvent};
+    let text = request
+        .greeting
+        .as_ref()
+        .ok_or(ErrorCode::Malformed)?
+        .text()?;
+    let lane = auth.tts.as_ref().ok_or(ErrorCode::Unavailable)?;
+    let status = lane.voice_status(1).await?;
+    if status.selection_state != "available"
+        || status.active_state != "available"
+        || status.selected.as_ref() != Some(&request.voice)
+        || status.active_voice.as_ref() != Some(&request.voice)
+    {
+        return Err(ErrorCode::Unavailable);
+    }
+    let mut stream = lane
+        .synthesize(1, request.request_id, &request.voice, &text, || async {
+            if active(auth.clone(), device).await
+                && voice_setup::current(
+                    auth,
+                    device,
+                    request.session_id,
+                    request.playback_epoch,
+                    true,
+                )
+            {
+                Ok(())
+            } else {
+                Err(ErrorCode::Stale)
+            }
+        })
+        .await?;
+    let mut pcm = Vec::new();
+    loop {
+        match stream.next().await? {
+            SpeechEvent::Audio { samples, .. } => {
+                if pcm.len() + samples.len() > 720_000 {
+                    return Err(ErrorCode::TooLarge);
+                }
+                pcm.extend(samples);
+            }
+            SpeechEvent::End {
+                outcome: Completion::Complete,
+                samples,
+                ..
+            } if samples == pcm.len() && !pcm.is_empty() => return Ok(pcm),
+            _ => return Err(ErrorCode::Unavailable),
+        }
+    }
 }

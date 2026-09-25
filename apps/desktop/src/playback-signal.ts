@@ -10,7 +10,7 @@ export class PlaybackSignal {
   private epoch = 0;
   private allowed = false;
   private replyAllowed = false;
-  private purpose: "preview" | "reply" | null = null;
+  private purpose: "preview" | "greeting" | "reply" | null = null;
   private output: string | null = null;
   private closed = false;
   private retiredEpoch = 0;
@@ -60,7 +60,7 @@ export class PlaybackSignal {
       return;
     }
     if (e.epoch !== this.epoch || (this.output !== null && e.output !== this.output)) return;
-    if (e.type !== "sample" || Object.keys(e).length !== 9 || typeof e.speech !== "boolean" || (e.purpose !== "preview" && e.purpose !== "reply") ||
+    if (e.type !== "sample" || Object.keys(e).length !== 9 || typeof e.speech !== "boolean" || (e.purpose !== "preview" && e.purpose !== "greeting" && e.purpose !== "reply") ||
       !finite(e.submittedAt) || !finite(e.expiresAt) || Math.abs(e.expiresAt - e.submittedAt - 250) > 0.001 ||
       !Array.isArray(e.samples) || e.samples.length !== 32 ||
       e.samples.some(v => typeof v !== "number" || !Number.isFinite(v) || Math.abs(v) > 1)) return;

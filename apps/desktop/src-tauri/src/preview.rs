@@ -4,7 +4,7 @@ use crate::{
     connection::{self, MediaEndpoint, PairingRecord, SessionIdentity},
 };
 use avesra_contracts::{
-    preview::{PreviewControl, PreviewEvent, PreviewMessage, PreviewRequest},
+    preview::{Greeting, PreviewControl, PreviewEvent, PreviewMessage, PreviewRequest},
     voice::VoiceIdentity,
 };
 use avesra_windows::audio::{PlaybackFrame, PlaybackRate};
@@ -25,7 +25,7 @@ struct Lease {
     session: SessionIdentity,
     epoch: u64,
     id: Uuid,
-    panel: Uuid,
+    panel: Option<Uuid>,
     withdrawn: Arc<AtomicBool>,
 }
 impl Lease {
@@ -33,10 +33,12 @@ impl Lease {
         let state = self.app.state::<Runtime>();
         let local = state.local.lock().map_err(|_| "Local state unavailable")?;
         if self.withdrawn.load(Ordering::SeqCst)
-            || !state
-                .voice_panel
-                .lock()
-                .is_ok_and(|value| *value == Some(self.panel))
+            || self.panel.is_some_and(|panel| {
+                !state
+                    .voice_panel
+                    .lock()
+                    .is_ok_and(|value| *value == Some(panel))
+            })
             || !local.connected
             || local.locked
             || local.settings.deafened
@@ -147,12 +149,73 @@ async fn preview_owned(
             session,
             epoch: local.playback_epoch,
             id,
-            panel,
+            panel: Some(panel),
             withdrawn,
         };
         let _ = app.emit("runtime-state", local.clone());
         lease
     };
+    play_owned(app, voice, lease, owner, None).await
+}
+
+/// Native launch-only entry. No webview command accepts greeting text.
+pub(crate) async fn greet(
+    app: tauri::AppHandle,
+    session: SessionIdentity,
+    voice: VoiceIdentity,
+    greeting: Greeting,
+) -> Result<(), String> {
+    greeting.validate().map_err(|_| "Invalid remembered name")?;
+    let withdrawn = Arc::new(AtomicBool::new(false));
+    let _caller = crate::output::Caller(withdrawn.clone());
+    let state = app.state::<Runtime>();
+    let mut owner = crate::output::Owner::reserve(&app)?;
+    let lease = {
+        let mut local = state.local.lock().map_err(|_| "Local state unavailable")?;
+        if !local.connected
+            || local.locked
+            || local.settings.deafened
+            || local.settings.paused
+            || local.settings.speaker.is_none()
+            || local.playback_epoch != session.playback_epoch
+            || state.connection_generation.load(Ordering::SeqCst) != session.generation
+            || !state
+                .acknowledged_session
+                .lock()
+                .is_ok_and(|ack| ack.is_some_and(|ack| ack.id == session.id))
+        {
+            return Err("Startup greeting cancelled".into());
+        }
+        local.playback_epoch = local.playback_epoch.saturating_add(1);
+        local.refresh();
+        state.publish(&local);
+        let id = Uuid::new_v4();
+        owner.bind(local.playback_epoch, session.generation);
+        state.media.open_greeting(&local, id, withdrawn.clone())?;
+        let lease = Lease {
+            app: app.clone(),
+            session,
+            epoch: local.playback_epoch,
+            id,
+            panel: None,
+            withdrawn,
+        };
+        let _ = app.emit("runtime-state", local.clone());
+        lease
+    };
+    play_owned(app, voice, lease, owner, Some(greeting))
+        .await
+        .map(|_| ())
+}
+
+async fn play_owned(
+    app: tauri::AppHandle,
+    voice: VoiceIdentity,
+    lease: Lease,
+    owner: crate::output::Owner,
+    greeting: Option<Greeting>,
+) -> Result<String, String> {
+    let state = app.state::<Runtime>();
     // Device opening and current output acknowledgment precede any Play request.
     let ready = async {
         loop {
@@ -185,14 +248,24 @@ async fn preview_owned(
     let result = tokio::select! {
         biased;
         _=monitor=>Err("Preview permission changed".into()),
-        value=tokio::time::timeout(Duration::from_secs(65),play(&lease,&record,voice))=>value.map_err(|_|"Preview expired".to_string())?,
+        value=tokio::time::timeout(Duration::from_secs(65),play(&lease,&record,voice,greeting))=>value.map_err(|_|"Preview expired".to_string())?,
     };
     lease.stop();
     owner.finish().await?;
     result.map(|_| "Final preview samples submitted to the output device".into())
 }
-async fn play(lease: &Lease, record: &PairingRecord, voice: VoiceIdentity) -> Result<(), String> {
-    let mut socket = connection::voice_socket(record, MediaEndpoint::Preview).await?;
+async fn play(
+    lease: &Lease,
+    record: &PairingRecord,
+    voice: VoiceIdentity,
+    greeting: Option<Greeting>,
+) -> Result<(), String> {
+    let endpoint = if greeting.is_some() {
+        MediaEndpoint::Greeting
+    } else {
+        MediaEndpoint::Preview
+    };
+    let mut socket = connection::voice_socket(record, endpoint).await?;
     lease.current(true)?;
     let request = PreviewRequest {
         version: 1,
@@ -200,6 +273,7 @@ async fn play(lease: &Lease, record: &PairingRecord, voice: VoiceIdentity) -> Re
         playback_epoch: lease.epoch,
         request_id: lease.id,
         voice,
+        greeting,
     };
     let start = serde_json::to_string(&request).map_err(|_| "Preview encoding failed")?;
     tokio::time::timeout(
@@ -237,6 +311,7 @@ async fn play(lease: &Lease, record: &PairingRecord, voice: VoiceIdentity) -> Re
                 || event.context.playback_epoch != request.playback_epoch
                 || event.context.request_id != request.request_id
                 || event.context.voice != request.voice
+                || event.context.greeting != request.greeting
             {
                 return Err("Stale preview response".into());
             }
@@ -246,7 +321,8 @@ async fn play(lease: &Lease, record: &PairingRecord, voice: VoiceIdentity) -> Re
                     samples,
                 } if total.is_none()
                     && sample_rate == 24000
-                    && (24000..=720000).contains(&samples) =>
+                    && ((if request.greeting.is_some() { 1 } else { 24000 })..=720000)
+                        .contains(&samples) =>
                 {
                     total = Some(samples);
                     opened = Some(Instant::now());

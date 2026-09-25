@@ -9,9 +9,19 @@ fn default_interface_scale() -> u16 {
     DEFAULT_INTERFACE_SCALE
 }
 
+/// Explicitly remembered personal detail, bound to the authenticated local owner.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RememberedName {
+    pub actor: uuid::Uuid,
+    pub name: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Settings {
+    #[serde(default)]
+    pub owner_name: Option<RememberedName>,
     #[serde(default)]
     pub sound: crate::sound::SoundSettings,
     #[serde(default)]
@@ -36,6 +46,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            owner_name: None,
             sound: crate::sound::SoundSettings::default(),
             shortcuts: crate::shortcuts::Shortcuts::default(),
             audio_device_schema: 1,
@@ -57,6 +68,11 @@ impl Default for Settings {
 }
 impl Settings {
     pub fn validate(&self) -> Result<(), ErrorCode> {
+        if self.owner_name.as_ref().is_some_and(|value| {
+            value.actor.is_nil() || !avesra_contracts::preview::Greeting::valid_name(&value.name)
+        }) {
+            return Err(ErrorCode::Malformed);
+        }
         self.sound.validate()?;
         self.shortcuts.validate()?;
         if self.audio_device_schema != 1

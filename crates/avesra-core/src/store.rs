@@ -135,6 +135,11 @@ impl Store {
             None => Settings::default(),
         };
         let migrated = settings.audio_device_schema == 0;
+        // A damaged optional personal detail must not prevent startup or cause
+        // an unvalidated name to be spoken. Preserve the record on disk.
+        settings.owner_name = settings.owner_name.filter(|value| {
+            !value.actor.is_nil() && avesra_contracts::preview::Greeting::valid_name(&value.name)
+        });
         if migrated {
             // Legacy fields were friendly names. Never guess an endpoint from a
             // label: require explicit device reselection and retain deliberate mute.
