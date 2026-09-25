@@ -45,6 +45,7 @@ struct Configuration {
     playback: bool,
     capture_deadline: Option<Instant>,
     voice_window: bool,
+    last_voice_epoch: u64,
 }
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -80,10 +81,15 @@ impl MediaWorker {
             .configuration
             .lock()
             .map_err(|_| "Media state unavailable")?;
-        if config.epoch != local.capture_epoch || config.capture || config.input.is_none() {
+        if config.epoch != local.capture_epoch
+            || config.capture
+            || config.input.is_none()
+            || local.capture_epoch <= config.last_voice_epoch
+        {
             return Err("Media capture already owned or stale".into());
         }
         config.voice_window = true;
+        config.last_voice_epoch = local.capture_epoch;
         config.capture = true;
         config.capture_deadline = Some(Instant::now() + Duration::from_secs(11));
         config.revision = config.revision.saturating_add(1);
@@ -394,6 +400,7 @@ impl MediaWorker {
                 playback,
                 capture_deadline,
                 voice_window,
+                last_voice_epoch: config.last_voice_epoch,
             };
         } else {
             self.capture_gate.publish(false, local.capture_epoch);
