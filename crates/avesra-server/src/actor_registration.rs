@@ -25,6 +25,7 @@ fn current(state: &Shared, device: Uuid, request: &Request) -> bool {
             live.device == device
                 && live.action_epoch == request.action_epoch
                 && live.action_enabled
+                && live.actor_attempts.get(&request.attempt) == Some(&(request.action_epoch, false))
                 && live.updated.elapsed() < Duration::from_secs(30)
         })
     })
@@ -48,11 +49,13 @@ pub(super) async fn operation(
     .await
     .map_err(|_| StatusCode::REQUEST_TIMEOUT)??;
     let mut watch = {
-        let sessions = state
+        let mut sessions = state
             .sessions
             .lock()
             .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
-        let live = sessions.get(&request.session).ok_or(StatusCode::CONFLICT)?;
+        let live = sessions
+            .get_mut(&request.session)
+            .ok_or(StatusCode::CONFLICT)?;
         if live.device != device
             || live.action_epoch != request.action_epoch
             || !live.action_enabled
@@ -60,6 +63,11 @@ pub(super) async fn operation(
         {
             return Err(StatusCode::CONFLICT);
         }
+        if live.actor_attempts.len() >= 128 || live.actor_attempts.contains_key(&request.attempt) {
+            return Err(StatusCode::CONFLICT);
+        }
+        live.actor_attempts
+            .insert(request.attempt, (request.action_epoch, false));
         live.action_permission.subscribe()
     };
     if started.elapsed() >= Duration::from_secs(5) {
@@ -97,6 +105,7 @@ pub(super) async fn operation(
     let reply = Reply {
         version: VERSION,
         request: request.request,
+        attempt: request.attempt,
         session: request.session,
         action_epoch: request.action_epoch,
         binding: result,
@@ -105,4 +114,42 @@ pub(super) async fn operation(
         .validate(&request, device)
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     Ok(reply)
+}
+pub(super) async fn cancel(
+    state: Shared,
+    headers: HeaderMap,
+    request: avesra_contracts::actors::Cancel,
+) -> Result<(), StatusCode> {
+    request.validate().map_err(|_| StatusCode::BAD_REQUEST)?;
+    let device = tokio::time::timeout(
+        Duration::from_secs(5),
+        authenticate_headers(state.clone(), &headers),
+    )
+    .await
+    .map_err(|_| StatusCode::REQUEST_TIMEOUT)??;
+    let mut sessions = state
+        .sessions
+        .lock()
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    let live = sessions
+        .get_mut(&request.session)
+        .ok_or(StatusCode::CONFLICT)?;
+    if live.device != device || live.updated.elapsed() >= Duration::from_secs(30) {
+        return Err(StatusCode::CONFLICT);
+    }
+    if let Some((epoch, cancelled)) = live.actor_attempts.get_mut(&request.attempt) {
+        if *epoch != request.action_epoch {
+            return Err(StatusCode::CONFLICT);
+        }
+        *cancelled = true;
+    } else {
+        if live.action_epoch != request.action_epoch || live.actor_attempts.len() >= 128 {
+            return Err(StatusCode::CONFLICT);
+        }
+        // Cancel can win the network race before operation admission. Never
+        // evict a retired identity; exhaustion requires a new control session.
+        live.actor_attempts
+            .insert(request.attempt, (request.action_epoch, true));
+    }
+    Ok(())
 }

@@ -91,6 +91,8 @@ fn current_locked(
         || local.enrollment_capture
         || acknowledged.id != expected.id
         || acknowledged.epoch != expected.epoch
+        || acknowledged.action_epoch != local.action_epoch
+        || acknowledged.action_epoch != expected.action_epoch
         || acknowledged.generation != expected.generation
     {
         return Err("Voice media context changed".into());

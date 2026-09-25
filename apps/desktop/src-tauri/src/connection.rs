@@ -20,6 +20,7 @@ pub struct SessionIdentity {
     pub id: Uuid,
     pub epoch: u64,
     pub playback_epoch: u64,
+    pub action_epoch: u64,
     pub generation: u64,
 }
 #[derive(Serialize)]
@@ -657,7 +658,7 @@ pub async fn run(
           if state.connection_generation.load(std::sync::atomic::Ordering::SeqCst)!=generation{return Err("Session replaced".into());}
           if local.capture_epoch==reply.capture_epoch&&local.playback_epoch==reply.playback_epoch&&local.action_epoch==reply.action_epoch {
             if !local.connected {local.connected=true;local.refresh();state.publish(&local);let _=app.emit("runtime-state",local.clone());}
-            if let Ok(mut session)=state.acknowledged_session.lock(){*session=Some(SessionIdentity{id:hello.session_id,epoch:reply.capture_epoch,playback_epoch:reply.playback_epoch,generation});}
+            if let Ok(mut session)=state.acknowledged_session.lock(){*session=Some(SessionIdentity{id:hello.session_id,epoch:reply.capture_epoch,playback_epoch:reply.playback_epoch,action_epoch:reply.action_epoch,generation});}
           }continue;
          }
         };

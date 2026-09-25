@@ -2,7 +2,7 @@
 use crate::ErrorCode;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-pub const VERSION: u16 = 1;
+pub const VERSION: u16 = 2;
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
@@ -21,6 +21,7 @@ pub enum Command {
 pub struct Request {
     pub version: u16,
     pub request: Uuid,
+    pub attempt: Uuid,
     pub session: Uuid,
     pub action_epoch: u64,
     pub command: Command,
@@ -30,7 +31,8 @@ impl Request {
         if self.version != VERSION {
             return Err(ErrorCode::Version);
         }
-        if self.request.is_nil()
+        if self.attempt.is_nil()
+            || self.request.is_nil()
             || self.session.is_nil()
             || self.action_epoch == 0
             || self.action_epoch > crate::browser::MAX_SAFE_COUNTER
@@ -87,6 +89,7 @@ impl Binding {
 pub struct Reply {
     pub version: u16,
     pub request: Uuid,
+    pub attempt: Uuid,
     pub session: Uuid,
     pub action_epoch: u64,
     #[serde(deserialize_with = "required_binding")]
@@ -104,6 +107,7 @@ impl Reply {
             return Err(ErrorCode::Version);
         }
         if device.is_nil()
+            || self.attempt != request.attempt
             || self.request != request.request
             || self.session != request.session
             || self.action_epoch != request.action_epoch
@@ -143,6 +147,30 @@ impl Reply {
                 }
             }
             Command::Status => {}
+        }
+        Ok(())
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Cancel {
+    pub version: u16,
+    pub attempt: Uuid,
+    pub session: Uuid,
+    pub action_epoch: u64,
+}
+impl Cancel {
+    pub fn validate(&self) -> Result<(), ErrorCode> {
+        if self.version != VERSION {
+            return Err(ErrorCode::Version);
+        }
+        if self.attempt.is_nil()
+            || self.session.is_nil()
+            || self.action_epoch == 0
+            || self.action_epoch > crate::browser::MAX_SAFE_COUNTER
+        {
+            return Err(ErrorCode::Malformed);
         }
         Ok(())
     }

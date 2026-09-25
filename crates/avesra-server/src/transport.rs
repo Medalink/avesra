@@ -63,6 +63,7 @@ struct LiveSession {
     action_epoch: u64,
     action_enabled: bool,
     action_permission: tokio::sync::watch::Sender<(u64, bool)>,
+    actor_attempts: std::collections::HashMap<Uuid, (u64, bool)>,
     enabled: bool,
     output_enabled: bool,
     output_permission: tokio::sync::watch::Sender<(u64, bool)>,
@@ -115,6 +116,7 @@ pub fn router(auth: AuthStore, directory: &std::path::Path) -> Result<Router, St
         .route("/pair", post(pair))
         .route("/control", get(control))
         .route("/actors", post(actors))
+        .route("/actors/cancel", post(cancel_actor))
         .route("/speaker", get(speaker_health).post(speaker_infer))
         .route("/voice-analysis", post(voice_analysis))
         .route("/voice-stream", get(voice_stream_upgrade))
@@ -159,6 +161,22 @@ async fn actors(
         actor_registration::operation(auth, headers, body)
             .await
             .map(Json)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (auth, headers, body);
+        Err(StatusCode::SERVICE_UNAVAILABLE)
+    }
+}
+async fn cancel_actor(
+    State(auth): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<avesra_contracts::actors::Cancel>,
+) -> Result<StatusCode, StatusCode> {
+    #[cfg(unix)]
+    {
+        actor_registration::cancel(auth, headers, body).await?;
+        Ok(StatusCode::NO_CONTENT)
     }
     #[cfg(not(unix))]
     {
@@ -736,6 +754,7 @@ async fn session(
                 action_epoch: envelope.action_epoch,
                 action_enabled: !mode.2,
                 action_permission: tokio::sync::watch::channel((envelope.action_epoch, !mode.2)).0,
+                actor_attempts: std::collections::HashMap::new(),
                 enabled: !mode.0 && !mode.1 && !mode.2,
                 output_enabled: !mode.1 && !mode.2,
                 output_permission: tokio::sync::watch::channel((
