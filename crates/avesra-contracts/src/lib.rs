@@ -143,6 +143,7 @@ impl Operation {
                 | Self::Spend
                 | Self::ChangePermission
                 | Self::ChangeConfiguration
+                | Self::ConnectVpn
         )
     }
 }
@@ -207,15 +208,11 @@ impl ActionPayload {
         let valid = match self {
             Self::LaunchApp { app_id } => !app_id.is_nil(),
             Self::SetVolume { percent } => *percent <= 100,
-            Self::Navigate { url } => url.starts_with("https://") && url.len() <= 2048,
+            Self::Navigate { url } => canonical_https(url, false),
             Self::ReadPage {
                 origin,
                 message_limit,
-            } => {
-                origin.starts_with("https://")
-                    && origin.len() <= 2048
-                    && (1..=100).contains(message_limit)
-            }
+            } => canonical_https(origin, true) && (1..=100).contains(message_limit),
             Self::FillPrompt {
                 app_id,
                 project_id,
@@ -252,6 +249,28 @@ impl ActionPayload {
         } else {
             Err(ErrorCode::Malformed)
         }
+    }
+}
+
+/// Payloads must already be canonical so approval equality is unambiguous.
+fn canonical_https(value: &str, origin_only: bool) -> bool {
+    if value.len() > 2048 || value.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return false;
+    }
+    let Ok(parsed) = url::Url::parse(value) else {
+        return false;
+    };
+    if parsed.scheme() != "https"
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+    {
+        return false;
+    }
+    if origin_only {
+        value == parsed.origin().ascii_serialization()
+    } else {
+        value == parsed.as_str()
     }
 }
 
@@ -373,8 +392,22 @@ impl Envelope {
         {
             return Err(ErrorCode::Stale);
         }
-        if let ControlMessage::Action(action) = &self.message {
-            action.validate(now_ms)?;
+        match &self.message {
+            ControlMessage::Action(action) => action.validate(now_ms)?,
+            ControlMessage::Cancel { task_id } if task_id.is_nil() => {
+                return Err(ErrorCode::Malformed);
+            }
+            ControlMessage::Hello { capabilities } => {
+                if capabilities.len() > 7
+                    || capabilities
+                        .iter()
+                        .enumerate()
+                        .any(|(i, lane)| capabilities[..i].contains(lane))
+                {
+                    return Err(ErrorCode::Malformed);
+                }
+            }
+            _ => {}
         }
         Ok(())
     }

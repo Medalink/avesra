@@ -75,9 +75,12 @@ fn certificate(pem: &str) -> Result<rustls::pki_types::CertificateDer<'static>, 
     Ok(certs[0].clone())
 }
 fn endpoint(value: &str) -> Result<reqwest::Url, String> {
+    if value.len() > 2048 || value.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return Err("Invalid Spark address".into());
+    }
     let url = reqwest::Url::parse(value).map_err(|_| "Invalid Spark address")?;
     if url.scheme() != "https"
-        || !matches!(url.host_str(), Some("spark2" | "spark-c8bb"))
+        || url.host_str().is_none()
         || !url.username().is_empty()
         || url.password().is_some()
         || url.query().is_some()
@@ -85,7 +88,7 @@ fn endpoint(value: &str) -> Result<reqwest::Url, String> {
         || url.path() != "/"
         || url.port() != Some(9474)
     {
-        return Err("Use https://spark2:9474 or https://spark-c8bb:9474".into());
+        return Err("Use an HTTPS Spark hostname or IP address on port 9474, without credentials, path, query, or fragment. The verified certificate must cover that host.".into());
     }
     Ok(url)
 }

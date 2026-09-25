@@ -2,7 +2,7 @@
   import { command, native } from "./runtime";
   let { connected = false }: { connected?: boolean } = $props();
   let expanded = $state(false);
-  let url = $state("https://spark2:9474");
+  let url = $state("https://192.168.50.11:9474");
   let certificate = $state("");
   let fingerprint = $state("");
   let code = $state("");

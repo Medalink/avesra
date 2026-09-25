@@ -13,10 +13,25 @@ impl Store {
         let mut connection = Connection::open(path).map_err(|_| ErrorCode::Storage)?;
         let has_schema:bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_version')",[],|r|r.get(0)).map_err(|_|ErrorCode::Storage)?;
         if has_schema {
-            let version: Option<i64> = connection
-                .query_row("SELECT MAX(version) FROM schema_version", [], |r| r.get(0))
+            let (count, version): (i64, Option<i64>) = connection
+                .query_row(
+                    "SELECT COUNT(*), MAX(version) FROM schema_version",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
                 .map_err(|_| ErrorCode::Storage)?;
-            if version != Some(1) {
+            if count != 1 || version != Some(1) {
+                return Err(ErrorCode::Unsupported);
+            }
+        } else {
+            let occupied: bool = connection
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%')",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(|_| ErrorCode::Storage)?;
+            if occupied {
                 return Err(ErrorCode::Unsupported);
             }
         }

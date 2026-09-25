@@ -55,6 +55,7 @@ fn initialize(directory: &Path, dns: &str) -> Result<(), Box<dyn std::error::Err
 }
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let args: Vec<String> = std::env::args().collect();
     match args.as_slice(){
         [_,command,directory,dns]if command=="init"=>initialize(Path::new(directory),dns)?,

@@ -339,6 +339,27 @@
                   ></span></button
                 >
               </div>{/each}
+            <div class="flex items-center gap-3 px-3.5 py-2.5">
+              <label class="av-label w-[120px]" for="chimevol"
+                >Chime volume</label
+              >
+              <input
+                id="chimevol"
+                type="range"
+                min="0"
+                max="100"
+                step="1"
+                class="av-range flex-1"
+                value={s?.chime_volume ?? 15}
+                disabled={!s || saving}
+                onchange={(e) =>
+                  update({ chime_volume: Number(e.currentTarget.value) })}
+              />
+              <span
+                class="w-10 text-right font-mono text-[11.5px] text-zinc-300"
+                >{s?.chime_volume ?? 15}%</span
+              >
+            </div>
             <p class="av-hint">
               Preferences are saved; chime playback is not yet available.
             </p>
@@ -578,7 +599,9 @@
               <div class="line my-3"></div>
               <div class="row">
                 <span>Spark transport</span><span class="text-amber-200"
-                  >Not paired</span
+                  >{runtime?.connected
+                    ? "Connected · owner setup required"
+                    : "Disconnected"}</span
                 >
               </div>
               <div class="line my-3"></div>

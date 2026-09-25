@@ -183,10 +183,15 @@ async fn session(
             break;
         };
         if context.is_none() {
+            let baseline = SessionContext {
+                device_id,
+                session_id,
+                last_sequence: 0,
+                capture_epoch: envelope.capture_epoch,
+                action_epoch: envelope.action_epoch,
+            };
             if !matches!(envelope.message, ControlMessage::Hello { .. })
-                || envelope.session_id != session_id
-                || envelope.device_id != device_id
-                || envelope.sequence == 0
+                || envelope.validate(&baseline, now).is_err()
             {
                 break;
             }

@@ -126,6 +126,7 @@ async fn save_settings(
 fn start_connection(
     app: &tauri::AppHandle,
     record: connection::PairingRecord,
+    expected_generation: u64,
 ) -> Result<(), String> {
     let state = app.state::<Runtime>();
     let mut slot = state
@@ -134,6 +135,9 @@ fn start_connection(
         .map_err(|_| "Connection manager unavailable")?;
     let generation = {
         let mut local = state.local.lock().map_err(|_| "Local state unavailable")?;
+        if state.connection_generation.load(Ordering::SeqCst) != expected_generation {
+            return Err("Connection request cancelled or superseded".into());
+        }
         let generation = state.connection_generation.fetch_add(1, Ordering::SeqCst) + 1;
         local.apply(LocalControl::Disconnect);
         state.modes.send_replace(ModeSnapshot::from(&*local));
@@ -172,15 +176,20 @@ async fn pair_spark(
         .pairing
         .try_lock()
         .map_err(|_| "Pairing already in progress")?;
+    let generation = state.connection_generation.load(Ordering::SeqCst);
     let directory = app
         .path()
         .app_data_dir()
         .map_err(|_| "Local data directory unavailable")?;
     let record = connection::pair(input, &directory).await?;
-    start_connection(&app, record)
+    start_connection(&app, record, generation)
 }
 #[tauri::command]
 async fn connect_spark(app: tauri::AppHandle) -> Result<(), String> {
+    let generation = app
+        .state::<Runtime>()
+        .connection_generation
+        .load(Ordering::SeqCst);
     let directory = app
         .path()
         .app_data_dir()
@@ -188,7 +197,7 @@ async fn connect_spark(app: tauri::AppHandle) -> Result<(), String> {
     let record = tauri::async_runtime::spawn_blocking(move || connection::load(&directory))
         .await
         .map_err(|_| "Credential loading failed")??;
-    start_connection(&app, record)
+    start_connection(&app, record, generation)
 }
 #[tauri::command]
 fn disconnect_spark(app: tauri::AppHandle, state: tauri::State<'_, Runtime>) -> Result<(), String> {

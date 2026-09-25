@@ -87,6 +87,11 @@ h2 {
   opacity: 0;
   pointer-events: none;
 }
+.av-seg-btn[aria-selected="true"] {
+  background: rgb(255 255 255 / 12%);
+  color: white;
+  box-shadow: inset 0 -2px 0 var(--color-av-500);
+}
 .overlay:hover .reveal,
 .overlay:focus-within .reveal {
   opacity: 1;
