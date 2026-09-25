@@ -5,6 +5,7 @@
   import EnrollmentView from "./EnrollmentView.svelte";
   import type { SignalFrame } from "./Signal.svelte";
   import type { Runtime, Settings, AudioDevice } from "./runtime";
+  import { command, native } from "./runtime";
   let {
     runtime,
     signal,
@@ -30,6 +31,40 @@
   } = $props();
   let section = $state("audio");
   let tab = $state("Memory");
+  type SpeakerHealth = {state: string; model_revision: string; busy: boolean; streaming: boolean};
+  let speakerHealth = $state<SpeakerHealth | null>(null);
+  let healthError = $state("");
+  let probing = $state(false);
+  let refreshHealth = $state<() => void>(() => {});
+  const healthActive = $derived(section === "models" || (section === "memory" && tab === "Health"));
+  const speakerStatus = $derived(speakerHealth?.state === "loaded_unqualified" ? "Loaded · unqualified" : speakerHealth?.state === "loading" ? "Loading" : speakerHealth?.state === "termination_pending" ? "Stopping" : "Unavailable");
+  $effect(() => {
+    const active = healthActive;
+    const connected = runtime?.connected;
+    const epoch = runtime?.capture_epoch;
+    let disposed = false;
+    let pending = false;
+    let visibilityGeneration = 0;
+    speakerHealth = null;
+    healthError = "";
+    probing = false;
+    const probe = async () => {
+      if (disposed || pending || !active || !connected || !epoch || !native || document.visibilityState !== "visible") return;
+      pending = true; probing = true; speakerHealth = null; healthError = "";
+      const generation = visibilityGeneration;
+      try {
+        const result = await command<SpeakerHealth>("speaker_health");
+        if (!disposed && generation === visibilityGeneration) speakerHealth = result;
+      } catch (error) { if (!disposed && generation === visibilityGeneration) healthError = String(error); }
+      finally { pending = false; if (!disposed) probing = false; }
+    };
+    refreshHealth = () => { void probe(); };
+    void probe();
+    const interval = setInterval(() => { void probe(); }, 15000);
+    const visibility = () => { visibilityGeneration += 1; speakerHealth = null; if (!disposed) void probe(); };
+    document.addEventListener("visibilitychange", visibility);
+    return () => { disposed = true; clearInterval(interval); document.removeEventListener("visibilitychange", visibility); };
+  });
   const inputLevel = $derived(signal?.kind === "human" ? Math.min(1, Math.sqrt(signal.samples.reduce((sum,value)=>sum+value*value,0)/Math.max(1,signal.samples.length))) : 0);
   const sections = [
     [
@@ -189,12 +224,12 @@
                 <div class="flex items-center gap-2">
                   <div
                     class="flex flex-1 gap-0.5"
-                    aria-label={runtime?.enrollment_capture ? "Measured enrollment input level" : "Input level unavailable"}
+                    aria-label={signal?.kind === "human" ? runtime?.enrollment_capture ? "Measured enrollment input level" : "Measured microphone input level" : "Microphone input level unavailable"}
                   >
                     {#each Array(24) as _,i}<span class="h-2 flex-1 {i < Math.ceil(inputLevel*24) ? 'bg-zinc-400' : 'bg-white/10'}"
                       ></span>{/each}
                   </div>
-                  <span class="caption text-zinc-500">{runtime?.enrollment_capture ? "recording" : signal ? "live" : "off"}</span>
+                  <span class="caption text-zinc-500">{runtime?.enrollment_capture ? "recording" : signal?.kind === "human" ? "live" : "off"}</span>
                 </div>
               </div>
               <div class="flex flex-col gap-1.5">
@@ -371,11 +406,14 @@
           </section>
         {:else if section === "models"}
           <div class="warning">
-            No inference deployment is paired. Model downloads alone do not
-            establish readiness.
+            {runtime?.connected ? "Connected service metadata does not establish voice readiness. Complete owner setup and qualification before listening." : "Connect Spark to inspect configured services. Model downloads alone do not establish readiness."}
+          </div>
+          <div class="flex items-center gap-3">
+            <p class="av-hint flex-1" role="status">{probing ? "Checking connected service…" : healthError || "Speaker status is read from the paired Spark. Other lane probes are not connected."}</p>
+            <button class="av-btn av-btn-secondary av-btn-sm" disabled={!runtime?.connected || probing} onclick={refreshHealth}>Refresh status</button>
           </div>
           <div class="flex flex-col gap-2">
-            {#each lanes as lane}<div class="av-card p-3">
+            {#each lanes as lane, index}<div class="av-card p-3">
                 <div class="flex items-start gap-3">
                   <div class="flex-1">
                     <h2>{lane[0]}</h2>
@@ -383,24 +421,25 @@
                   </div>
                   <span
                     class="av-chip bg-amber-400/10 text-amber-200 ring-amber-400/25"
-                    >Unavailable</span
+                    >{index === 1 ? speakerStatus : "Not probed"}</span
                   >
                 </div>
-                <div class="mt-3 grid grid-cols-3 gap-3 text-[12px]">
-                  <div>
-                    <span class="av-hint">Driver</span>
-                    <p>Not connected</p>
+                <div class="mt-3 grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.4fr)_minmax(0,0.9fr)_auto] items-end gap-3">
+                  <div class="flex min-w-0 flex-col gap-0.5">
+                    <span class="text-[10.5px] text-zinc-400">Driver</span>
+                    <span class="truncate text-[12.5px] text-zinc-200">{index === 1 && speakerHealth ? "SpeechBrain" : "Not connected"}</span>
                   </div>
-                  <div>
-                    <span class="av-hint">Model</span>
-                    <p>Not configured</p>
+                  <div class="flex min-w-0 flex-col gap-0.5">
+                    <span class="text-[10.5px] text-zinc-400">Model · limits</span>
+                    <span class="truncate text-[12.5px] text-zinc-200" title={index === 1 ? speakerHealth?.model_revision : undefined}>{index === 1 && speakerHealth ? "ECAPA-TDNN" : "Not probed"}</span>
                   </div>
-                  <div>
-                    <span class="av-hint">Machine</span>
-                    <p>Single Spark</p>
+                  <div class="flex min-w-0 flex-col gap-0.5">
+                    <span class="text-[10.5px] text-zinc-400">Machine</span>
+                    <span class="truncate text-[12.5px] text-zinc-200">{index === 1 && speakerHealth ? "Paired Spark" : "Unverified"}</span>
                   </div>
+                  <button class="av-btn av-btn-ghost av-btn-sm" disabled={index !== 1 || !runtime?.connected || probing} onclick={refreshHealth}>Probe</button>
                 </div>
-                <p class="mt-2 text-[11px] text-zinc-500">{lane[2]}</p>
+                <p class="mt-1.5 font-mono text-[10.5px] text-zinc-500">{index === 1 && speakerHealth ? `16 kHz mono · ${speakerHealth.busy ? "busy" : "idle"} · identity qualification required` : lane[2]}</p>
               </div>{/each}
           </div>
         {:else if section === "profiles"}
@@ -592,9 +631,12 @@
               <div class="line my-3"></div>
               <div class="row">
                 <span>Voice pipeline</span><span class="text-amber-200"
-                  >Unavailable</span
+                  >{runtime?.voice_ready ? "Ready" : "Setup incomplete"}</span
                 >
               </div>
+              <div class="line my-3"></div>
+              <div class="row"><span>Speaker service</span><span class="text-amber-200">{speakerStatus}</span></div>
+              <p class="av-hint mt-3" role="status">{healthError || runtime?.reason || "Local runtime unavailable."}</p>
             </div>
             <p class="av-hint">
               This view reports connected runtime state. Model provisioning is

@@ -21,6 +21,20 @@ pub struct SessionIdentity {
     pub epoch: u64,
     pub generation: u64,
 }
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpeakerHealth {
+    version: u16,
+    lane: String,
+    model_revision: String,
+    state: String,
+    streaming: bool,
+    cancellation: String,
+    permission_authority: bool,
+    busy: bool,
+    successful_inferences: u64,
+    last_inference_ms: Option<f64>,
+}
 
 fn speaker_client(record: &PairingRecord) -> Result<reqwest::Client, String> {
     let cert = certificate(&record.certificate)?;
@@ -34,7 +48,7 @@ fn speaker_client(record: &PairingRecord) -> Result<reqwest::Client, String> {
         .build()
         .map_err(|_| "Speaker TLS client unavailable".into())
 }
-pub async fn speaker_available(record: &PairingRecord) -> Result<(), String> {
+pub async fn speaker_health(record: &PairingRecord) -> Result<SpeakerHealth, String> {
     let response = speaker_client(record)?
         .get(
             endpoint(&record.url)?
@@ -45,13 +59,28 @@ pub async fn speaker_available(record: &PairingRecord) -> Result<(), String> {
         .send()
         .await
         .map_err(|_| "Speaker service unavailable")?;
-    let value = bounded_response(response).await?;
-    if value.get("lane").and_then(|v| v.as_str()) != Some("speaker")
-        || value.get("model_revision").and_then(|v| v.as_str())
-            != Some("0f99f2d0ebe89ac095bcc5903c4dd8f72b367286")
-        || value.get("state").and_then(|v| v.as_str()) != Some("loaded_unqualified")
-        || value.get("permission_authority").and_then(|v| v.as_bool()) != Some(false)
+    let value: SpeakerHealth = serde_json::from_value(bounded_response(response).await?)
+        .map_err(|_| "Invalid speaker metadata")?;
+    if value.version != 1
+        || value.lane != "speaker"
+        || value.model_revision != "0f99f2d0ebe89ac095bcc5903c4dd8f72b367286"
+        || !matches!(
+            value.state.as_str(),
+            "unavailable" | "loading" | "loaded_unqualified" | "termination_pending"
+        )
+        || value.permission_authority
+        || value.streaming
+        || value.cancellation != "terminate_process"
+        || value
+            .last_inference_ms
+            .is_some_and(|v| !v.is_finite() || !(0.0..=30000.0).contains(&v))
     {
+        return Err("Configured speaker metadata is incompatible".into());
+    }
+    Ok(value)
+}
+pub async fn speaker_available(record: &PairingRecord) -> Result<(), String> {
+    if speaker_health(record).await?.state != "loaded_unqualified" {
         return Err("Configured speaker deployment is not available for enrollment".into());
     }
     Ok(())

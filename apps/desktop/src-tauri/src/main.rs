@@ -51,6 +51,7 @@ struct Runtime {
     connection: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
     connection_generation: AtomicU64,
     pairing: tokio::sync::Mutex<()>,
+    health: tokio::sync::Mutex<()>,
 }
 impl Runtime {
     fn publish(&self, local: &LocalState) {
@@ -93,6 +94,58 @@ async fn audio_devices() -> Result<Vec<avesra_windows::AudioDevice>, String> {
     })
     .await
     .map_err(|_| "Device enumeration failed")?
+}
+#[tauri::command]
+async fn speaker_health(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+) -> Result<connection::SpeakerHealth, String> {
+    if window.label() != "settings" || !window.is_visible().map_err(|_| "Settings unavailable")? {
+        return Err("Open Settings to inspect deployments".into());
+    }
+    let state = app.state::<Runtime>();
+    let _guard = state
+        .health
+        .try_lock()
+        .map_err(|_| "A deployment probe is already active")?;
+    let (epoch, generation) = {
+        let local = state.local.lock().map_err(|_| "Local state unavailable")?;
+        if !local.connected || local.locked {
+            return Err("Connect Spark before inspecting deployments".into());
+        }
+        (
+            local.capture_epoch,
+            state.connection_generation.load(Ordering::SeqCst),
+        )
+    };
+    let current = || {
+        state.local.lock().is_ok_and(|local| {
+            local.connected
+                && !local.locked
+                && local.capture_epoch == epoch
+                && state.connection_generation.load(Ordering::SeqCst) == generation
+        })
+    };
+    let directory = app
+        .path()
+        .app_data_dir()
+        .map_err(|_| "Local data directory unavailable")?;
+    let record = tauri::async_runtime::spawn_blocking(move || connection::load(&directory))
+        .await
+        .map_err(|_| "Pairing unavailable")??;
+    if !current() {
+        return Err("Deployment probe context changed".into());
+    }
+    let value = tokio::time::timeout(
+        std::time::Duration::from_secs(4),
+        connection::speaker_health(&record),
+    )
+    .await
+    .map_err(|_| "Deployment probe timed out")??;
+    if !window.is_visible().map_err(|_| "Settings unavailable")? || !current() {
+        return Err("Deployment probe context changed".into());
+    }
+    Ok(value)
 }
 #[tauri::command]
 async fn local_control(
@@ -368,6 +421,7 @@ fn main() {
                 connection: Mutex::new(None),
                 connection_generation: AtomicU64::new(0),
                 pairing: tokio::sync::Mutex::new(()),
+                health: tokio::sync::Mutex::new(()),
             });
             if let Some(window) = app.get_webview_window("settings") {
                 let handle = window.hwnd()?;
@@ -466,6 +520,7 @@ fn main() {
             setup::record_enrollment,
             runtime_snapshot,
             audio_devices,
+            speaker_health,
             local_control,
             save_settings,
             pair_spark,
