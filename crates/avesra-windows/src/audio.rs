@@ -174,9 +174,13 @@ impl Capture {
     }
     pub fn open_with_gate(selected_name: &str, gate: Arc<MediaGate>) -> Result<Self, ErrorCode> {
         let device = selected(selected_name, true)?;
-        let supported = native_config(&device, true)?;
+        let supported = native_config(&device, true).or_else(|_| {
+            device
+                .default_input_config()
+                .map_err(|_| ErrorCode::Unavailable)
+        })?;
         let config = supported.config();
-        if !config_valid(&config) {
+        if !(1..=8).contains(&config.channels) || !(8000..=192000).contains(&config.sample_rate) {
             return Err(ErrorCode::Unsupported);
         }
         let (sender, frames) = sync_channel(MAX_AUDIO_QUEUE);
@@ -209,6 +213,9 @@ fn capture_stream<T: Sample + SizedSample>(
 where
     f32: FromSample<T>,
 {
+    if config.sample_rate != 16000 {
+        return capture_converted_stream::<T>(device, config, sender, gate);
+    }
     let channels = usize::from(config.channels);
     let error_gate = gate.clone();
     let mut samples = [0i16; FRAME_SAMPLES];
@@ -281,6 +288,126 @@ where
                             if gate.current(epoch) && sender.try_send(packet).is_err() {
                                 gate.dropped.fetch_add(1, Ordering::Relaxed);
                             }
+                            samples.fill(0);
+                            count = 0;
+                        }
+                    }
+                }
+            },
+            move |_| error_gate.fail(),
+            None,
+        )
+        .map_err(|_| ErrorCode::Unavailable)
+}
+fn capture_converted_stream<T: Sample + SizedSample>(
+    device: &cpal::Device,
+    config: &StreamConfig,
+    sender: SyncSender<AudioFrame>,
+    gate: Arc<MediaGate>,
+) -> Result<Stream, ErrorCode>
+where
+    f32: FromSample<T>,
+{
+    let channels = usize::from(config.channels);
+    let rate = f64::from(config.sample_rate);
+    let mut converter = crate::resampling::CaptureResampler::new(config.sample_rate)?;
+    let error_gate = gate.clone();
+    let mut samples = [0i16; FRAME_SAMPLES];
+    let mut count = 0usize;
+    let mut epoch = 0;
+    let mut sequence = 0u64;
+    let mut origin: Option<cpal::StreamInstant> = None;
+    let mut emitted = 0u64;
+    device
+        .build_input_stream(
+            config,
+            move |input: &[T], info: &cpal::InputCallbackInfo| {
+                let current = gate.permission.epoch.load(Ordering::SeqCst);
+                if current != epoch || !gate.current(current) {
+                    converter.reset();
+                    samples.fill(0);
+                    count = 0;
+                    sequence = 0;
+                    origin = None;
+                    emitted = 0;
+                    epoch = current;
+                }
+                if !gate.current(epoch) {
+                    return;
+                }
+                for (offset, frame) in input.chunks_exact(channels).enumerate() {
+                    if !gate.current(epoch) {
+                        converter.reset();
+                        samples.fill(0);
+                        count = 0;
+                        origin = None;
+                        return;
+                    }
+                    if origin.is_none() {
+                        origin = info
+                            .timestamp()
+                            .capture
+                            .add(std::time::Duration::from_secs_f64(offset as f64 / rate));
+                    }
+                    let mono = frame
+                        .iter()
+                        .map(|value| f32::from_sample(*value))
+                        .sum::<f32>()
+                        / channels as f32;
+                    let mono = if mono.is_finite() {
+                        mono.clamp(-1.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    let output = match converter.push(mono) {
+                        Ok(Some(output)) => output,
+                        Ok(None) => continue,
+                        Err(_) => {
+                            gate.fail();
+                            return;
+                        }
+                    };
+                    for value in output {
+                        if !gate.current(epoch) {
+                            samples.fill(0);
+                            count = 0;
+                            return;
+                        }
+                        samples[count] = (value.clamp(-1.0, 1.0) * 32767.0).round() as i16;
+                        count += 1;
+                        if count == FRAME_SAMPLES {
+                            let (sum, peak) =
+                                samples
+                                    .iter()
+                                    .fold((0.0f32, 0.0f32), |(sum, peak), sample| {
+                                        let value = f32::from(*sample) / 32768.0;
+                                        (sum + value * value, peak.max(value.abs()))
+                                    });
+                            let Some(next) = sequence.checked_add(1) else {
+                                gate.fail();
+                                return;
+                            };
+                            sequence = next;
+                            // Startup filter delay is trimmed; this maps the emitted
+                            // 16k timeline back to the original hardware capture clock.
+                            let device_time = origin.and_then(|origin| {
+                                origin.add(std::time::Duration::from_secs_f64(
+                                    emitted as f64 / 16000.0,
+                                ))
+                            });
+                            let packet = AudioFrame {
+                                epoch,
+                                sequence,
+                                captured: Instant::now(),
+                                device_time,
+                                samples,
+                                rms: (sum / FRAME_SAMPLES as f32).sqrt(),
+                                peak,
+                            };
+                            if gate.current(epoch) && sender.try_send(packet).is_err() {
+                                gate.dropped.fetch_add(1, Ordering::Relaxed);
+                            }
+                            emitted += FRAME_SAMPLES as u64;
                             samples.fill(0);
                             count = 0;
                         }

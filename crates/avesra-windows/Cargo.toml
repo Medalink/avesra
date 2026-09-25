@@ -9,6 +9,7 @@ serde.workspace = true
 serde_json.workspace = true
 [target.'cfg(windows)'.dependencies]
 cpal = "0.17"
+rubato = { version = "=0.16.2", default-features = false }
 windows-future = "0.3.2"
 windows = { version = "0.62.2", features = ["Win32_Security_Cryptography", "Win32_Foundation", "Win32_System_WinRT", "Security_Credentials_UI", "Foundation"] }
 [lints]
