@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod connection;
 mod media;
+mod preview;
 mod profiles;
 mod setup;
 mod voice;
@@ -57,6 +58,7 @@ struct Runtime {
     connection_generation: AtomicU64,
     pairing: tokio::sync::Mutex<()>,
     health: tokio::sync::Mutex<()>,
+    preview: tokio::sync::Mutex<()>,
 }
 impl Runtime {
     fn publish(&self, local: &LocalState) {
@@ -443,6 +445,7 @@ fn main() {
                 connection_generation: AtomicU64::new(0),
                 pairing: tokio::sync::Mutex::new(()),
                 health: tokio::sync::Mutex::new(()),
+                preview: tokio::sync::Mutex::new(()),
             });
             if let Some(window) = app.get_webview_window("settings") {
                 let handle = window.hwnd()?;
@@ -531,6 +534,7 @@ fn main() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            preview::preview_voice,
             setup::setup_status,
             setup::verify_setup,
             setup::cancel_setup,

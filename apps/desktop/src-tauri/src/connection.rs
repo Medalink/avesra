@@ -19,6 +19,7 @@ use uuid::Uuid;
 pub struct SessionIdentity {
     pub id: Uuid,
     pub epoch: u64,
+    pub playback_epoch: u64,
     pub generation: u64,
 }
 #[derive(Deserialize, Serialize)]
@@ -156,8 +157,13 @@ pub struct PairingRecord {
     pub(crate) device_id: Uuid,
     credential: String,
 }
+pub(crate) enum MediaEndpoint {
+    Capture,
+    Preview,
+}
 pub(crate) async fn voice_socket(
     record: &PairingRecord,
+    endpoint_kind: MediaEndpoint,
 ) -> Result<
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
     String,
@@ -165,7 +171,10 @@ pub(crate) async fn voice_socket(
     record.validate()?;
     let mut url = endpoint(&record.url)?;
     url.set_scheme("wss").map_err(|_| "Invalid websocket URL")?;
-    url.set_path("/voice-stream");
+    url.set_path(match endpoint_kind {
+        MediaEndpoint::Capture => "/voice-stream",
+        MediaEndpoint::Preview => "/voice-preview",
+    });
     let mut roots = rustls::RootCertStore::empty();
     roots
         .add(certificate(&record.certificate)?)
@@ -525,7 +534,7 @@ pub async fn run(
           if state.connection_generation.load(std::sync::atomic::Ordering::SeqCst)!=generation{return Err("Session replaced".into());}
           if local.capture_epoch==reply.capture_epoch&&local.playback_epoch==reply.playback_epoch&&local.action_epoch==reply.action_epoch {
             if !local.connected {local.connected=true;local.refresh();state.publish(&local);let _=app.emit("runtime-state",local.clone());}
-            if let Ok(mut session)=state.acknowledged_session.lock(){*session=Some(SessionIdentity{id:hello.session_id,epoch:reply.capture_epoch,generation});}
+            if let Ok(mut session)=state.acknowledged_session.lock(){*session=Some(SessionIdentity{id:hello.session_id,epoch:reply.capture_epoch,playback_epoch:reply.playback_epoch,generation});}
           }continue;
          }
         };

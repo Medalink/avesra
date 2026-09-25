@@ -40,6 +40,20 @@ fn device_failed(app: &tauri::AppHandle, epoch: u64, output: bool) {
     let _ = app.emit("runtime-error", "Audio device unavailable; listening and playback stopped. Review devices before retrying setup.");
 }
 
+#[derive(Clone)]
+struct Preview {
+    id: uuid::Uuid,
+    epoch: u64,
+    deadline: Instant,
+}
+#[derive(Default)]
+struct OutputStatus {
+    epoch: u64,
+    ready: bool,
+    submitted: Option<uuid::Uuid>,
+    preview: Option<uuid::Uuid>,
+    drain_until: Option<Instant>,
+}
 #[derive(Clone, Default)]
 struct Configuration {
     revision: u64,
@@ -52,6 +66,7 @@ struct Configuration {
     capture_deadline: Option<Instant>,
     voice_window: bool,
     last_voice_epoch: u64,
+    preview: Option<Preview>,
 }
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -76,8 +91,73 @@ pub struct MediaWorker {
     outbound: Arc<Mutex<VecDeque<AudioFrame>>>,
     inbound: Arc<Mutex<VecDeque<PlaybackFrame>>>,
     shutdown: Arc<AtomicBool>,
+    output_status: Arc<Mutex<OutputStatus>>,
 }
 impl MediaWorker {
+    /// Called only after explicit native Settings context validation, with local held.
+    pub fn open_preview(&self, local: &LocalState, id: uuid::Uuid) -> Result<(), String> {
+        if id.is_nil()
+            || !local.connected
+            || local.locked
+            || local.settings.deafened
+            || local.settings.paused
+            || local.settings.speaker.is_none()
+        {
+            return Err("Preview output is unavailable".into());
+        }
+        let mut config = self.configuration.lock().map_err(|_| "Media unavailable")?;
+        if config.playback_epoch != local.playback_epoch || config.preview.is_some() {
+            return Err("Preview is already owned or stale".into());
+        }
+        config.preview = Some(Preview {
+            id,
+            epoch: local.playback_epoch,
+            deadline: Instant::now() + Duration::from_secs(70),
+        });
+        config.playback = true;
+        config.revision = config.revision.saturating_add(1);
+        self.playback_gate.publish(true, local.playback_epoch);
+        Ok(())
+    }
+    pub fn preview_state(&self, epoch: u64, id: uuid::Uuid) -> Result<(bool, bool, bool), String> {
+        let config = self.configuration.lock().map_err(|_| "Media unavailable")?;
+        if !config
+            .preview
+            .as_ref()
+            .is_some_and(|v| v.id == id && v.epoch == epoch && Instant::now() < v.deadline)
+            || !self.playback_gate.current(epoch)
+        {
+            return Err("Preview stopped".into());
+        }
+        let status = self
+            .output_status
+            .lock()
+            .map_err(|_| "Output unavailable")?;
+        Ok((
+            status.epoch == epoch && status.preview == Some(id) && status.ready,
+            status.epoch == epoch && status.preview == Some(id) && status.submitted == Some(id),
+            status.epoch == epoch
+                && status.preview == Some(id)
+                && status.submitted == Some(id)
+                && status
+                    .drain_until
+                    .is_some_and(|deadline| Instant::now() >= deadline),
+        ))
+    }
+    pub fn preview_frame(&self, frame: PlaybackFrame) -> Result<(), String> {
+        if !frame.valid() || !self.preview_state(frame.epoch, frame.utterance)?.0 {
+            return Err("Preview device is not ready".into());
+        }
+        let mut frames = self
+            .inbound
+            .lock()
+            .map_err(|_| "Output queue unavailable")?;
+        if frames.len() >= 64 || !self.playback_gate.current(frame.epoch) {
+            return Err("Preview lost continuity".into());
+        }
+        frames.push_back(frame);
+        Ok(())
+    }
     /// Called with Runtime.local held after validating a fresh paired WSS ack.
     pub fn open_voice_window(&self, local: &LocalState) -> Result<(), String> {
         if !local.capture_allowed() || local.enrollment_capture || !local.voice_ready {
@@ -141,7 +221,9 @@ impl MediaWorker {
         let outbound = Arc::new(Mutex::new(VecDeque::<AudioFrame>::with_capacity(64)));
         let inbound = Arc::new(Mutex::new(VecDeque::<PlaybackFrame>::with_capacity(64)));
         let shutdown = Arc::new(AtomicBool::new(false));
+        let output_status = Arc::new(Mutex::new(OutputStatus::default()));
         let value = Self {
+            output_status: output_status.clone(),
             configuration: configuration.clone(),
             capture_gate: capture_gate.clone(),
             playback_gate: playback_gate.clone(),
@@ -169,7 +251,9 @@ impl MediaWorker {
                             || config.capture_deadline != previous.capture_deadline;
                         let playback_changed = config.playback_epoch != previous.playback_epoch
                             || config.output != previous.output
-                            || config.playback != previous.playback;
+                            || config.playback != previous.playback
+                            || config.preview.as_ref().map(|v| v.id)
+                                != previous.preview.as_ref().map(|v| v.id);
                         // Capture-window churn must not restart an independent playback device.
                         if capture_changed {
                             capture = None;
@@ -200,10 +284,22 @@ impl MediaWorker {
                             playback = config.output.as_ref().and_then(|name| {
                                 Playback::open_with_gate(
                                     name,
-                                    playback_gate.new_attempt(config.playback_epoch),
+                                    playback_gate.new_attempt_with_deadline(
+                                        config.playback_epoch,
+                                        config.preview.as_ref().map(|v| v.deadline),
+                                    ),
                                 )
                                 .ok()
                             });
+                        }
+                        if playback_changed && let Ok(mut status) = output_status.lock() {
+                            *status = OutputStatus {
+                                epoch: config.playback_epoch,
+                                ready: playback.is_some(),
+                                submitted: None,
+                                preview: config.preview.as_ref().map(|v| v.id),
+                                drain_until: None,
+                            };
                         }
                         revision = config.revision;
                         previous = config.clone();
@@ -347,11 +443,25 @@ impl MediaWorker {
                         // Echo cancellation is not qualified: references are drained,
                         // never retained or interpreted as owner speech.
                         for _ in 0..64 {
-                            if stream.reference.try_recv().is_err() {
+                            let Ok(reference) = stream.reference.try_recv() else {
                                 break;
+                            };
+                            if reference.final_submitted
+                                && stream.gate.current(reference.epoch)
+                                && let Ok(mut status) = output_status.lock()
+                                && status.epoch == reference.epoch
+                            {
+                                status.submitted = Some(reference.utterance);
+                                status.drain_until = reference.drain_until;
                             }
                         }
-                        if stream.gate.failed() || discontinuity {
+                        if stream.gate.failed()
+                            || discontinuity
+                            || config
+                                .preview
+                                .as_ref()
+                                .is_some_and(|v| Instant::now() >= v.deadline)
+                        {
                             device_failed(&app, config.playback_epoch, true);
                             playback = None;
                         }
@@ -371,7 +481,7 @@ impl MediaWorker {
     /// Called inside the serialized local-state update, before disk/network IO.
     pub fn publish(&self, local: &LocalState) {
         let allowed = local.capture_allowed() && local.settings.microphone.is_some();
-        let playback = local.connected
+        let normal_playback = local.connected
             && local.enrolled
             && local.voice_ready
             && !local.locked
@@ -381,6 +491,16 @@ impl MediaWorker {
         let mut clear_capture = true;
         let mut clear_playback = true;
         if let Ok(mut config) = self.configuration.lock() {
+            let preview = config.preview.clone().filter(|v| {
+                v.epoch == local.playback_epoch
+                    && Instant::now() < v.deadline
+                    && local.connected
+                    && !local.locked
+                    && !local.settings.deafened
+                    && !local.settings.paused
+                    && local.settings.speaker.is_some()
+            });
+            let playback = normal_playback || preview.is_some();
             let voice_window = config.voice_window
                 && config.epoch == local.capture_epoch
                 && allowed
@@ -425,6 +545,7 @@ impl MediaWorker {
                 capture_deadline,
                 voice_window,
                 last_voice_epoch: config.last_voice_epoch,
+                preview,
             };
         } else {
             self.capture_gate.publish(false, local.capture_epoch);

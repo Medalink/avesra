@@ -162,9 +162,9 @@ impl Renderer {
                 .iter_mut()
                 .find(|entry| entry.is_none())
                 .ok_or(ErrorCode::TooLarge)?;
-            // Fixed storage, longer than the maximum 30s packet deadline. Keep
+            // Fixed storage, longer than the maximum 32s packet deadline. Keep
             // tombstones through filter/utterance reset; capacity fails closed.
-            *entry = Some((first.utterance, now + Duration::from_secs(31)));
+            *entry = Some((first.utterance, now + Duration::from_secs(33)));
             let binding = Binding {
                 epoch,
                 utterance: first.utterance,
@@ -303,6 +303,8 @@ where
                     }
                     if let Some((binding, last)) = binding {
                         let record = pending.get_or_insert_with(|| PlaybackReference {
+                            final_submitted: false,
+                            drain_until: None,
                             epoch,
                             utterance: binding.utterance,
                             submitted: Instant::now(),
@@ -320,6 +322,24 @@ where
                         }
                         record.samples[record.valid_samples] = f32::from_sample(submitted);
                         record.valid_samples += 1;
+                        record.final_submitted = last;
+                        if last {
+                            // CPAL reports an estimate, not audible confirmation.
+                            // Unknown/excessive estimates use a bounded1s fallback.
+                            let timestamp = info.timestamp();
+                            let delay = timestamp
+                                .playback
+                                .duration_since(&timestamp.callback)
+                                .and_then(|delay| {
+                                    delay.checked_add(Duration::from_secs_f64(
+                                        (offset + 1) as f64 / f64::from(output_rate),
+                                    ))
+                                })
+                                .filter(|delay| *delay <= Duration::from_secs(1))
+                                .unwrap_or(Duration::from_secs(1));
+                            record.drain_until =
+                                Some(Instant::now() + delay + Duration::from_millis(50));
+                        }
                         if (record.valid_samples == reference_size || last)
                             && let Some(record) = pending.take()
                             && reference.try_send(record).is_err()

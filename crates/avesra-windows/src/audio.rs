@@ -100,12 +100,15 @@ impl PlaybackFrame {
             && (self.final_frame || self.valid_samples == self.rate.frame_samples())
             && self.captured.elapsed() < std::time::Duration::from_millis(500)
             && self.deadline.saturating_duration_since(self.captured)
-                <= std::time::Duration::from_secs(30)
+                <= std::time::Duration::from_secs(32)
             && Instant::now() < self.deadline
     }
 }
 /// Submitted device-rate mono samples, before identical channel replication.
 pub struct PlaybackReference {
+    /// Final content sample submitted, not proof of audible delivery.
+    pub final_submitted: bool,
+    pub drain_until: Option<Instant>,
     pub epoch: u64,
     pub utterance: uuid::Uuid,
     pub submitted: Instant,

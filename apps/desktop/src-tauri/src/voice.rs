@@ -168,7 +168,7 @@ async fn window(
     let mut socket = tokio::select! {
         biased;
         _=invalidated(app,session,&mut modes)=>return Err("Voice permission changed".into()),
-        value=crate::connection::voice_socket(record)=>value?,
+        value=crate::connection::voice_socket(record,crate::connection::MediaEndpoint::Capture)=>value?,
     };
     current(app, session)?;
     let utterance = Uuid::new_v4();
