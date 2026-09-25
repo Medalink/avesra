@@ -442,6 +442,7 @@ pub struct PairingRecord {
 pub(crate) enum MediaEndpoint {
     Capture,
     Preview,
+    Speech,
 }
 pub(crate) async fn voice_socket(
     record: &PairingRecord,
@@ -456,6 +457,7 @@ pub(crate) async fn voice_socket(
     url.set_path(match endpoint_kind {
         MediaEndpoint::Capture => "/voice-stream",
         MediaEndpoint::Preview => "/voice-preview",
+        MediaEndpoint::Speech => "/normal-speech",
     });
     let mut roots = rustls::RootCertStore::empty();
     roots

@@ -10,7 +10,10 @@ use avesra_contracts::{
 use avesra_windows::audio::{PlaybackFrame, PlaybackRate};
 use futures_util::{SinkExt, StreamExt};
 use std::{
-    sync::atomic::Ordering,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 use tauri::{Emitter, Manager};
@@ -23,15 +26,17 @@ struct Lease {
     epoch: u64,
     id: Uuid,
     panel: Uuid,
+    withdrawn: Arc<AtomicBool>,
 }
 impl Lease {
     fn current(&self, acknowledged: bool) -> Result<(), String> {
         let state = self.app.state::<Runtime>();
         let local = state.local.lock().map_err(|_| "Local state unavailable")?;
-        if !state
-            .voice_panel
-            .lock()
-            .is_ok_and(|value| *value == Some(self.panel))
+        if self.withdrawn.load(Ordering::SeqCst)
+            || !state
+                .voice_panel
+                .lock()
+                .is_ok_and(|value| *value == Some(self.panel))
             || !local.connected
             || local.locked
             || local.settings.deafened
@@ -80,6 +85,21 @@ pub async fn preview_voice(
     voice: VoiceIdentity,
     panel: Uuid,
 ) -> Result<String, String> {
+    let withdrawn = Arc::new(AtomicBool::new(false));
+    let _caller = crate::output::Caller(withdrawn.clone());
+    tauri::async_runtime::spawn(
+        async move { preview_owned(window, app, voice, panel, withdrawn).await },
+    )
+    .await
+    .map_err(|_| "Preview coordinator stopped")?
+}
+async fn preview_owned(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    voice: VoiceIdentity,
+    panel: Uuid,
+    withdrawn: Arc<AtomicBool>,
+) -> Result<String, String> {
     let admission_epoch = app
         .state::<Runtime>()
         .local
@@ -93,10 +113,7 @@ pub async fn preview_voice(
         .validate()
         .map_err(|_| "Invalid generated voice identity")?;
     let state = app.state::<Runtime>();
-    let _slot = state
-        .preview
-        .try_lock()
-        .map_err(|_| "A preview is already active")?;
+    let mut owner = crate::output::Owner::reserve(&app)?;
     let (lease, gain) = {
         let mut local = state.local.lock().map_err(|_| "Local state unavailable")?;
         if !state
@@ -123,13 +140,15 @@ pub async fn preview_voice(
         local.refresh();
         state.publish(&local);
         let id = Uuid::new_v4();
-        state.media.open_preview(&local, id)?;
+        owner.bind(local.playback_epoch, session.generation);
+        state.media.open_preview(&local, id, withdrawn.clone())?;
         let lease = Lease {
             app: app.clone(),
             session,
             epoch: local.playback_epoch,
             id,
             panel,
+            withdrawn,
         };
         let _ = app.emit("runtime-state", local.clone());
         (lease, f32::from(local.settings.speech_volume) / 100.0)
@@ -138,7 +157,7 @@ pub async fn preview_voice(
     let ready = async {
         loop {
             lease.current(false)?;
-            if lease.current(true).is_ok() && state.media.preview_state(lease.epoch, lease.id)?.0 {
+            if lease.current(true).is_ok() && state.media.output_state(lease.epoch, lease.id)?.0 {
                 return Ok::<_, String>(());
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -169,6 +188,7 @@ pub async fn preview_voice(
         value=tokio::time::timeout(Duration::from_secs(65),play(&lease,&record,voice,gain))=>value.map_err(|_|"Preview expired".to_string())?,
     };
     lease.stop();
+    owner.finish().await?;
     result.map(|_| "Final preview samples submitted to the output device".into())
 }
 async fn play(
@@ -268,7 +288,7 @@ async fn play(
                         return Err("Preview lost continuity or freshness".into());
                     }
                     if let Some(frame) = pending.take() {
-                        lease.app.state::<Runtime>().media.preview_frame(frame)?;
+                        lease.app.state::<Runtime>().media.output_frame(frame)?;
                     }
                     let mut pcm = [0i16; 480];
                     for (dst, src) in pcm.iter_mut().zip(&samples) {
@@ -296,7 +316,7 @@ async fn play(
                 {
                     let mut frame = pending.take().ok_or("Preview ended without audio")?;
                     frame.final_frame = true;
-                    lease.app.state::<Runtime>().media.preview_frame(frame)?;
+                    lease.app.state::<Runtime>().media.output_frame(frame)?;
                     let finish = async {
                         loop {
                             lease.current(true)?;
@@ -304,7 +324,7 @@ async fn play(
                                 .app
                                 .state::<Runtime>()
                                 .media
-                                .preview_state(lease.epoch, lease.id)?
+                                .output_state(lease.epoch, lease.id)?
                                 .1
                             {
                                 return Ok::<_, String>(());
@@ -336,7 +356,7 @@ async fn play(
                                 .app
                                 .state::<Runtime>()
                                 .media
-                                .preview_state(lease.epoch, lease.id)?
+                                .output_state(lease.epoch, lease.id)?
                                 .2
                             {
                                 return Ok::<_, String>(());

@@ -4,12 +4,14 @@ mod browser;
 mod catalog;
 mod connection;
 mod media;
+mod output;
 mod owner;
 pub mod planner;
 mod preview;
 mod profiles;
 mod setup;
 mod shortcuts;
+pub mod speech;
 mod voice;
 mod voices;
 use avesra_core::{
@@ -68,7 +70,7 @@ struct Runtime {
     connection_generation: AtomicU64,
     pairing: tokio::sync::Mutex<()>,
     health: tokio::sync::Mutex<()>,
-    preview: tokio::sync::Mutex<()>,
+    preview: std::sync::Arc<tokio::sync::Mutex<()>>,
     voice_panel: Mutex<Option<uuid::Uuid>>,
     hotkeys: Mutex<Option<avesra_windows::shortcuts::Hotkeys>>,
     shortcut_edit: tokio::sync::Mutex<()>,
@@ -247,6 +249,7 @@ async fn save_settings(
         if settings.speaker != local.settings.speaker || settings.profile != local.settings.profile
         {
             local.playback_epoch = local.playback_epoch.saturating_add(1);
+            local.action_epoch = local.action_epoch.saturating_add(1);
         }
         if settings.microphone != local.settings.microphone
             || settings.speaker != local.settings.speaker
@@ -254,7 +257,6 @@ async fn save_settings(
         {
             local.enrollment_capture = false;
             local.capture_epoch = local.capture_epoch.saturating_add(1);
-            local.action_epoch = local.action_epoch.saturating_add(1);
         }
         local.settings = settings;
         local.refresh();
@@ -498,7 +500,7 @@ fn main() {
                 connection_generation: AtomicU64::new(0),
                 pairing: tokio::sync::Mutex::new(()),
                 health: tokio::sync::Mutex::new(()),
-                preview: tokio::sync::Mutex::new(()),
+                preview: std::sync::Arc::new(tokio::sync::Mutex::new(())),
                 voice_panel: Mutex::new(None),
                 hotkeys: Mutex::new(None),
                 shortcut_edit: tokio::sync::Mutex::new(()),

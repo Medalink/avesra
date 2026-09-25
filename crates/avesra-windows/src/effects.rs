@@ -276,6 +276,9 @@ pub struct PublishedReply {
     reply: StoredReply,
 }
 impl PublishedReply {
+    pub fn cancellation(&self) -> PlannerCancellation {
+        self.reply.cancellation()
+    }
     pub fn current(&self) -> bool {
         self.reply.publication_current()
     }

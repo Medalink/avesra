@@ -181,15 +181,19 @@ async fn registration(
     }
     Ok(())
 }
-fn prepared(directory: &std::path::Path, expected: &Admission) -> Result<PairingRecord, String> {
+pub(crate) fn paired_owner(
+    directory: &std::path::Path,
+    binding: &actors::Binding,
+    session: SessionIdentity,
+) -> Result<PairingRecord, String> {
     let (actor, owner_revision) =
         crate::owner::identity(directory).map_err(|_| "Current native owner unavailable")?;
     let pairing = connection::load(directory)?;
     let server = pairing.server_fingerprint()?;
-    if actor != expected.binding.actor
-        || owner_revision != expected.binding.owner_revision
-        || pairing.device_id != expected.session.device
-        || server != hex::encode(expected.session.server_fingerprint)
+    if actor != binding.actor
+        || owner_revision != binding.owner_revision
+        || pairing.device_id != session.device
+        || server != hex::encode(session.server_fingerprint)
     {
         return Err("Original owner or paired device changed".into());
     }
@@ -202,11 +206,15 @@ fn prepared(directory: &std::path::Path, expected: &Admission) -> Result<Pairing
     let intent = actor_intents::load(&directory.join("actor-intents.db"), &identity)
         .map_err(|_| "Original registration request unavailable")?
         .ok_or("Original registration request unavailable")?;
-    if intent.request != expected.binding.registered_by {
+    if intent.request != binding.registered_by {
         return Err("Original registration request changed".into());
     }
     Ok(pairing)
 }
+fn prepared(directory: &std::path::Path, expected: &Admission) -> Result<PairingRecord, String> {
+    paired_owner(directory, &expected.binding, expected.session)
+}
+
 fn final_authority(
     app: tauri::AppHandle,
     admission: Arc<Admission>,

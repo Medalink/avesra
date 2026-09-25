@@ -249,7 +249,9 @@ fn cancel_native_epoch(app: &tauri::AppHandle, expected: Option<u64>) {
         }
         local.enrollment_capture = false;
         local.capture_epoch = local.capture_epoch.saturating_add(1);
-        local.playback_epoch = local.playback_epoch.saturating_add(1);
+        if state.media.setup_output_owned(local.playback_epoch) {
+            local.playback_epoch = local.playback_epoch.saturating_add(1);
+        }
         local.refresh();
         state.publish(&local);
         let _ = app.emit("runtime-state", local.clone());

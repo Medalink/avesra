@@ -122,6 +122,8 @@ pub struct MediaGate {
     permission: Arc<MediaPermission>,
     attempt_epoch: Option<u64>,
     deadline: Option<Instant>,
+    source: Option<avesra_core::conversations::PlannerCancellation>,
+    caller: Option<Arc<AtomicBool>>,
     failed: AtomicBool,
     dropped: AtomicU64,
 }
@@ -138,6 +140,8 @@ impl Default for MediaGate {
             }),
             attempt_epoch: None,
             deadline: None,
+            source: None,
+            caller: None,
             failed: AtomicBool::new(false),
             dropped: AtomicU64::new(0),
         }
@@ -153,10 +157,23 @@ impl MediaGate {
         self.new_attempt_with_deadline(epoch, None)
     }
     pub fn new_attempt_with_deadline(&self, epoch: u64, deadline: Option<Instant>) -> Arc<Self> {
+        self.output_attempt(epoch, deadline, None, None)
+    }
+    /// Cancellation is an atomic read in the callback, including after a blocked
+    /// device constructor returns. No native runtime or database lock is touched.
+    pub fn output_attempt(
+        &self,
+        epoch: u64,
+        deadline: Option<Instant>,
+        source: Option<avesra_core::conversations::PlannerCancellation>,
+        caller: Option<Arc<AtomicBool>>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             permission: self.permission.clone(),
             attempt_epoch: Some(epoch),
             deadline,
+            source,
+            caller,
             failed: AtomicBool::new(false),
             dropped: AtomicU64::new(0),
         })
@@ -183,6 +200,14 @@ impl MediaGate {
             && self
                 .deadline
                 .is_none_or(|deadline| Instant::now() < deadline)
+            && self
+                .source
+                .as_ref()
+                .is_none_or(|source| !source.cancelled())
+            && self
+                .caller
+                .as_ref()
+                .is_none_or(|caller| !caller.load(Ordering::SeqCst))
             && !self.failed.load(Ordering::Relaxed)
     }
     fn fail(&self) {

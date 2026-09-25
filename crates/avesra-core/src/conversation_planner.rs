@@ -285,6 +285,9 @@ impl Drop for StoredReply {
     }
 }
 impl StoredReply {
+    pub fn cancellation(&self) -> PlannerCancellation {
+        self.publication.clone()
+    }
     pub fn binding(&self) -> &Binding {
         &self.binding
     }
