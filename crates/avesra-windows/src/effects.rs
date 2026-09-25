@@ -2,6 +2,7 @@
 use crate::volume::{self, VolumeOutcome, VolumeTarget};
 use avesra_contracts::{Action, ActionPayload, ErrorCode, Outcome};
 use avesra_core::{
+    conversations::{DurableTurn, Source as ConversationSource, Summary as ConversationSummary},
     execution::{
         Cancellation, EffectAdapter, EffectObservation, EffectResult, ExecutionController,
         ExecutionReceipt, VolumeLevel,
@@ -9,6 +10,7 @@ use avesra_core::{
     ledger::{AcceptedIntent, DispatchPermit, DispatchSession},
     policy::{Approval, Grant},
     store::Store,
+    voice::Conversation,
 };
 use std::{
     collections::HashMap,
@@ -63,6 +65,24 @@ impl Management {
     }
 }
 enum Command {
+    AcceptConversation {
+        conversation: Conversation,
+        authorize: ConversationAuthorization,
+        reply: SyncSender<Result<DurableTurn, ErrorCode>>,
+    },
+    ConversationStatus {
+        actor: Uuid,
+        source: ConversationSource,
+        reply: SyncSender<Result<Option<ConversationSummary>, ErrorCode>>,
+    },
+    CancelConversation {
+        actor: Uuid,
+        source: ConversationSource,
+        id: Uuid,
+        revision: Uuid,
+        authorize: CatalogAuthorization,
+        reply: SyncSender<Result<(), ErrorCode>>,
+    },
     Execute(Job),
     Manage(Management, SyncSender<Result<(), ErrorCode>>),
     Catalog(
@@ -89,6 +109,9 @@ enum Command {
     ),
 }
 pub type CatalogAuthorization = Box<dyn FnMut() -> Result<(), ErrorCode> + Send>;
+/// Must recheck the original qualified native profile/context at commit. A
+/// successful arbitrary closure is not a substitute for that runtime adapter.
+pub type ConversationAuthorization = Box<dyn FnMut(&Conversation) -> Result<(), ErrorCode> + Send>;
 /// Native-owned setup commands. Neither an alias nor registration grants effects.
 pub enum CatalogCommand {
     List,
@@ -268,6 +291,45 @@ impl NativeEffects {
                 };
                 while let Ok(command) = receive.recv() {
                     let job = match command {
+                        Command::AcceptConversation {
+                            conversation,
+                            mut authorize,
+                            reply,
+                        } => {
+                            let _ = reply.try_send(
+                                controller
+                                    .management()
+                                    .accept_conversation(conversation, &mut authorize),
+                            );
+                            continue;
+                        }
+                        Command::ConversationStatus {
+                            actor,
+                            source,
+                            reply,
+                        } => {
+                            let _ = reply.try_send(
+                                controller.management().conversation_status(actor, source),
+                            );
+                            continue;
+                        }
+                        Command::CancelConversation {
+                            actor,
+                            source,
+                            id,
+                            revision,
+                            mut authorize,
+                            reply,
+                        } => {
+                            let _ = reply.try_send(controller.management().cancel_conversation(
+                                actor,
+                                source,
+                                id,
+                                revision,
+                                &mut authorize,
+                            ));
+                            continue;
+                        }
                         Command::Execute(job) => job,
                         Command::Manage(command, reply) => {
                             let _ = reply.try_send(
@@ -341,6 +403,65 @@ impl NativeEffects {
             state.action_epoch = action_epoch;
             state.allowed = allowed;
         }
+    }
+    /// Dormant until a qualified native producer supplies the opaque value and
+    /// exact current-context callback. Queue delay never renews gate freshness.
+    /// New conversation admission does not cancel previously accepted actions.
+    pub fn accept_conversation(
+        &self,
+        conversation: Conversation,
+        authorize: ConversationAuthorization,
+    ) -> Result<Receiver<Result<DurableTurn, ErrorCode>>, ErrorCode> {
+        if !conversation.precommit_current() {
+            return Err(ErrorCode::Expired);
+        }
+        let (reply, receive) = mpsc::sync_channel(1);
+        self.send
+            .try_send(Command::AcceptConversation {
+                conversation,
+                authorize,
+                reply,
+            })
+            .map_err(|_| ErrorCode::Unavailable)?;
+        Ok(receive)
+    }
+    /// Actor must be supplied by authenticated native history management, never
+    /// by a model. No accepted token or transcript is returned by recovery.
+    pub fn conversation_status(
+        &self,
+        actor: Uuid,
+        source: ConversationSource,
+    ) -> Result<Receiver<Result<Option<ConversationSummary>, ErrorCode>>, ErrorCode> {
+        let (reply, receive) = mpsc::sync_channel(1);
+        self.send
+            .try_send(Command::ConversationStatus {
+                actor,
+                source,
+                reply,
+            })
+            .map_err(|_| ErrorCode::Unavailable)?;
+        Ok(receive)
+    }
+    pub fn cancel_conversation(
+        &self,
+        actor: Uuid,
+        source: ConversationSource,
+        id: Uuid,
+        revision: Uuid,
+        authorize: CatalogAuthorization,
+    ) -> Result<Receiver<Result<(), ErrorCode>>, ErrorCode> {
+        let (reply, receive) = mpsc::sync_channel(1);
+        self.send
+            .try_send(Command::CancelConversation {
+                actor,
+                source,
+                id,
+                revision,
+                authorize,
+                reply,
+            })
+            .map_err(|_| ErrorCode::Unavailable)?;
+        Ok(receive)
     }
     /// Native authenticated controller only; step must already exist in this
     /// worker's durable ledger. Public/network messages cannot create authority.

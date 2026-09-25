@@ -11,7 +11,7 @@ impl Store {
     pub fn open(path: &Path) -> Result<Self, ErrorCode> {
         let mut connection = Connection::open(path).map_err(|_| ErrorCode::Storage)?;
         let has_schema:bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_version')",[],|r|r.get(0)).map_err(|_|ErrorCode::Storage)?;
-        if has_schema {
+        let version = if has_schema {
             let (count, version): (i64, Option<i64>) = connection
                 .query_row(
                     "SELECT COUNT(*), MAX(version) FROM schema_version",
@@ -19,13 +19,14 @@ impl Store {
                     |r| Ok((r.get(0)?, r.get(1)?)),
                 )
                 .map_err(|_| ErrorCode::Storage)?;
-            if count != 1 || !matches!(version, Some(1..=4)) {
+            if count != 1 || !matches!(version, Some(1..=5)) {
                 return Err(ErrorCode::Unsupported);
             }
+            version.ok_or(ErrorCode::Unsupported)? as u64
         } else {
             let occupied: bool = connection
                 .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%')",
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name NOT GLOB 'sqlite_*')",
                     [],
                     |r| r.get(0),
                 )
@@ -33,7 +34,9 @@ impl Store {
             if occupied {
                 return Err(ErrorCode::Unsupported);
             }
-        }
+            0
+        };
+        crate::conversations::check_schema(&connection, version)?;
         connection
             .execute_batch(
                 "PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;",
@@ -59,8 +62,14 @@ impl Store {
           CREATE TABLE IF NOT EXISTS native_finalizations(dispatch_id TEXT PRIMARY KEY REFERENCES dispatch_bindings(dispatch_id), target_id TEXT NOT NULL, action_revision TEXT NOT NULL REFERENCES action_revisions(revision), actor_id TEXT NOT NULL, outcome TEXT NOT NULL, at_ms INTEGER NOT NULL);
           CREATE INDEX IF NOT EXISTS native_finalization_lookup ON native_finalizations(target_id,actor_id,outcome);
           DELETE FROM schema_version;
-          INSERT INTO schema_version VALUES(4);
+          INSERT INTO schema_version VALUES(5);
         ").map_err(|_|ErrorCode::Storage)?;
+        if version < 5 {
+            tx.execute_batch(crate::conversations::SCHEMA)
+                .map_err(|_| ErrorCode::Storage)?;
+        }
+        crate::conversations::check_schema(&tx, 5)?;
+        tx.execute("UPDATE accepted_conversations SET state='suspended' WHERE state IN ('accepted','planning','waiting_input')",[]).map_err(|_|ErrorCode::Storage)?;
         // A crash cannot prove a running mutation failed or succeeded.
         tx.execute(
             "UPDATE steps SET state='\"unknown_effect\"' WHERE state='\"running\"'",

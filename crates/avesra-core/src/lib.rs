@@ -1,3 +1,4 @@
+pub mod conversations;
 pub mod enrollment;
 pub mod execution;
 pub mod ledger;

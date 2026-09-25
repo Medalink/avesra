@@ -118,8 +118,13 @@ pub struct Conversation {
     context: Context,
     profile_revision: Uuid,
     qualification_revision: Uuid,
+    accepted: Instant,
 }
 impl Conversation {
+    /// Original gate time, not a renewed budget at consume/queue/commit.
+    pub fn precommit_current(&self) -> bool {
+        self.accepted.elapsed() < Duration::from_secs(5)
+    }
     pub fn utterance(&self) -> Uuid {
         self.utterance
     }
@@ -201,6 +206,7 @@ impl AcceptedConversation {
             context: self.context,
             profile_revision: self.profile_revision,
             qualification_revision: self.qualification_revision,
+            accepted: self.accepted,
         })
     }
 }

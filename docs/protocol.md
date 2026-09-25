@@ -45,7 +45,7 @@ VPN connection changes network state and requires exact local approval. Navigati
 
 The configured Spark endpoint may use an owner-selected DNS name or IP address on HTTPS port 9474; its verified certificate must include the same DNS/IP subject alternative name. There is no global DNS override or certificate bypass. The setup default reflects the currently discovered Spark address, but the saved endpoint is explicit and editable before pairing. A disconnect invalidates pending pair/load generations as well as active sockets, so a delayed result cannot reconnect silently.
 
-## Durable execution ledger (schema 4)
+## Durable execution ledger (schema 5)
 
 `accept_intent` records the final controller-accepted actor, ordered exact payload list and explicit-submit scope. It is not exposed as a remotely supplied authority. `propose_action` stores immutable UUID revisions and the current head for each ordered step; changed arguments need a new accepted intent. `seal_task` requires the complete step count and freezes the plan before any claim. Grants are immutable scoped records; replacing scope means revoke plus new grant. Local approvals bind full arguments/revision and are revoked or consumed once.
 
@@ -54,6 +54,8 @@ The configured Spark endpoint may use an owner-selected DNS name or IP address o
 `reconcile_action` is reserved for authenticated local management with observed postcondition evidence; it resolves waiting/unknown outcomes without issuing an effect. Remaining work stays suspended and requires a new accepted task. No mutation can be blindly resumed by changing its state. The previous generic task-transition escape hatch is removed. These are durable core APIs; controller/owner-management wiring and live execution remain incomplete. No live database migration or effect workflow is claimed from static compilation.
 
 Schema 4 adds insert-only native finalization outcomes bound to dispatch/target/action revision/actor/time in the original result transaction. Historical application success requires this exact original Success plus a fully validated matching Application (executable) or PackagedApplication observation. The latter preserves exact package registration identity and PID creation without claiming executable-file image verification. Task/step reconciliation cannot change that outcome or establish native-observed success. Existing schemas 1–3 upgrade transactionally without inventing finalization rows for legacy observations; unsupported schemas still reject before mutation.
+
+Schema 5 adds private accepted-conversation history with exact device/session/utterance uniqueness and opaque native durable-turn handles. The original gate deadline survives consume, queue and transaction waits; the actual native effect worker owns acceptance, actor-filtered metadata recovery and exact-turn cancellation. Migration rejects an existing lookalike new table, and schema 5 validates its exact SQL, unique indexes and absence of attached triggers before mutation. Acceptance checks exact inserted fields before the final native authorization callback; recovery bounds the serialized body in bytes. Restart suspends unfinished conversation planning. These APIs remain dormant: the qualified runtime producer, concrete current-profile admission adapter, planner and task linkage are still unavailable. See [conversation admission](conversation-admission.md).
 
 ## Media packet and local speech adapter implementation
 
