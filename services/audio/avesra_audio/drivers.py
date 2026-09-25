@@ -48,6 +48,13 @@ class Driver:
         self.lane = config["lane"]
         self.prompt = None
         self.stream = None
+        self.voices = None
+        self.selected_voice = None
+        if config.get("voice_store"):
+            if self.lane not in {"tts", "voice-design"} or config.get("voice_preset"):
+                raise ValueError("voice_store_configuration")
+            from .voice_presets import Store
+            self.voices = Store(config["voice_store"])
         model_path = Path(config["model_path"])
         if not model_path.is_dir() or config["model_revision"] != REVISIONS[self.lane]:
             raise ValueError("model_revision_unavailable")
@@ -95,8 +102,63 @@ class Driver:
                 self.prompt = self.model.create_voice_clone_prompt(
                     ref_audio=(wave, rate), ref_text=text(metadata.get("text"), 2048),
                 )
+            if self.lane == "tts" and self.voices is not None:
+                selected, revision = self.voices.selection()
+                if selected is None and revision is not None:
+                    raise ValueError("voice_selection_unreadable")
+                if selected is not None:
+                    self.prompt, self.selected_voice = self.prepare_voice(selected)
+
+    def prepare_voice(self, selected):
+        import numpy as np
+        metadata, pcm = self.voices.candidate(selected)
+        samples = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
+        try:
+            prompt = self.model.create_voice_clone_prompt(ref_audio=(samples, 24000), ref_text=metadata["text"])
+            return prompt, metadata["identity"]
+        finally:
+            pcm = samples = None
+
+    def voice_request(self, operation, payload):
+        if self.voices is None:
+            raise ValueError("voice_store_unavailable")
+        if operation == "create_voice":
+            if self.lane != "voice-design" or set(payload) != {"text", "description"}:
+                raise ValueError("voice_design_required")
+            output = self.infer(payload)
+            try:
+                return self.voices.create(output, payload["text"], payload["description"])
+            finally:
+                output = None
+        if self.lane != "tts":
+            raise ValueError("tts_selection_required")
+        if operation == "voice_status" and not payload:
+            result = self.voices.status()
+            result["active_voice"] = self.selected_voice
+            result["active_state"] = "available" if self.selected_voice is not None and result["selection_state"] == "available" and result["selected"] == self.selected_voice else "unavailable"
+            return result
+        if operation == "select_voice" and set(payload) == {"identity", "selection_revision"}:
+            prompt, selected = self.prepare_voice(payload["identity"])
+            self.voices.select(selected, payload["selection_revision"])
+            self.prompt, self.selected_voice = prompt, selected
+            return {"selected": selected}
+        if operation == "clear_voice" and set(payload) == {"selection_revision"}:
+            self.voices.clear(payload["selection_revision"])
+            self.prompt = self.selected_voice = None
+            return {"selected": None}
+        if operation == "discard_voice" and set(payload) == {"id", "revision"}:
+            self.voices.discard(payload["id"], payload["revision"])
+            return {"outcome": "discarded"}
+        raise ValueError("invalid_voice_operation")
 
     def request(self, envelope, emit):
+        if envelope["operation"] in {"create_voice", "voice_status", "select_voice", "clear_voice", "discard_voice"}:
+            return self.voice_request(envelope["operation"], envelope["payload"])
+        if self.lane == "tts" and self.voices is not None:
+            selected, _ = self.voices.selection()
+            if selected != self.selected_voice or selected is None:
+                raise ValueError("voice_selection_changed")
+            self.voices.candidate(selected)  # Revalidate durable identity/content before use.
         if envelope["operation"] == "tts_stream":
             if self.lane != "tts" or self.prompt is None or set(envelope["payload"]) != {"text"}:
                 raise ValueError("selected_voice_required")

@@ -148,11 +148,12 @@ class Service:
                 "last_inference_ms": self.last_inference_ms,
             }
         fields = {"version", "operation", "request_id", "session_id", "capture_epoch", "sequence", "issued_at_ms", "expires_at_ms"}
-        if operation in {"infer", "stream", "tts_stream"}:
+        voice_operations = {"create_voice", "voice_status", "select_voice", "clear_voice", "discard_voice"}
+        if operation in {"infer", "stream", "tts_stream"} | voice_operations:
             fields |= {"payload"}
         if operation == "stream":
             fields |= {"chunk_sequence", "final"}
-        if set(request) != fields or operation not in {"load", "infer", "cancel", "stream", "tts_stream"}:
+        if set(request) != fields or operation not in {"load", "infer", "cancel", "stream", "tts_stream"} | voice_operations:
             return {"error": "invalid_request"}
         if operation == "tts_stream" and (not self.config.get("tts_streaming", False) or on_chunk is None):
             return {"error": "streaming_unsupported"}
@@ -274,9 +275,10 @@ class Service:
                     raise ValueError("invalid_stream_terminal")
                 result.update(request_id=owner[1], session_id=key, capture_epoch=epoch)
             if "result" in result:
-                successful = terminal["outcome"] == "complete" if operation == "tts_stream" else operation != "stream" or final
+                successful = terminal["outcome"] == "complete" if operation == "tts_stream" else operation in {"infer", "create_voice"} or operation == "stream" and final
                 self.successful_inferences += int(successful)
-                self.last_inference_ms = round((time.monotonic() - started) * 1000, 3)
+                if successful or operation == "tts_stream":
+                    self.last_inference_ms = round((time.monotonic() - started) * 1000, 3)
                 result["lane"] = self.config["lane"]
                 result["model_revision"] = self.config["model_revision"]
                 if operation == "stream":
@@ -348,7 +350,7 @@ async def serve(config_path, socket_path):
     from .drivers import REVISIONS
 
     config = json.loads(Path(config_path).read_text())
-    if set(config) - {"lane", "model_path", "model_revision", "cache_path", "voice_preset", "asr_streaming", "asr_right_context", "tts_streaming"}:
+    if set(config) - {"lane", "model_path", "model_revision", "cache_path", "voice_preset", "voice_store", "asr_streaming", "asr_right_context", "tts_streaming"}:
         raise ValueError("Unknown configuration field")
     if config.get("lane") not in REVISIONS or config.get("model_revision") != REVISIONS[config["lane"]]:
         raise ValueError("Unsupported model revision")
