@@ -1,4 +1,5 @@
 mod auth;
+pub mod reasoning;
 mod transport;
 use axum::{Json, Router, routing::get};
 use serde::Serialize;
