@@ -141,6 +141,9 @@
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 14v-2a9 9 0 0 1 18 0v2"></path><path d="M21 14v4a2 2 0 0 1-2 2h-1a1 1 0 0 1-1-1v-4a1 1 0 0 1 1-1h3z"></path><path d="M3 14v4a2 2 0 0 0 2 2h1a1 1 0 0 0 1-1v-4a1 1 0 0 0-1-1H3z"></path></svg>
         </sc-if>
       </button>
+      <button type="button" data-nodrag="true" class="{{atmoCls}}" onClick="{{toggleAtmosphere}}" aria-pressed="{{atmosphere}}" aria-label="{{atmoLabel}}" title="{{atmoLabel}}">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="square" aria-hidden="true"><path d="M3 12h2l2-7 3 14 3-16 3 14 2-5h3"></path></svg>
+      </button>
       <button type="button" data-nodrag="true" class="{{plainBtnCls}}" onClick="{{openSettings}}" aria-label="Open settings" title="Settings">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M3 6h10M18 6h3M3 12h4M11 12h10M3 18h12M19 18h2"></path><rect x="13.5" y="4" width="4" height="4"></rect><rect x="7" y="10" width="4" height="4"></rect><rect x="15" y="16" width="4" height="4"></rect></svg>
       </button>
@@ -715,7 +718,7 @@ class Component extends DCLogic {
       preset: name, activity: 'idle', muted: false, deafened: false, paused: false,
       connected: true, reconnecting: false, expanded: expanded, task: null,
       req: 'vol', resp: 'vol', streamed: 9999, retryIn: 8, afterSpeak: 0, flow: false, phase: 0,
-      openLog: -1, typedDraft: '', typedText: '',
+      openLog: -1, typedDraft: '', typedText: '', atmosphere: true,
       log: log || this.defaultLog()
     };
     if (name === 'recognizing' || name === 'listening') { s.activity = 'recognizing'; s.req = 'ow2'; s.resp = null; s.streamed = 0; s.flow = true; }
@@ -762,7 +765,7 @@ class Component extends DCLogic {
     const s = this.state;
     const snap = {
       disp: this.disp(s), activity: s.activity, muted: s.muted, deafened: s.deafened, paused: s.paused,
-      connected: s.connected, expanded: s.expanded, taskStatus: s.task ? s.task.status : 'none'
+      connected: s.connected, expanded: s.expanded, taskStatus: s.task ? s.task.status : 'none', atmosphere: s.atmosphere
     };
     const key = JSON.stringify(snap);
     if (key !== this.lastKey) { this.lastKey = key; this.props.onEvent('state', snap); }
@@ -770,7 +773,8 @@ class Component extends DCLogic {
 
   apply(c) {
     const s = this.state;
-    if (c.type === 'preset') this.setState(this.presetState(c.value, s.expanded, s.log, false));
+    if (c.type === 'preset') this.setState(Object.assign(this.presetState(c.value, s.expanded, s.log, false), { atmosphere: s.atmosphere }));
+    else if (c.type === 'atmosphere') this.setState({ atmosphere: !s.atmosphere });
     else if (c.type === 'mute') this.toggleMute();
     else if (c.type === 'deafen') this.toggleDeafen();
     else if (c.type === 'pause') this.togglePause();
@@ -1071,7 +1075,7 @@ class Component extends DCLogic {
     let respMeta = '2:14 PM';
     if (s.activity === 'thinking') respMeta = 'thinking';
     else if (s.activity === 'accepted') respMeta = 'accepted';
-    else if (streamingResp && s.activity === 'speaking') respMeta = s.deafened ? 'voice off · text only' : 'speaking';
+    else if (streamingResp && s.activity === 'speaking') respMeta = s.deafened ? 'voice off · text only' : s.atmosphere ? 'speaking · Digital atmosphere' : 'speaking · original voice';
     else if (streamingResp) respMeta = 'writing';
 
     const canStop = running && !offline;
@@ -1101,6 +1105,11 @@ class Component extends DCLogic {
       micOff: micOff, micOn: !micOff, micCls: micCls,
       micLabel: s.deafened ? 'Mic off while deafened — click to undeafen' : s.muted ? 'Unmute microphone' : 'Mute microphone',
       deafened: s.deafened, hearing: !s.deafened, deafCls: deafCls,
+      atmosphere: s.atmosphere,
+      // Ruby when on (not amber: amber means input is off); hidden until hover when off.
+      atmoCls: 'av-iconbtn size-6 ' + (s.atmosphere ? 'bg-av-500/15 text-av-300 ring-1 ring-inset ring-av-500/60 hover:bg-av-500/25 hover:text-av-200' : 'text-zinc-400' + reveal),
+      atmoLabel: s.atmosphere ? 'Voice atmosphere on (Digital) · turn off' : 'Voice atmosphere off · turn on',
+      toggleAtmosphere: () => this.setState({ atmosphere: !this.state.atmosphere }),
       deafLabel: s.deafened ? 'Undeafen' : 'Deafen: stop listening and silence voice',
       reqMeta: listening ? 'recognizing · not accepted yet' : s.req === 'typed' ? 'typed · just now' : s.activity === 'accepted' ? 'accepted · 2:14 PM' : '2:14 PM',
       isLive: listening, liveLabel: 'Checking voice and intent', reqText: reqText, reqCaret: listening,

@@ -188,13 +188,17 @@
                 </button>
                 <button type="button" class="av-btn av-btn-ghost av-btn-sm" onClick="{{toggleDesigner}}" aria-expanded="{{designerOpen}}">{{designerBtn}}</button>
               </div>
+              <div class="flex flex-wrap items-center gap-2">
+                <button type="button" class="{{repeatCls}}" onClick="{{toggleRepeat}}" aria-pressed="{{repeating}}">{{repeatBtn}}</button>
+                <span class="av-hint">{{repeatHint}}</span>
+              </div>
               <div class="{{previewCls}}">
                 <sc-if value="{{previewing}}" hint-placeholder-val="{{ false }}">
                   <span class="av-glow-r flex h-5 items-center gap-[2px]" aria-hidden="true">
                     <sc-for list="{{previewBars}}" as="b" hint-placeholder-count="13"><span class="av-speak block w-[2px] bg-red-500" style="height: {{b.h}}px; animation-delay: {{b.del}}ms;"></span></sc-for>
                   </span>
                 </sc-if>
-                <span class="min-w-0 flex-1 text-[12px] leading-[17px] text-zinc-300">“Yes. Message 3 of 10 says your package was delivered.”</span>
+                <span class="min-w-0 flex-1 truncate text-[12px] leading-[17px] text-zinc-300" title="{{referenceText}}">“{{referenceText}}”</span>
                 <span class="shrink-0 font-mono text-[10.5px] text-zinc-400">{{previewNote}}</span>
               </div>
               <sc-if value="{{designerOpen}}" hint-placeholder-val="{{ false }}">
@@ -205,6 +209,7 @@
                     <span class="{{descHintCls}}">{{descHint}}</span>
                     <span class="{{descCountCls}}">{{descCount}}</span>
                   </div>
+                  <p class="m-0 av-hint">Reference text: “{{referenceText}}”</p>
                   <div class="flex items-center gap-2">
                     <span class="av-hint flex-1">{{designNote}}</span>
                     <sc-if value="{{hasCandidate}}" hint-placeholder-val="{{ false }}">
@@ -223,7 +228,97 @@
                 <div class="flex flex-col gap-2">
                   <div class="flex items-center justify-between"><label class="av-label" for="vol">Voice volume</label><span class="font-mono text-[11.5px] text-zinc-300">{{volume}}%</span></div>
                   <input id="vol" type="range" min="0" max="100" step="1" class="av-range" value="{{volume}}" onChange="{{setVolume}}">
+                  <span class="av-hint">Controls the voice and its atmosphere, including during preview.</span>
                 </div>
+              </div>
+            </section>
+
+            <section class="flex flex-col gap-3">
+              <span class="av-kicker">Voice atmosphere</span>
+              <div class="av-card flex flex-col gap-4 p-3.5" aria-label="Voice atmosphere">
+                <div class="flex items-center justify-between gap-3">
+                  <div class="flex items-center gap-2.5">
+                    <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="square" class="shrink-0 text-av-400" aria-hidden="true"><path d="M3 12h2l2-7 3 14 3-16 3 14 2-5h3"></path></svg>
+                    <div class="flex flex-col">
+                      <span class="text-[13px] font-medium text-zinc-50">Voice character and background sound</span>
+                      <span class="av-hint">Drag to tune live. Repeat the preview above to compare. Changes save as you go.</span>
+                    </div>
+                  </div>
+                  <span class="flex items-center gap-2">
+                    <span class="font-mono text-[11px] text-zinc-300">{{soundOnLabel}}</span>
+                    <button type="button" role="switch" class="av-switch group" aria-checked="{{soundOn}}" aria-label="Voice atmosphere" onClick="{{toggleSound}}"><span class="av-knob group-aria-checked:translate-x-[18px]"></span></button>
+                  </span>
+                </div>
+                <div class="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Voice atmosphere preset">
+                  <sc-for list="{{soundPresets}}" as="p" hint-placeholder-count="2">
+                    <button type="button" role="radio" aria-checked="{{p.on}}" class="{{p.cls}}" onClick="{{p.pick}}">
+                      <span class="flex items-center justify-between gap-2">
+                        <span class="text-[13px] font-medium text-zinc-50">{{p.label}}</span>
+                        <span class="font-mono text-[10px] tracking-[0.1em] text-zinc-400 uppercase">{{p.tag}}</span>
+                      </span>
+                      <span class="av-hint">{{p.desc}}</span>
+                    </button>
+                  </sc-for>
+                </div>
+                <span class="av-hint">{{soundHint}}</span>
+                <div class="grid grid-cols-2 gap-5">
+                  <sc-for list="{{mainSliders}}" as="sl" hint-placeholder-count="2">
+                    <div class="flex flex-col gap-2">
+                      <div class="flex items-center justify-between"><label class="av-label" for="{{sl.inputId}}">{{sl.label}}</label><span class="font-mono text-[11.5px] text-zinc-300">{{sl.display}}</span></div>
+                      <input id="{{sl.inputId}}" type="range" min="{{sl.min}}" max="{{sl.max}}" step="{{sl.step}}" class="av-range disabled:cursor-not-allowed disabled:opacity-40" value="{{sl.value}}" onChange="{{sl.onChange}}" disabled="{{sl.disabled}}">
+                    </div>
+                  </sc-for>
+                </div>
+                <div class="flex flex-wrap items-center gap-3">
+                  <span class="av-hint">Compare during preview</span>
+                  <div class="av-seg" role="group" aria-label="Compare voice processing">
+                    <button type="button" class="av-seg-btn" aria-pressed="{{soundOff}}" onClick="{{compareOriginal}}">Original</button>
+                    <button type="button" class="av-seg-btn" aria-pressed="{{soundOn}}" onClick="{{compareAtmosphere}}">Atmosphere</button>
+                  </div>
+                  <span class="av-hint">Speech keeps playing.</span>
+                </div>
+                <button type="button" class="av-btn av-btn-ghost av-btn-sm self-start" onClick="{{toggleSoundAdv}}" aria-expanded="{{soundAdv}}">{{soundAdvBtn}}</button>
+                <sc-if value="{{soundAdv}}" hint-placeholder-val="{{ false }}">
+                  <div class="av-rise flex flex-col gap-4 border-t border-white/10 pt-3">
+                    <div class="flex flex-wrap gap-5">
+                      <sc-for list="{{soundLayers}}" as="ly" hint-placeholder-count="2">
+                        <span class="flex items-center gap-2.5">
+                          <span class="text-[12.5px] text-zinc-100">{{ly.label}}</span>
+                          <button type="button" role="switch" class="av-switch group" aria-checked="{{ly.on}}" aria-label="{{ly.label}}" onClick="{{ly.toggle}}"><span class="av-knob group-aria-checked:translate-x-[18px]"></span></button>
+                        </span>
+                      </sc-for>
+                    </div>
+                    <div class="grid grid-cols-3 gap-x-5 gap-y-4">
+                      <sc-for list="{{advSliders}}" as="sl" hint-placeholder-count="6">
+                        <div class="flex flex-col gap-2">
+                          <div class="flex items-center justify-between gap-2"><label class="av-label" for="{{sl.inputId}}">{{sl.label}}</label><span class="font-mono text-[11.5px] text-zinc-300">{{sl.display}}</span></div>
+                          <input id="{{sl.inputId}}" type="range" min="{{sl.min}}" max="{{sl.max}}" step="{{sl.step}}" class="av-range disabled:cursor-not-allowed disabled:opacity-40" value="{{sl.value}}" onChange="{{sl.onChange}}" disabled="{{sl.disabled}}">
+                          <sc-if value="{{sl.hint}}" hint-placeholder-val="{{ false }}"><span class="av-hint">{{sl.hint}}</span></sc-if>
+                        </div>
+                      </sc-for>
+                    </div>
+                    <div class="grid grid-cols-3 gap-x-5 gap-y-4">
+                      <div class="flex flex-col gap-2">
+                        <label class="av-label" for="bg-texture">Background texture</label>
+                        <div class="relative">
+                          <select id="bg-texture" class="av-input av-select" value="{{bgTexture}}" onChange="{{setBgTexture}}">
+                            <option value="atmosphere">Galaxy ambience</option>
+                            <option value="pink">Soft filtered noise</option>
+                            <option value="white">White noise</option>
+                          </select>
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" class="pointer-events-none absolute top-1/2 right-2.5 -translate-y-1/2 text-zinc-400" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+                        </div>
+                      </div>
+                      <sc-for list="{{spacingSliders}}" as="sl" hint-placeholder-count="2">
+                        <div class="flex flex-col gap-2">
+                          <div class="flex items-center justify-between gap-2"><label class="av-label" for="{{sl.inputId}}">{{sl.label}}</label><span class="font-mono text-[11.5px] text-zinc-300">{{sl.display}}</span></div>
+                          <input id="{{sl.inputId}}" type="range" min="{{sl.min}}" max="{{sl.max}}" step="{{sl.step}}" class="av-range disabled:cursor-not-allowed disabled:opacity-40" value="{{sl.value}}" onChange="{{sl.onChange}}" disabled="{{sl.disabled}}">
+                        </div>
+                      </sc-for>
+                    </div>
+                    <span class="av-hint">Echo spacing adds time between repeats; the main voice stays immediate. {{layoutNote}} Both presets keep your selected voice.</span>
+                  </div>
+                </sc-if>
               </div>
             </section>
 
@@ -1009,7 +1104,7 @@ class Component extends DCLogic {
     this.state = Object.assign({
       section: props.section || 'audio',
       dirty: false, saveState: 'idle', savedAt: '', confirmClose: false,
-      recording: null, shortcutErr: {}, tone: 'idle', previewing: false, designing: false, candidate: false,
+      recording: null, shortcutErr: {}, tone: 'idle', previewing: false, repeating: false, soundAdv: false, designing: false, candidate: false,
       editing: null, draft: null, tests: {}, load: { tts: { pct: 62, rate: 1 } },
       selProfile: 'single', editAssign: false, assignDraft: null, profileMsg: '', profileMsgTone: 'err',
       pairOpen: false, pairHost: '', pairCode: '', pairStage: 'host', pairTried: false,
@@ -1027,6 +1122,11 @@ class Component extends DCLogic {
       inDev: 'mv7', outDev: 'scarlett', mode: 'continuous', wake: 'Avesra', followUp: '8',
       shortcuts: { ptt: 'Ctrl + Space', mute: 'Ctrl + Shift + M', deafen: 'Ctrl + Shift + D', overlay: 'Ctrl + Shift + A', pause: 'Ctrl + Alt + P', stop: 'Ctrl + Alt + Backspace' },
       voiceName: 'Avesra v1', voiceDate: 'Sep 24, 2026', speed: 1, volume: 72,
+      sound: {
+        on: true, preset: 'digital',
+        digital: { effects: true, bg: true, presence: 85, background: 85, warmth: 100, space: 100, echo: 10, texture: 75, character: 40, depth: 1, left: 105, right: 65, bgTexture: 'atmosphere' },
+        human: { effects: true, bg: false, presence: 0, background: 15, warmth: 30, space: 10, echo: 0, texture: 0, character: 25, depth: 4, left: 0, right: 0, bgTexture: 'atmosphere' }
+      },
       designerOpen: false, voiceDesc: 'Calm, low-mid voice with an even, unhurried pace. Warm but precise; no vocal fry.',
       chimeLearn: true, chimeAction: true, chimeVol: 35,
       lanes: [
@@ -1410,6 +1510,50 @@ class Component extends DCLogic {
       preview: () => { this.setState({ chimePlaying: x.key }); this.later(() => this.setState({ chimePlaying: null }), 900); }
     }));
 
+    // ----- voice atmosphere (applies live, saved immediately like the app) -----
+    const snd = s.sound;
+    const P = snd.preset;
+    const A = snd[P];
+    const human = P === 'human';
+    const setAmt = (field, v) => {
+      const cur = this.state.sound;
+      const next = Object.assign({}, cur);
+      next[P] = Object.assign({}, cur[P]);
+      next[P][field] = v;
+      this.setState({ sound: next });
+    };
+    const setSound = (patch) => this.setState({ sound: Object.assign({}, this.state.sound, patch) });
+    const slider = (id, label, value, display, onChange, opts) => Object.assign({ inputId: 'snd-' + id, label: label, value: value, display: display, onChange: onChange, min: 0, max: 100, step: 1, disabled: false, hint: '' }, opts || {});
+    const pct = (field, label, opts) => slider(field, label, A[field], A[field] + '%', (e) => setAmt(field, parseInt(e.target.value, 10)), opts);
+    const semis = Math.abs(A.depth) / 2;
+    const pitchLabel = A.depth === 0 ? 'Unison' : (semis === 0.5 ? '½' : String(semis)) + (semis === 1 || semis === 0.5 ? ' semitone ' : ' semitones ') + (A.depth > 0 ? 'lower' : 'higher');
+    const soundPresets = [['digital', 'Digital', 'Default', 'Resonant, synthetic and spacious.'], ['human', 'Human', '', 'Warm, close and lightly processed.']].map((p) => {
+      const on = P === p[0];
+      return {
+        label: p[1], tag: p[2], desc: p[3], on: on,
+        cls: 'flex cursor-pointer flex-col gap-1 p-3 text-left ring-1 ring-inset transition-colors focus-visible:outline-1 focus-visible:outline-offset-2 focus-visible:outline-av-400 ' + (on ? 'bg-white/[0.06] ring-av-500 shadow-[inset_0_-2px_0_var(--color-av-500)]' : 'bg-white/[0.02] ring-white/[0.08] hover:bg-white/[0.04] hover:ring-white/15'),
+        pick: () => setSound({ preset: p[0] })
+      };
+    });
+    const soundHint = !snd.on ? 'Original voice. Your preset is saved; turn atmosphere on to hear it.'
+      : human ? 'A closer presentation of your selected voice. Background starts off.'
+      : 'A dark Galaxy layer follows the voice and lowers beneath each phrase, then fades out after it.';
+    const mainSliders = [
+      pct('presence', 'Voice presence', { disabled: human }),
+      pct('background', 'Galaxy / background')
+    ];
+    const advSliders = [
+      pct('warmth', 'Bass / warmth'),
+      slider('space', 'Reverb', A.space / 2, (A.space / 2) + '%', (e) => setAmt('space', Math.round(parseFloat(e.target.value) * 2)), { step: 0.5 }),
+      pct('echo', 'Echo', { disabled: human }),
+      pct('texture', 'Harmonizer', { disabled: human }),
+      pct('character', 'Compression'),
+      slider('depth', 'Harmony pitch', A.depth / -2, pitchLabel, (e) => setAmt('depth', Math.round(parseFloat(e.target.value) * -2)), { min: -12, max: 12, step: 0.5, disabled: human, hint: 'Lower ← Unison → Higher' })
+    ];
+    const spacingSliders = [['left', 'Left echo spacing'], ['right', 'Right echo spacing']].map((c) =>
+      slider('delay-' + c[0], c[1], A[c[0]], '+' + A[c[0]] + ' ms', (e) => setAmt(c[0], parseInt(e.target.value, 10)), { max: 400, step: 5, disabled: human }));
+    const soundLayers = [['effects', 'Voice effects'], ['bg', 'Background sound']].map((l) => ({ label: l[1], on: !!A[l[0]], toggle: () => setAmt(l[0], !A[l[0]]) }));
+
     // ----- lanes -----
     const counts = {};
     s.lanes.forEach((l) => { const k = l.model + '@' + l.machine; counts[k] = (counts[k] || 0) + 1; });
@@ -1713,8 +1857,25 @@ class Component extends DCLogic {
       previewing: s.previewing,
       previewBars: [5, 8, 12, 15, 18, 20, 21, 20, 18, 15, 12, 8, 5].map((h, i) => ({ h: h, del: -(i * 95) })),
       previewCls: 'flex h-11 items-center gap-3 px-3 ring-1 ring-inset transition-colors ' + (s.previewing ? 'bg-red-500/[0.06] ring-red-500/30' : 'bg-black/20 ring-white/[0.06]'),
-      previewNote: s.previewing ? 'playing · simulated' : (s.candidate ? 'candidate' : s.voiceName) + ' · ' + s.speed.toFixed(2) + '×',
-      playPreview: () => { this.setState({ previewing: true }); this.later(() => this.setState({ previewing: false }), 3000); },
+      previewNote: s.previewing ? (s.repeating ? 'repeating · simulated' : 'reference preview · simulated') : 'generated reference',
+      referenceText: 'Hello I am Avesra, A Very Effective Smart Reasoning Assistant. I am designed to help you manage your thoughts and ideas.',
+      repeating: s.repeating,
+      repeatBtn: s.repeating ? 'Stop repeating' : 'Repeat preview',
+      repeatCls: 'av-btn av-btn-sm ' + (s.repeating ? 'av-btn-primary' : 'av-btn-secondary'),
+      repeatHint: s.repeating ? 'Tune below while it repeats. Stop finishes this take.' : 'Reuses this saved take. No voice regeneration.',
+      toggleRepeat: () => {
+        if (this.state.repeating) { this.setState({ repeating: false }); this.later(() => { if (!this.state.repeating) this.setState({ previewing: false }); }, 1200); }
+        else this.setState({ repeating: true, previewing: true });
+      },
+      soundOn: snd.on, soundOff: !snd.on, soundOnLabel: snd.on ? 'On' : 'Off',
+      toggleSound: () => setSound({ on: !snd.on }),
+      compareOriginal: () => setSound({ on: false }), compareAtmosphere: () => setSound({ on: true }),
+      soundPresets: soundPresets, soundHint: soundHint, mainSliders: mainSliders, advSliders: advSliders, spacingSliders: spacingSliders, soundLayers: soundLayers,
+      soundAdv: s.soundAdv, soundAdvBtn: s.soundAdv ? 'Hide sound controls' : 'More sound controls',
+      toggleSoundAdv: () => this.setState({ soundAdv: !this.state.soundAdv }),
+      bgTexture: A.bgTexture, setBgTexture: (e) => setAmt('bgTexture', e.target.value),
+      layoutNote: 'Stereo output: centered voice with a wide atmosphere.',
+      playPreview: () => { this.setState({ previewing: true }); this.later(() => { if (!this.state.repeating) this.setState({ previewing: false }); }, 3000); },
       designerOpen: s.designerOpen, designerBtn: s.designerOpen ? 'Close designer' : 'Design a new voice',
       toggleDesigner: () => this.setState({ designerOpen: !s.designerOpen }),
       voiceDesc: s.voiceDesc, setDesc: (e) => this.setState({ voiceDesc: e.target.value }),
@@ -1898,10 +2059,10 @@ class Component extends DCLogic {
       notDirty: !s.dirty || s.saveState === 'saving', cantSave: !s.dirty || s.saveState === 'saving',
       keepEditing: () => this.setState({ confirmClose: false }),
       discardClose: () => {
-        this.setState(Object.assign(JSON.parse(JSON.stringify(this.saved)), { dirty: false, confirmClose: false, saveState: 'idle', unlocked: false }));
+        this.setState(Object.assign(JSON.parse(JSON.stringify(this.saved)), { sound: this.state.sound, dirty: false, confirmClose: false, saveState: 'idle', unlocked: false }));
         if (this.props.onClose) this.props.onClose();
       },
-      discard: () => this.setState(Object.assign(JSON.parse(JSON.stringify(this.saved)), { dirty: false, saveState: 'idle', editing: null, draft: null, editAssign: false, profileMsg: '', shortcutErr: {}, recording: null })),
+      discard: () => this.setState(Object.assign(JSON.parse(JSON.stringify(this.saved)), { sound: this.state.sound, dirty: false, saveState: 'idle', editing: null, draft: null, editAssign: false, profileMsg: '', shortcutErr: {}, recording: null })),
       save: () => {
         if (this.errors().length) { this.setState({ saveState: 'error' }); return; }
         this.setState({ saveState: 'saving' });

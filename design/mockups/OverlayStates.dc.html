@@ -19,7 +19,7 @@
     <div class="flex flex-col gap-2">
       <span class="font-mono text-[11px] tracking-[0.12em] text-av-400 uppercase">Avesra · compact overlay</span>
       <h1 class="m-0 text-[30px] font-semibold tracking-[-0.02em] uppercase font-mono text-zinc-50">Overlay states</h1>
-      <p class="m-0 max-w-[760px] text-[14px] leading-[21px] text-zinc-400">A transparent overlay built around one live signal. Three WebGL styles tell sources apart at a glance: human audio is a smooth filled waveform (blue for you, green for other people, grey for background), thinking fuses gamma-wave bursts with stepped digital compute, and Avesra’s speech is a twisting ribbon of synthetic strands, red to Ruby. Passive, recognizing, accepted, thinking and speaking show no text; small icon controls appear on hover, when switched on, or (Stop) while a task runs.</p>
+      <p class="m-0 max-w-[760px] text-[14px] leading-[21px] text-zinc-400">A transparent overlay built around one live signal. Three WebGL styles tell sources apart at a glance: human audio is a smooth filled waveform (blue for you, green for other people, grey for background), thinking fuses gamma-wave bursts with stepped digital compute, and Avesra’s speech is a twisting ribbon of synthetic strands, red to Ruby. Passive, recognizing, accepted, thinking and speaking show no text; small icon controls appear on hover, when switched on (voice atmosphere shows in Ruby while on), or (Stop) while a task runs.</p>
     </div>
     <div class="flex items-center gap-4 text-[12px] text-zinc-400">
       <span class="flex items-center gap-2"><span class="size-2 bg-[#3a5dd8]"></span>You</span>
@@ -76,7 +76,7 @@ class Component extends DCLogic {
       ['recognizing', 'Recognizing', 'Your voice, not yet accepted: identity and intent are still being checked. Partial text can’t trigger actions.'],
       ['accepted', 'Accepted', 'Clearly directed at Avesra by an enrolled voice. The Ruby centre line lights; the request is now a task.'],
       ['thinking', 'Thinking', 'Planning. Gamma-wave bursts fused with a stepped digital signal and compute bits, in Ruby.'],
-      ['speaking', 'Speaking', 'Avesra’s synthetic voice: a twisting ribbon of strands, red to Ruby, whose width follows the reply.'],
+      ['speaking', 'Speaking', 'Avesra’s synthetic voice: a twisting ribbon, red to Ruby. Voice atmosphere (Ruby wave button) adds Digital effects and the Galaxy background.'],
       ['working', 'Working', 'Running an authorized task. The bar splits into its five steps; a small Stop stays visible.'],
       ['muted', 'Muted', 'Capture stopped and unaccepted speech discarded. Accepted tasks continue; type a request instead.'],
       ['paused', 'Paused', 'Listening, observation and new actions on hold; the task waits at a safe boundary.'],
