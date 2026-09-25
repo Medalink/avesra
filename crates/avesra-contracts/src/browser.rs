@@ -3,7 +3,7 @@ use crate::ErrorCode;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error};
 use uuid::Uuid;
 
-pub const VERSION: u16 = 2;
+pub const VERSION: u16 = 3;
 pub const MAX_MESSAGE: usize = 65536;
 pub const HANDSHAKE_SECONDS: u64 = 45;
 
@@ -134,6 +134,50 @@ pub struct Authenticated {
     /// Native ownership generation, never a frontend-granted permission epoch.
     pub generation: u64,
 }
+pub const MAX_SAFE_COUNTER: u64 = 9_007_199_254_740_991;
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Authority {
+    pub selection: Id,
+    pub action_epoch: u64,
+    /// Mode permission alone never grants a browser operation.
+    pub mode_allowed: bool,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Phase {
+    Pending,
+    AuthenticatedNoScopes,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StatusReply {
+    pub version: u16,
+    pub session: Id,
+    pub generation: u64,
+    pub sequence: u64,
+    pub state: Phase,
+    pub authority: Option<Authority>,
+}
+impl StatusReply {
+    pub fn validate(&self) -> Result<(), ErrorCode> {
+        if self.version != VERSION {
+            return Err(ErrorCode::Unsupported);
+        }
+        if self.generation == 0
+            || self.generation > MAX_SAFE_COUNTER
+            || self.sequence == 0
+            || self.sequence > MAX_SAFE_COUNTER
+            || (self.state == Phase::Pending && self.authority.is_some())
+            || self
+                .authority
+                .is_some_and(|v| v.action_epoch == 0 || v.action_epoch > MAX_SAFE_COUNTER)
+        {
+            return Err(ErrorCode::Malformed);
+        }
+        Ok(())
+    }
+}
 #[derive(Deserialize, Serialize)]
 #[serde(
     tag = "type",
@@ -155,7 +199,7 @@ pub fn comparison_transcript(challenge: &Challenge) -> Result<Vec<u8>, ErrorCode
         return Err(ErrorCode::Unsupported);
     }
     Ok(format!(
-        "AVESRA-BROWSER-COMPARE-2\n{}\n{}\n{}\n{}\n{}\n",
+        "AVESRA-BROWSER-COMPARE-3\n{}\n{}\n{}\n{}\n{}\n",
         challenge.installation.uuid(),
         challenge.connection.uuid(),
         challenge.session.uuid(),
@@ -182,7 +226,7 @@ pub fn transcript(
         return Err(ErrorCode::Stale);
     }
     Ok(format!(
-        "AVESRA-BROWSER-AUTH-2\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n",
+        "AVESRA-BROWSER-AUTH-3\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n",
         pairing.id.uuid(),
         pairing.revision.uuid(),
         hello.installation.uuid(),

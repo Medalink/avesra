@@ -738,61 +738,151 @@ async fn run(
     let mut job: Option<tokio::task::JoinHandle<Result<Issuance, ErrorCode>>> = None;
     let result = async {
         loop {
-            with_attempt(app,id,generation,|_,_,attempt| {
-                let limit=if authenticated {300}else{browser::HANDSHAKE_SECONDS};
-                if attempt.started.elapsed()>=Duration::from_secs(limit) { return Err(ErrorCode::Expired); }
+            with_attempt(app, id, generation, |_, _, attempt| {
+                let limit = if authenticated {
+                    300
+                } else {
+                    browser::HANDSHAKE_SECONDS
+                };
+                if attempt.started.elapsed() >= Duration::from_secs(limit) {
+                    return Err(ErrorCode::Expired);
+                }
                 Ok(())
             })?;
             let message: Client = browser::decode(&pipe.receive().await?)?;
-            with_attempt(app,id,generation,|_,_,_|Ok(()))?;
+            with_attempt(app, id, generation, |_, _, _| Ok(()))?;
             match message {
-                Client::Disconnect {session} if session==challenge.session => return Ok(()),
-                Client::Poll {session,sequence:next} if session==challenge.session && sequence.checked_add(1)==Some(next) => {
-                    sequence=next;
-                    if job.as_ref().is_some_and(|v|v.is_finished()) {
-                        let issued=job.take().ok_or(ErrorCode::Stale)?.await.map_err(|_|ErrorCode::Unavailable)??;
-                        let (next, record, bytes)=issued.into_frame(generation)?;
-                        with_attempt(app,id,generation,|_,_,attempt| { attempt.state="awaiting_persistence_proof"; Ok(()) })?;
-                        pending=Some(next); saved=Some(record); pipe.send(&bytes).await?; continue;
+                Client::Disconnect { session } if session == challenge.session => return Ok(()),
+                Client::Poll {
+                    session,
+                    sequence: next,
+                } if session == challenge.session && sequence.checked_add(1) == Some(next) => {
+                    sequence = next;
+                    if job.as_ref().is_some_and(|v| v.is_finished()) {
+                        let issued = job
+                            .take()
+                            .ok_or(ErrorCode::Stale)?
+                            .await
+                            .map_err(|_| ErrorCode::Unavailable)??;
+                        let (next, record, bytes) = issued.into_frame(generation)?;
+                        with_attempt(app, id, generation, |_, _, attempt| {
+                            attempt.state = "awaiting_persistence_proof";
+                            Ok(())
+                        })?;
+                        pending = Some(next);
+                        saved = Some(record);
+                        pipe.send(&bytes).await?;
+                        continue;
                     }
                     if job.is_none() && saved.is_none() {
-                        let proof=with_attempt(app,id,generation,|_,_,attempt|Ok(attempt.approval.take()))?;
-                        if let Some(proof)=proof {
-                            let native=pending.take().ok_or(ErrorCode::Stale)?;
-                            let app=app.clone(); let directory=directory.clone(); let record=selected.clone();
-                            job=Some(tokio::task::spawn_blocking(move || {
-                                if !crate::owner::matches_actor(&directory, actor) {return Err(ErrorCode::Unauthenticated);}
-                                let now=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|_|ErrorCode::Expired)?.as_millis();
-                                let selection=Selection { actor:Id::new(actor)?, browser_app:Id::new(record.id)?,browser_revision:Id::new(record.revision)?,label:record.name,created_at_ms:u64::try_from(now).map_err(|_|ErrorCode::Expired)? };
-                                native.approve(&Store::open(&directory.join("browser-pairings"))?,selection,generation,&mut |binding, challenge| {
-                                    with_attempt(&app,id,generation,|state,local,attempt| {
-                                        if !proof.current_locked(state,local) || !attempt.pending.as_ref().is_some_and(|v|v.challenge==challenge.challenge)
-                                            || !attempt.selected.as_ref().is_some_and(|v|v.id==binding.browser_app.uuid() && v.revision==binding.browser_revision.uuid()) { return Err(ErrorCode::Stale); }
-                                        Ok(())
-                                    })
-                                })
+                        let proof = with_attempt(app, id, generation, |_, _, attempt| {
+                            Ok(attempt.approval.take())
+                        })?;
+                        if let Some(proof) = proof {
+                            let native = pending.take().ok_or(ErrorCode::Stale)?;
+                            let app = app.clone();
+                            let directory = directory.clone();
+                            let record = selected.clone();
+                            job = Some(tokio::task::spawn_blocking(move || {
+                                if !crate::owner::matches_actor(&directory, actor) {
+                                    return Err(ErrorCode::Unauthenticated);
+                                }
+                                let now = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .map_err(|_| ErrorCode::Expired)?
+                                    .as_millis();
+                                let selection = Selection {
+                                    actor: Id::new(actor)?,
+                                    browser_app: Id::new(record.id)?,
+                                    browser_revision: Id::new(record.revision)?,
+                                    label: record.name,
+                                    created_at_ms: u64::try_from(now)
+                                        .map_err(|_| ErrorCode::Expired)?,
+                                };
+                                native.approve(
+                                    &Store::open(&directory.join("browser-pairings"))?,
+                                    selection,
+                                    generation,
+                                    &mut |binding, challenge| {
+                                        with_attempt(
+                                            &app,
+                                            id,
+                                            generation,
+                                            |state, local, attempt| {
+                                                if !proof.current_locked(state, local)
+                                                    || !attempt.pending.as_ref().is_some_and(|v| {
+                                                        v.challenge == challenge.challenge
+                                                    })
+                                                    || !attempt.selected.as_ref().is_some_and(|v| {
+                                                        v.id == binding.browser_app.uuid()
+                                                            && v.revision
+                                                                == binding.browser_revision.uuid()
+                                                    })
+                                                {
+                                                    return Err(ErrorCode::Stale);
+                                                }
+                                                Ok(())
+                                            },
+                                        )
+                                    },
+                                )
                             }));
                         }
                     }
-                    with_attempt(app,id,generation,|_,_,_|Ok(()))?;
-                    pipe.send(&serde_json::to_vec(&serde_json::json!({"type":"status","session":challenge.session,"sequence":sequence,"state":if authenticated{"authenticated_no_scopes"}else{"pending"}})).map_err(|_|ErrorCode::Malformed)?).await?;
+                    let status = with_attempt(app, id, generation, |_, local, attempt| {
+                        let value = browser::StatusReply {
+                            version: browser::VERSION,
+                            session: challenge.session,
+                            generation,
+                            sequence,
+                            state: if authenticated {
+                                browser::Phase::AuthenticatedNoScopes
+                            } else {
+                                browser::Phase::Pending
+                            },
+                            authority: attempt.selection.filter(|_| authenticated).map(
+                                |selection| browser::Authority {
+                                    selection,
+                                    action_epoch: local.action_epoch,
+                                    mode_allowed: local.connected
+                                        && !local.locked
+                                        && !local.settings.paused,
+                                },
+                            ),
+                        };
+                        value.validate()?;
+                        Ok(value)
+                    })?;
+                    pipe.send(
+                        &serde_json::to_vec(&serde_json::json!({"type":"status","body":status}))
+                            .map_err(|_| ErrorCode::Malformed)?,
+                    )
+                    .await?;
                 }
                 Client::Authenticate(reply) if !authenticated && job.is_none() => {
-                    let native=pending.take().ok_or(ErrorCode::Stale)?;
-                    let record=saved.as_ref().ok_or(ErrorCode::Unauthenticated)?;
-                    let response=with_attempt(app,id,generation,|_,_,attempt| {
-                        let response=native.authenticate(record,reply,generation)?;
-                        attempt.state="authenticated_no_scopes"; attempt.pending=None;
-                        attempt.selection=selected_revision;
+                    let native = pending.take().ok_or(ErrorCode::Stale)?;
+                    let record = saved.as_ref().ok_or(ErrorCode::Unauthenticated)?;
+                    let response = with_attempt(app, id, generation, |_, _, attempt| {
+                        let response = native.authenticate(record, reply, generation)?;
+                        attempt.state = "authenticated_no_scopes";
+                        attempt.pending = None;
+                        attempt.selection = selected_revision;
                         Ok(response)
                     })?;
-                    pipe.send(&serde_json::to_vec(&serde_json::json!({"type":"authenticated","body":response})).map_err(|_|ErrorCode::Malformed)?).await?;
-                    authenticated=true;
+                    pipe.send(
+                        &serde_json::to_vec(
+                            &serde_json::json!({"type":"authenticated","body":response}),
+                        )
+                        .map_err(|_| ErrorCode::Malformed)?,
+                    )
+                    .await?;
+                    authenticated = true;
                 }
-                _=>return Err(ErrorCode::Malformed),
+                _ => return Err(ErrorCode::Malformed),
             }
         }
-    }.await;
+    }
+    .await;
     // Invalidate publication before waiting for potentially blocked storage. The
     // top-level owned slot is not released until the actual writer exits.
     let _ = with_attempt(app, id, generation, |_, _, attempt| {

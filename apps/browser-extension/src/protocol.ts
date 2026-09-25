@@ -1,6 +1,18 @@
 export type Pairing = { id: string; revision: string };
-export type Challenge = { version: 2; installation: string; connection: string; session: string; challenge: string; nonce: string; pairing: Pairing | null };
+export type Challenge = { version: 3; installation: string; connection: string; session: string; challenge: string; nonce: string; pairing: Pairing | null };
 export type Saved = { version: 1; installation: string; pairing: Pairing; credential: string };
+export type Authority = { selection: string; action_epoch: number; mode_allowed: boolean };
+export type Status = { version: 3; session: string; generation: number; sequence: number; state: "pending" | "authenticated_no_scopes"; authority: Authority | null };
+export function counter(value: unknown): value is number { return Number.isSafeInteger(value) && Number(value) > 0; }
+export function authority(value: unknown): value is Authority {
+  return object(value, ["selection", "action_epoch", "mode_allowed"]) && id(value.selection) && counter(value.action_epoch) && typeof value.mode_allowed === "boolean";
+}
+export function status(value: unknown): value is Status {
+  return object(value, ["version", "session", "generation", "sequence", "state", "authority"])
+    && value.version === 3 && id(value.session) && counter(value.generation) && counter(value.sequence)
+    && (value.state === "pending" || value.state === "authenticated_no_scopes")
+    && (value.authority === null || (value.state === "authenticated_no_scopes" && authority(value.authority)));
+}
 export function object(value: unknown, keys: string[]): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).length === keys.length && keys.every(k => Object.hasOwn(value, k));
 }
@@ -9,14 +21,14 @@ export function hex(value: unknown): value is string { return typeof value === "
 export function pairing(value: unknown): value is Pairing { return object(value, ["id", "revision"]) && id(value.id) && id(value.revision); }
 export function equal(a: Pairing | null, b: Pairing | null) { return a === null ? b === null : b !== null && a.id === b.id && a.revision === b.revision; }
 export function challenge(value: unknown): value is Challenge {
-  return object(value, ["version", "installation", "connection", "session", "challenge", "nonce", "pairing"]) && value.version === 2 && id(value.installation) && id(value.connection) && id(value.session) && id(value.challenge) && hex(value.nonce) && (value.pairing === null || pairing(value.pairing));
+  return object(value, ["version", "installation", "connection", "session", "challenge", "nonce", "pairing"]) && value.version === 3 && id(value.installation) && id(value.connection) && id(value.session) && id(value.challenge) && hex(value.nonce) && (value.pairing === null || pairing(value.pairing));
 }
 export function saved(value: unknown): value is Saved { return object(value, ["version", "installation", "pairing", "credential"]) && value.version === 1 && id(value.installation) && pairing(value.pairing) && hex(value.credential); }
 export function bytes(value: string): Uint8Array<ArrayBuffer> { return Uint8Array.from(value.match(/../g) ?? [], v => Number.parseInt(v, 16)); }
 export function toHex(value: Uint8Array) { return Array.from(value, v => v.toString(16).padStart(2, "0")).join(""); }
 export function nonce() { return toHex(crypto.getRandomValues(new Uint8Array(32))); }
 export async function comparison(value: Challenge) {
-  const text = ["AVESRA-BROWSER-COMPARE-2", value.installation, value.connection, value.session, value.challenge, value.nonce, ""].join("\n");
+  const text = ["AVESRA-BROWSER-COMPARE-3", value.installation, value.connection, value.session, value.challenge, value.nonce, ""].join("\n");
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
   return (new DataView(digest).getUint32(0, false) % 1_000_000).toString().padStart(6, "0");
 }
@@ -25,7 +37,7 @@ export async function proof(value: Challenge, record: Saved, clientNonce: string
   const raw = bytes(record.credential);
   try {
     const key = await crypto.subtle.importKey("raw", raw, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-    const text = ["AVESRA-BROWSER-AUTH-2", record.pairing.id, record.pairing.revision, value.installation, value.connection, value.session, clientNonce, value.nonce, chrome.runtime.id, ""].join("\n");
+    const text = ["AVESRA-BROWSER-AUTH-3", record.pairing.id, record.pairing.revision, value.installation, value.connection, value.session, clientNonce, value.nonce, chrome.runtime.id, ""].join("\n");
     return toHex(new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(text))));
   } finally { raw.fill(0); }
 }

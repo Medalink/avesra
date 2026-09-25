@@ -487,7 +487,7 @@ pub struct Admission {
 }
 impl Admission {
     pub fn new(generation: u64) -> Result<Self, ErrorCode> {
-        if generation == 0 {
+        if generation == 0 || generation > browser::MAX_SAFE_COUNTER {
             return Err(ErrorCode::Malformed);
         }
         Ok(Self {
