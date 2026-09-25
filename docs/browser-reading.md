@@ -1,0 +1,48 @@
+# Accepted browser reading
+
+This M5 slice adds a typed, bounded semantic read behind the existing durable native action owner. The protected Settings document chooser remains metadata setup only. Pairing, Chrome permission, a saved scope, a page title and a model proposal are each insufficient to read page content. No browser API or page operation is exercised during source implementation.
+
+## Authority and the durable owner
+
+ReadPage must arrive as the exact Action revision already claimed by ExecutionController on the actual NativeEffects worker. The worker retains its exclusive ledger/input ownership until the actual bridge job settles, including after caller cancellation or a timeout. It does not open another Store, run a second dispatch owner, or reconstruct authority from history. An immutable native target UUID binds actor, selected installation revision, pairing revision, configured browser AppRecord/revision, exact Read scope/revision, strict origin and exact tab/window/frame/document identity. Native setup observations may supply candidate metadata to a later native accepted-target resolver; they are not durable grants or task admission. The currently absent qualified producer leaves this ingress dormant.
+
+The Action target must equal that native document target; ReadPage.origin must equal its strict browser::Origin, not merely the broader generic HTTPS parser. Binding to the configured browser app remains owner configuration, not proof of the running browser executable/account/profile path. A driver requiring account/project identity must establish that separately or return NeedsInput. Target replacement gets a new UUID and does not rebind old accepted tasks.
+
+Before publishing one read request, validate the original accepted actor/payload/grant, source device/session and frozen capture provenance, current action epoch/cancellation, selected authenticated browser session/generation, target, current owner principal, AppRecord and unrevoked scope. Keep native disk/OS reads outside Runtime.local and use the existing ledger worker for its own store/catalog checks, never a callback that queues behind that same worker. The final durable authorize callback runs after potentially blocking inspection and immediately before native bridge publication. For this read-only adapter the existing commit marker means disclosure admission, not an OS mutation. A lost result after admission is an unknown read outcome; no automatic replay.
+
+The native bridge owns one request from before preparation through actual extension completion. Its fixed ten-second monotonic budget is also capped by the original accepted action lifetime. Native→extension serialization only reduces remaining time; status polling, reconnect and revalidation never renew it. Session/action/scope/target withdrawal immediately closes publication without waiting behind SQL or Chrome APIs. Browser requests bind dispatch, action revision, task, actor, exact target revision and native browser context. These are correlation fields on the wire, never authority supplied by the extension. Native results are applied only to the original claimed dispatch.
+
+## Versioned request and observation
+
+The integrated route must advance browser protocol, authentication and comparison transcript together to v6. Existing v5 peers fail negotiation; pairing storage stays schema1 and pipe framing stays v1. A new required nullable read request in status and a strict read-result variant bind exact session/generation, selection revision, action epoch, dispatch/action/target, scope and observation revision. Parsing a valid contract does not activate a read. The normal one-second status exchange remains responsive while the separate owned Chrome job runs.
+
+Initial support is top-level, active HTTPS documents only. Revalidate actual Chrome host permission and the exact tab/window/document/URL before injection, inject only the bundled fixed semantic extractor in ISOLATED world using exact documentId, then revalidate identity and permission afterward. No arbitrary JavaScript, selector program, CSS, URL or file path comes from a model/page. No click/focus/navigation/form write/submit, background tab activation, screenshot, accessibility-wide desktop capture, cookie/storage read, or iframe traversal is part of this operation.
+
+The extractor has a bounded node and time budget and never calls whole-document innerText/textContent before enforcing bounds. It excludes scripts/styles, hidden content, forms/inputs/textareas/contenteditable regions and their descendants, password/autocomplete-secret surfaces, and unsupported trees. It reads only bounded rendered text nodes from the exact document; arbitrary page text remains untrusted evidence and cannot change grants, prompts or instructions. Page-controlled attributes/styles and layout are observations, not cryptographic secrecy guarantees. No extracted content is logged or placed in general telemetry.
+
+Return at most16 ordered text blocks, at most512 UTF-8 bytes each and4096 bytes total, with bounded title/URL provenance. Traversal truncation and unsupported nodes are explicit. `message_limit` remains an upper bound, not proof of a mailbox's message count; the generic extractor never claims latest-N messages, account verification, full-page coverage or delivery confirmation. A generic page excerpt is always partial semantic evidence. Gmail latest-N/account/source/time verification requires its own qualified adapter and cannot be inferred from block order or a successful generic read. Unsupported requested semantics stay NeedsInput/Unsupported at the producer/driver boundary.
+
+Native validation bounds the serialized result to the existing64KiB frame and enforces UTF-8 byte totals, strict enums, nonempty block content, exact original URL/document/scope/context, and explicit partial coverage. Empty/expired/changed/unavailable results carry no text. A successful read observation contains a bounded provenance/count/digest summary for durable dispatch history; raw page text stays transient in an opaque read-result owner for the accepted task. History must not reconstruct that owner or grant future page access. Any later retention into accepted memory needs its separate source/actor policy.
+
+## Lifecycle and actual job ownership
+
+Use one extension-global actual Chrome job slot shared with metadata observation, including across connection replacement. Dispose/timeout immediately suppresses publication but retains the slot until every started API promise settles. No Promise.race releases actual ownership, and no fallback or queued automatic retry starts another read. Keep at most64 read request identities per connection with no live eviction or UUID reuse; exhaustion requires explicit reconnect.
+
+Navigation, BFCache/lifecycle, history/fragment, relevant tab/window/user-context, permission removal and action-mode events synchronously invalidate observation before any awaited API. Semantic extraction additionally returns an observation-local DOM revision. Mutation/user input during the read invalidates it rather than claiming an atomic page snapshot. Native acceptance still checks current remote observation revision and current local authority. A lifecycle event after a reply may revoke its freshness; it does not erase the immutable fact that an earlier bounded read occurred. Read observations expose no executable element handles. Later fill/submit must create fresh node-bound semantic handles with immediate pre-effect role/name/value/editability/draft rechecks; this slice cannot be reused as element authority.
+
+Authenticated contiguous late results for canceled/expired requests are consumed and discarded without tearing down the selected transport or recreating authority. Malformed current replies and invalid session/sequence remain errors. Settings hide only withdraws management; an independently admitted accepted read uses its task/action lifetime. Mic mute/deafen and capture churn do not revoke accepted browser tasks. Stop/pause/lock/disconnect, exact task cancellation, actor/grant/scope/selection revocation do.
+
+## Entry-point inventory and completion limits
+
+| Entry point | Contract |
+| --- | --- |
+| Accepted ReadPage producer | Must issue exact payload/target from qualified accepted source; currently absent |
+| NativeEffects / ExecutionController | Sole durable claim, final authorization, actual job ownership and observed finalization |
+| Native browser bridge / status / result | Exact selected task context, fixed budget, withdrawal and late-result discard |
+| Extension worker / bundled extractor | Shared actual job slot, fixed code, exact document/permission, bounded untrusted text |
+| Browser lifecycle and DOM events | Immediate observation invalidation; no authority from page messages |
+| Settings document chooser | Unchanged metadata-only setup; no content read command added |
+| Ledger history / planner / memory | Provenance summary only; no reconstructed transient read authority or implicit retention |
+| Navigate, fill/submit, Gmail/X/project drivers | Separate follow-on contracts and native accepted authority; not enabled by generic reading |
+
+The first checkpoint establishes the strict shared contract and native provenance/result validation before connecting browser execution. Subsequent source checkpoints must wire the actual durable owner, bounded extractor and correlated route; an uninvoked helper is not a completed M5 workflow. No tests, fixtures, browser interaction or live qualification are performed under the current user restrictions. Static/build evidence is distinct from runtime compatibility and the three mandatory owner workflows.
