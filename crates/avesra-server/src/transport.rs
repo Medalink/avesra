@@ -54,9 +54,12 @@ struct ServerState {
     sessions: Mutex<std::collections::HashMap<Uuid, LiveSession>>,
     #[cfg(unix)]
     actor_admission: Arc<Semaphore>,
+    #[cfg(unix)]
+    actor_cancellations: Arc<Semaphore>,
 }
 #[cfg(unix)]
 struct LiveSession {
+    withdrawal_digest: [u8; 32],
     device: Uuid,
     epoch: u64,
     output_epoch: u64,
@@ -148,6 +151,8 @@ pub fn router(auth: AuthStore, directory: &std::path::Path) -> Result<Router, St
             sessions: Mutex::new(std::collections::HashMap::new()),
             #[cfg(unix)]
             actor_admission: Arc::new(Semaphore::new(2)),
+            #[cfg(unix)]
+            actor_cancellations: Arc::new(Semaphore::new(2)),
         }));
     Ok(router)
 }
@@ -565,6 +570,7 @@ async fn control(
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Result<Response, StatusCode> {
+    use sha2::{Digest, Sha256};
     let permit = auth
         .admission
         .clone()
@@ -582,6 +588,7 @@ async fn control(
         .ok_or(StatusCode::UNAUTHORIZED)?
         .to_owned();
     let store = auth.clone();
+    let withdrawal_digest: [u8; 32] = Sha256::digest(token.as_bytes()).into();
     let device = tokio::task::spawn_blocking(move || {
         let _permit = permit;
         store
@@ -598,7 +605,7 @@ async fn control(
         .max_frame_size(MAX_CONTROL_BYTES)
         .write_buffer_size(1024)
         .max_write_buffer_size(MAX_CONTROL_BYTES * 2)
-        .on_upgrade(move |socket| session(socket, auth, device, connection)))
+        .on_upgrade(move |socket| session(socket, auth, device, connection, withdrawal_digest)))
 }
 async fn active(auth: Shared, device: Uuid) -> bool {
     let Ok(permit) = auth.admission.clone().try_acquire_owned() else {
@@ -626,6 +633,7 @@ async fn session(
     auth: Shared,
     device_id: Uuid,
     _connection: OwnedSemaphorePermit,
+    _withdrawal_digest: [u8; 32],
 ) {
     let session_id = Uuid::new_v4();
     #[cfg(unix)]
@@ -748,6 +756,7 @@ async fn session(
                 break;
             };
             let live = sessions.entry(session_id).or_insert_with(|| LiveSession {
+                withdrawal_digest: _withdrawal_digest,
                 device: device_id,
                 epoch: envelope.capture_epoch,
                 output_epoch: envelope.playback_epoch,

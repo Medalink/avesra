@@ -120,13 +120,21 @@ pub(super) async fn cancel(
     headers: HeaderMap,
     request: avesra_contracts::actors::Cancel,
 ) -> Result<(), StatusCode> {
+    use sha2::{Digest, Sha256};
+    use subtle::ConstantTimeEq;
     request.validate().map_err(|_| StatusCode::BAD_REQUEST)?;
-    let device = tokio::time::timeout(
-        Duration::from_secs(5),
-        authenticate_headers(state.clone(), &headers),
-    )
-    .await
-    .map_err(|_| StatusCode::REQUEST_TIMEOUT)??;
+    let _admission = state
+        .actor_cancellations
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| StatusCode::TOO_MANY_REQUESTS)?;
+    let token = headers
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .filter(|value| value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit()))
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+    let digest: [u8; 32] = Sha256::digest(token.as_bytes()).into();
     let mut sessions = state
         .sessions
         .lock()
@@ -134,7 +142,11 @@ pub(super) async fn cancel(
     let live = sessions
         .get_mut(&request.session)
         .ok_or(StatusCode::CONFLICT)?;
-    if live.device != device || live.updated.elapsed() >= Duration::from_secs(30) {
+    // This proof was established by the already authenticated control session.
+    // It can only remove authority, and never waits behind its database writer.
+    if !bool::from(live.withdrawal_digest.ct_eq(&digest))
+        || live.updated.elapsed() >= Duration::from_secs(30)
+    {
         return Err(StatusCode::CONFLICT);
     }
     if let Some((epoch, cancelled)) = live.actor_attempts.get_mut(&request.attempt) {
