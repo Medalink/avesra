@@ -174,7 +174,7 @@ pub struct ExecutionReceipt {
     pub crossed_commit_boundary: bool,
     pub observation: Option<EffectObservation>,
 }
-fn now_ms() -> Result<u64, ErrorCode> {
+pub(crate) fn now_ms() -> Result<u64, ErrorCode> {
     u64::try_from(
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -198,6 +198,14 @@ impl ExecutionController {
     pub fn management(&mut self) -> &mut Store {
         &mut self.store
     }
+    pub fn begin_browser_read<'a>(
+        &'a mut self,
+        step: Uuid,
+        session: &DispatchSession,
+        cancellation: &Cancellation,
+    ) -> Result<crate::browser_execution::ReadExecution<'a>, ErrorCode> {
+        crate::browser_execution::ReadExecution::begin(&mut self.store, step, session, cancellation)
+    }
     pub fn execute(
         &mut self,
         step: Uuid,
@@ -220,6 +228,12 @@ impl ExecutionController {
         );
         let mut committed = false;
         let mut authorize = || {
+            if matches!(
+                permit.action.payload,
+                avesra_contracts::ActionPayload::ReadPage { .. }
+            ) {
+                return Err(ErrorCode::Unsupported);
+            }
             let now = now_ms()?;
             let elapsed_ms =
                 u64::try_from(started.elapsed().as_millis()).map_err(|_| ErrorCode::Expired)?;
