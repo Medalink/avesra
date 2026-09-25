@@ -90,7 +90,7 @@ impl Store {
             return Err(ErrorCode::Malformed);
         }
         observation.validate(&action, Outcome::Success)?;
-        if !matches!(observation, crate::execution::EffectObservation::Application{app_id,catalog_revision: revision,..} if app_id==target && revision==catalog_revision)
+        if !matches!(observation, crate::execution::EffectObservation::Application{app_id,catalog_revision: revision,..} | crate::execution::EffectObservation::PackagedApplication{app_id,catalog_revision: revision,..} if app_id==target && revision==catalog_revision)
         {
             return Err(ErrorCode::Malformed);
         }

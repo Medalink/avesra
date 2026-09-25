@@ -151,9 +151,8 @@
       </div>
       {#if !candidate.selectable}<p class="av-hint text-amber-200">This native registration requires an environment that is not supported yet.</p>{/if}
       {#if !candidate.packaged && !candidate.working_directory}<button class="av-btn av-btn-secondary av-btn-sm self-start" disabled={busy || !enabled || !candidate.selectable} onclick={folder}>Choose working folder</button>{/if}
-      {#if candidate.packaged}<p class="av-hint text-amber-200">Packaged application opening is not available yet. Saving this exact mapping does not activate the app.</p>{:else}
       <div class="flex flex-col gap-2">
-        <div class="flex items-center justify-between gap-3"><span class="av-hint">Expected application window</span><button class="av-btn av-btn-secondary av-btn-sm" disabled={busy || !enabled || !candidate.selectable || !candidate.working_directory} onclick={observeWindows}>Observe open windows</button></div>
+        <div class="flex items-center justify-between gap-3"><span class="av-hint">Expected application window</span><button class="av-btn av-btn-secondary av-btn-sm" disabled={busy || !enabled || !candidate.selectable || (!candidate.packaged && !candidate.working_directory)} onclick={observeWindows}>Observe open windows</button></div>
         <p class="av-hint">Open the chosen app yourself, then select its main window. This observes only matching application windows and does not focus them. Window choices expire after 30 seconds.</p>
         {#if candidate.window_hints.length}
           <select class="av-input av-select w-full" aria-label="Expected application window" value={candidate.selected_hint ?? ""} disabled={busy} onchange={e => chooseWindow(e.currentTarget.value)}>
@@ -163,7 +162,6 @@
           {#if !candidate.hints_complete}<p class="av-hint text-amber-200">Window discovery was incomplete. Only the listed native observations can be selected.</p>{/if}
         {:else}<p class="av-hint">No eligible window is selected. Saving a name alone cannot verify opening.</p>{/if}
       </div>
-      {/if}
       <label class="flex flex-col gap-1.5"><span class="av-hint">Name to remember</span><input class="av-input w-full" bind:value={phrase} maxlength="64" placeholder="e.g. editor" disabled={busy} /></label>
       <SetupLock {runtime} purpose="application mapping" />
       <p class="av-hint">Create the local owner in People & Voice ID first. Verify here after reviewing the entry, then choose Remember. A fresh verification is required to forget a mapping.</p>

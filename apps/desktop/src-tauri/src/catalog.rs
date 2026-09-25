@@ -455,15 +455,16 @@ pub async fn observe_app_windows(
         if choice.discovered.elapsed() >= Duration::from_secs(120) {
             return Err("Candidate expired; scan again".into());
         }
-        if choice.native.packaged() {
-            return Err("Packaged window observation is not available yet".into());
-        }
         choice.hints.clear();
         choice.selected_hint = None;
         choice.hints_complete = false;
         Ok((
             choice.native.clone(),
-            choice.cwd.clone().ok_or("Choose a working folder first")?,
+            if choice.native.packaged() {
+                None
+            } else {
+                Some(choice.cwd.clone().ok_or("Choose a working folder first")?)
+            },
             choice.discovered,
         ))
     })?;
@@ -472,7 +473,7 @@ pub async fn observe_app_windows(
         let actor = crate::owner::current_actor(&app).await?;
         with_panel(&app, panel, |_| Ok(()))?;
         let hints = tokio::task::spawn_blocking(move || {
-            let record = native.select(actor, Some(&cwd))?;
+            let record = native.select(actor, cwd.as_deref())?;
             avesra_windows::apps::window_hints(&record)
         })
         .await

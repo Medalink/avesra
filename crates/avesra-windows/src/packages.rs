@@ -24,12 +24,52 @@ pub struct Discovery {
     pub skipped: u32,
     pub truncated: bool,
 }
-struct Apartment;
+pub(crate) struct Apartment;
 impl Apartment {
-    fn enter() -> Result<Self, ErrorCode> {
+    pub(crate) fn enter() -> Result<Self, ErrorCode> {
         unsafe { RoInitialize(RO_INIT_MULTITHREADED) }.map_err(|_| ErrorCode::Unavailable)?;
         Ok(Self)
     }
+}
+
+/// Exact installed version and application membership, not a family-only match.
+pub(crate) fn revalidate_identity(launch: &LaunchIdentity) -> Result<(), ErrorCode> {
+    let LaunchIdentity::Packaged {
+        app_id,
+        package_full_name,
+        publisher_id,
+    } = launch
+    else {
+        return Err(ErrorCode::Malformed);
+    };
+    let _apartment = Apartment::enter()?;
+    let manager = PackageManager::new().map_err(|_| ErrorCode::Unavailable)?;
+    let package = manager
+        .FindPackageByUserSecurityIdPackageFullName(
+            &HSTRING::new(),
+            &HSTRING::from(package_full_name),
+        )
+        .map_err(|_| ErrorCode::Stale)?;
+    let fresh = entries(
+        &package,
+        &crate::principal::current_user()?,
+        Instant::now() + Duration::from_secs(5),
+    )?;
+    if fresh.truncated
+        || fresh
+            .candidates
+            .iter()
+            .filter(|v| {
+                v.app_id == *app_id
+                    && v.package_full_name.eq_ignore_ascii_case(package_full_name)
+                    && v.publisher_id.eq_ignore_ascii_case(publisher_id)
+            })
+            .count()
+            != 1
+    {
+        return Err(ErrorCode::Stale);
+    }
+    Ok(())
 }
 impl Drop for Apartment {
     fn drop(&mut self) {

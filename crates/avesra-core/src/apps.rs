@@ -154,7 +154,7 @@ impl AppRecord {
     }
 }
 
-fn package_identity(app: &str, full: &str, publisher: &str) -> bool {
+pub(crate) fn package_identity(app: &str, full: &str, publisher: &str) -> bool {
     let component = |v: &str| {
         !v.is_empty()
             && v.bytes()

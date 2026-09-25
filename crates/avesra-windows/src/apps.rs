@@ -17,14 +17,19 @@ use uuid::Uuid;
 use windows::{
     Win32::{
         Foundation::{
-            CloseHandle, ERROR_NO_MORE_FILES, FILETIME, HANDLE, HWND, LPARAM, WAIT_TIMEOUT,
+            APPMODEL_ERROR_NO_APPLICATION, APPMODEL_ERROR_NO_PACKAGE, CloseHandle,
+            ERROR_NO_MORE_FILES, ERROR_SUCCESS, FILETIME, HANDLE, HWND, LPARAM, WAIT_TIMEOUT,
         },
         Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute},
-        Storage::FileSystem::{
-            BY_HANDLE_FILE_INFORMATION, FILE_NAME_NORMALIZED, GetFileInformationByHandle,
-            GetFinalPathNameByHandleW,
+        Storage::{
+            FileSystem::{
+                BY_HANDLE_FILE_INFORMATION, FILE_NAME_NORMALIZED, GetFileInformationByHandle,
+                GetFinalPathNameByHandleW,
+            },
+            Packaging::Appx::{GetApplicationUserModelId, GetPackageFullName},
         },
         System::{
+            Com::{CLSCTX_INPROC_SERVER, CoCreateInstance},
             Diagnostics::ToolHelp::{
                 CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
                 TH32CS_SNAPPROCESS,
@@ -37,6 +42,7 @@ use windows::{
         },
         UI::{
             Input::KeyboardAndMouse::IsWindowEnabled,
+            Shell::{AO_NOERRORUI, ApplicationActivationManager, IApplicationActivationManager},
             WindowsAndMessaging::{
                 EnumWindows, GW_OWNER, GetClassNameW, GetForegroundWindow, GetWindow,
                 GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible,
@@ -44,7 +50,7 @@ use windows::{
             },
         },
     },
-    core::{BOOL, HRESULT, PWSTR},
+    core::{BOOL, HRESULT, PCWSTR, PWSTR},
 };
 
 fn path_of(file: &File) -> Result<String, ErrorCode> {
@@ -278,6 +284,98 @@ fn live_process(
     }
     Ok(Some((process, created)))
 }
+fn identity_process(
+    pid: u32,
+    expected: &LaunchIdentity,
+) -> Result<Option<(Process, u64)>, ErrorCode> {
+    if let LaunchIdentity::Executable(value) = expected {
+        return live_process(pid, value);
+    }
+    let process = Process(
+        unsafe {
+            OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+                false,
+                pid,
+            )
+        }
+        .map_err(|_| ErrorCode::Unavailable)?,
+    );
+    if unsafe { WaitForSingleObject(process.0, 0) } != WAIT_TIMEOUT {
+        return Err(ErrorCode::Stale);
+    }
+    if !package_process_matches(process.0, expected)? {
+        return Ok(None);
+    }
+    if !crate::principal::same_process_context(process.0)? {
+        return Err(ErrorCode::Unauthenticated);
+    }
+    let (mut created, mut exited, mut kernel, mut user) = (
+        FILETIME::default(),
+        FILETIME::default(),
+        FILETIME::default(),
+        FILETIME::default(),
+    );
+    unsafe { GetProcessTimes(process.0, &mut created, &mut exited, &mut kernel, &mut user) }
+        .map_err(|_| ErrorCode::Unavailable)?;
+    let created = (u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime);
+    if created == 0 {
+        return Err(ErrorCode::Malformed);
+    }
+    Ok(Some((process, created)))
+}
+fn package_process_matches(process: HANDLE, expected: &LaunchIdentity) -> Result<bool, ErrorCode> {
+    let LaunchIdentity::Packaged {
+        app_id,
+        package_full_name,
+        ..
+    } = expected
+    else {
+        return Err(ErrorCode::Malformed);
+    };
+    let mut full = [0u16; 513];
+    let mut count = full.len() as u32;
+    let status = unsafe { GetPackageFullName(process, &mut count, Some(PWSTR(full.as_mut_ptr()))) };
+    if status == APPMODEL_ERROR_NO_PACKAGE {
+        return Ok(false);
+    }
+    if status != ERROR_SUCCESS {
+        return Err(ErrorCode::Unavailable);
+    }
+    let decode = |value: &[u16], count: u32| -> Result<String, ErrorCode> {
+        let count = count as usize;
+        if count < 2
+            || count > value.len()
+            || value[count - 1] != 0
+            || value[..count - 1].contains(&0)
+        {
+            return Err(ErrorCode::Malformed);
+        }
+        String::from_utf16(&value[..count - 1]).map_err(|_| ErrorCode::Malformed)
+    };
+    if !decode(&full, count)?.eq_ignore_ascii_case(package_full_name) {
+        return Ok(false);
+    }
+    let mut app = [0u16; 513];
+    let mut count = app.len() as u32;
+    let status =
+        unsafe { GetApplicationUserModelId(process, &mut count, Some(PWSTR(app.as_mut_ptr()))) };
+    if status == APPMODEL_ERROR_NO_APPLICATION {
+        return Ok(false);
+    }
+    if status != ERROR_SUCCESS {
+        return Err(ErrorCode::Unavailable);
+    }
+    let actual = decode(&app, count)?;
+    // Family is a case-insensitive package identity. Relative app ID is kept
+    // exact rather than broadening authority without an API identity contract.
+    Ok(match (actual.split_once('!'), app_id.split_once('!')) {
+        (Some((family, app)), Some((expected_family, expected_app))) => {
+            family.eq_ignore_ascii_case(expected_family) && app == expected_app
+        }
+        _ => false,
+    })
+}
 #[derive(Clone)]
 pub struct WindowHint {
     window: u64,
@@ -285,7 +383,7 @@ pub struct WindowHint {
     created: u64,
     class: String,
     title: String,
-    image: ExecutableIdentity,
+    image: LaunchIdentity,
     observed: Instant,
 }
 impl WindowHint {
@@ -304,7 +402,7 @@ pub struct WindowHints {
     pub complete: bool,
 }
 struct HintScan<'a> {
-    expected: &'a ExecutableIdentity,
+    expected: &'a LaunchIdentity,
     class: &'a Option<String>,
     windows: Vec<WindowHint>,
     seen: usize,
@@ -329,7 +427,7 @@ unsafe extern "system" fn hint_visit(window: HWND, value: LPARAM) -> BOOL {
     unsafe {
         GetWindowThreadProcessId(window, Some(&mut pid));
     }
-    match live_process(pid, state.expected) {
+    match identity_process(pid, state.expected) {
         Ok(Some((_process, created))) => {
             // A matching application with a blocked/hidden/modal/wrong-class
             // window is not evidence of no running instance. Never spawn over it.
@@ -362,21 +460,27 @@ unsafe extern "system" fn hint_visit(window: HWND, value: LPARAM) -> BOOL {
 }
 pub fn window_hints(record: &AppRecord) -> Result<WindowHints, ErrorCode> {
     record.validate()?;
-    let LaunchIdentity::Executable(expected) = &record.launch else {
-        return Err(ErrorCode::Unsupported);
+    let _file = match &record.launch {
+        LaunchIdentity::Executable(expected) => {
+            let mut file = open_executable(&expected.path)?;
+            if identity(
+                &mut file,
+                expected.arguments.clone(),
+                expected.working_directory.clone(),
+            )? != *expected
+            {
+                return Err(ErrorCode::Stale);
+            }
+            Some(file)
+        }
+        LaunchIdentity::Packaged { .. } => {
+            crate::packages::revalidate_identity(&record.launch)?;
+            None
+        }
     };
-    let mut file = open_executable(&expected.path)?;
-    if identity(
-        &mut file,
-        expected.arguments.clone(),
-        expected.working_directory.clone(),
-    )? != *expected
-    {
-        return Err(ErrorCode::Stale);
-    }
-    Ok(scan_hints(expected, &record.window_class))
+    Ok(scan_hints(&record.launch, &record.window_class))
 }
-fn scan_hints(expected: &ExecutableIdentity, class: &Option<String>) -> WindowHints {
+fn scan_hints(expected: &LaunchIdentity, class: &Option<String>) -> WindowHints {
     let mut scan = HintScan {
         expected,
         class,
@@ -403,13 +507,10 @@ fn scan_hints(expected: &ExecutableIdentity, class: &Option<String>) -> WindowHi
 /// Only a native-created, freshly observed hint can be attached before the new
 /// immutable record is published. This does not assert application readiness.
 pub fn bind_window_hint(record: &mut AppRecord, hint: &WindowHint) -> Result<(), ErrorCode> {
-    let LaunchIdentity::Executable(expected) = &record.launch else {
-        return Err(ErrorCode::Unsupported);
-    };
-    if hint.observed.elapsed() >= Duration::from_secs(30) || hint.image != *expected {
+    if hint.observed.elapsed() >= Duration::from_secs(30) || hint.image != record.launch {
         return Err(ErrorCode::Stale);
     }
-    let Some((_process, created)) = live_process(hint.pid, expected)? else {
+    let Some((_process, created)) = identity_process(hint.pid, &record.launch)? else {
         return Err(ErrorCode::Stale);
     };
     if created != hint.created
@@ -474,7 +575,17 @@ unsafe extern "system" fn visit(window: HWND, value: LPARAM) -> BOOL {
         state.overflow = true;
         return BOOL(0);
     }
+    let mut pid = 0;
+    unsafe {
+        GetWindowThreadProcessId(window, Some(&mut pid));
+    }
+    if pid != state.pid {
+        return BOOL(1);
+    }
     if !matches_window(window, state.pid, &state.class) {
+        // Known same-process auxiliary/modal/ineligible windows do not prove
+        // application readiness. Preserve this conservative qualification gap.
+        state.overflow = true;
         return BOOL(1);
     }
     if state.matched.len() == 2 {
@@ -490,10 +601,7 @@ pub fn launch(
 ) -> Result<EffectResult, ErrorCode> {
     record.validate()?;
     let LaunchIdentity::Executable(expected) = &record.launch else {
-        return Ok(EffectResult {
-            outcome: Outcome::Unsupported,
-            observation: None,
-        });
+        return activate_package(record, authorize_commit);
     };
     let mut executable = open_executable(&expected.path)?;
     let directory = open_directory(&expected.working_directory)?;
@@ -512,7 +620,7 @@ pub fn launch(
             observation: None,
         });
     }
-    let existing = scan_hints(expected, &record.window_class);
+    let existing = scan_hints(&record.launch, &record.window_class);
     if !existing.complete
         || existing.windows.len() > 1
         || (!existing.windows.is_empty() && !expected.arguments.is_empty())
@@ -631,17 +739,14 @@ fn focus(
     hint: &WindowHint,
     authorize: &mut dyn FnMut() -> Result<(), ErrorCode>,
 ) -> Result<EffectResult, ErrorCode> {
-    let LaunchIdentity::Executable(expected) = &record.launch else {
-        return Err(ErrorCode::Unsupported);
-    };
-    if !expected.arguments.is_empty()
-        || hint.image != *expected
+    if matches!(&record.launch, LaunchIdentity::Executable(value) if !value.arguments.is_empty())
+        || hint.image != record.launch
         || hint.observed.elapsed() >= Duration::from_secs(30)
     {
         return Err(ErrorCode::Stale);
     }
     let window = HWND(hint.window as usize as *mut _);
-    let Some((process, created)) = live_process(hint.pid, expected)? else {
+    let Some((process, created)) = identity_process(hint.pid, &record.launch)? else {
         return Err(ErrorCode::Stale);
     };
     if created != hint.created || !matches_window(window, hint.pid, &record.window_class) {
@@ -655,6 +760,12 @@ fn focus(
     }
     if !crate::principal::same_process_context(process.0)? {
         return Err(ErrorCode::Stale);
+    }
+    if matches!(&record.launch, LaunchIdentity::Packaged { .. }) {
+        crate::packages::revalidate_identity(&record.launch)?;
+        if !package_process_matches(process.0, &record.launch)? {
+            return Err(ErrorCode::Stale);
+        }
     }
     authorize()?;
     let mut focused = false;
@@ -671,7 +782,11 @@ fn focus(
                 break;
             }
             if unsafe { GetForegroundWindow() } == window {
-                focused = true;
+                focused = !matches!(&record.launch, LaunchIdentity::Packaged { .. })
+                    || (package_process_matches(process.0, &record.launch).unwrap_or(false)
+                        && crate::principal::same_process_context(process.0).unwrap_or(false)
+                        && unsafe { GetForegroundWindow() } == window
+                        && matches_window(window, hint.pid, &record.window_class));
                 break;
             }
             std::thread::sleep(Duration::from_millis(20));
@@ -683,13 +798,142 @@ fn focus(
         } else {
             Outcome::UnknownEffect
         },
-        observation: Some(EffectObservation::Application {
+        observation: Some(app_observation(
+            record,
+            Some(hint.pid),
+            Some(created),
+            focused.then_some(hint.window),
+            true,
+            Some(focused),
+        )),
+    })
+}
+
+fn activate_package(
+    record: &AppRecord,
+    authorize: &mut dyn FnMut() -> Result<(), ErrorCode>,
+) -> Result<EffectResult, ErrorCode> {
+    let LaunchIdentity::Packaged { app_id, .. } = &record.launch else {
+        return Err(ErrorCode::Malformed);
+    };
+    if record.window_class.is_none() {
+        return Ok(EffectResult {
+            outcome: Outcome::NeedsInput,
+            observation: None,
+        });
+    }
+    let _apartment = crate::packages::Apartment::enter()?;
+    crate::packages::revalidate_identity(&record.launch)?;
+    let existing = scan_hints(&record.launch, &record.window_class);
+    if !existing.complete || existing.windows.len() > 1 {
+        return Ok(EffectResult {
+            outcome: Outcome::NeedsInput,
+            observation: None,
+        });
+    }
+    if let Some(hint) = existing.windows.first() {
+        return focus(record, hint, authorize);
+    }
+    let manager: IApplicationActivationManager =
+        unsafe { CoCreateInstance(&ApplicationActivationManager, None, CLSCTX_INPROC_SERVER) }
+            .map_err(|_| ErrorCode::Unavailable)?;
+    let app: Vec<u16> = app_id.encode_utf16().chain(Some(0)).collect();
+    // No error UI, debugging options, arbitrary arguments, or retry. Recheck
+    // registration after all preflight inspection, then final durable authority.
+    crate::packages::revalidate_identity(&record.launch)?;
+    authorize()?;
+    let pid =
+        unsafe { manager.ActivateApplication(PCWSTR(app.as_ptr()), PCWSTR::null(), AO_NOERRORUI) }
+            .ok()
+            .filter(|v| *v != 0);
+    let mut matched = false;
+    let mut observed = None;
+    let mut process_created = None;
+    if let Some(pid) = pid
+        && let Ok(Some((process, created))) = identity_process(pid, &record.launch)
+    {
+        matched = true;
+        process_created = Some(created);
+        let started = Instant::now();
+        while started.elapsed() < Duration::from_secs(3) {
+            if unsafe { WaitForSingleObject(process.0, 0) } != WAIT_TIMEOUT {
+                break;
+            }
+            let mut windows = Windows {
+                pid,
+                class: record.window_class.clone(),
+                seen: 0,
+                matched: Vec::with_capacity(2),
+                overflow: false,
+            };
+            if unsafe { EnumWindows(Some(visit), LPARAM((&mut windows as *mut Windows) as isize)) }
+                .is_err()
+                || windows.overflow
+                || windows.matched.len() > 1
+            {
+                break;
+            }
+            if let Some(window) = windows.matched.first() {
+                if crate::packages::revalidate_identity(&record.launch).is_ok()
+                    && matches!(identity_process(pid, &record.launch), Ok(Some((_, current))) if current == created)
+                    && unsafe { WaitForSingleObject(process.0, 0) } == WAIT_TIMEOUT
+                    && matches_window(HWND(*window as usize as *mut _), pid, &record.window_class)
+                {
+                    observed = Some(*window);
+                }
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+    Ok(EffectResult {
+        outcome: if observed.is_some() {
+            Outcome::Success
+        } else {
+            Outcome::UnknownEffect
+        },
+        observation: Some(app_observation(
+            record,
+            pid,
+            process_created,
+            observed,
+            matched,
+            None,
+        )),
+    })
+}
+fn app_observation(
+    record: &AppRecord,
+    process_id: Option<u32>,
+    process_created: Option<u64>,
+    window: Option<u64>,
+    matched: bool,
+    focus_verified: Option<bool>,
+) -> EffectObservation {
+    match &record.launch {
+        LaunchIdentity::Executable(_) => EffectObservation::Application {
             app_id: record.id,
             catalog_revision: record.revision,
-            process_id: Some(hint.pid),
-            window: focused.then_some(hint.window),
-            image_matched: true,
-            focus_verified: Some(focused),
-        }),
-    })
+            process_id,
+            window,
+            image_matched: matched,
+            focus_verified,
+        },
+        LaunchIdentity::Packaged {
+            app_id,
+            package_full_name,
+            publisher_id,
+        } => EffectObservation::PackagedApplication {
+            app_id: record.id,
+            catalog_revision: record.revision,
+            aumid: app_id.clone(),
+            package_full_name: package_full_name.clone(),
+            publisher_id: publisher_id.clone(),
+            process_id,
+            process_created,
+            window,
+            package_matched: matched,
+            focus_verified,
+        },
+    }
 }

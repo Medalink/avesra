@@ -23,6 +23,18 @@ pub struct VolumeLevel {
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum EffectObservation {
+    PackagedApplication {
+        app_id: Uuid,
+        catalog_revision: Uuid,
+        aumid: String,
+        package_full_name: String,
+        publisher_id: String,
+        process_id: Option<u32>,
+        process_created: Option<u64>,
+        window: Option<u64>,
+        package_matched: bool,
+        focus_verified: Option<bool>,
+    },
     Application {
         app_id: Uuid,
         catalog_revision: Uuid,
@@ -44,6 +56,38 @@ impl EffectObservation {
         outcome: Outcome,
     ) -> Result<(), ErrorCode> {
         match self {
+            Self::PackagedApplication {
+                app_id,
+                catalog_revision,
+                aumid,
+                package_full_name,
+                publisher_id,
+                process_id,
+                process_created,
+                window,
+                package_matched,
+                focus_verified,
+            } => {
+                if action.payload
+                    != (avesra_contracts::ActionPayload::LaunchApp { app_id: *app_id })
+                    || action.target_id != *app_id
+                    || catalog_revision.is_nil()
+                    || aumid.len() > 512
+                    || package_full_name.len() > 512
+                    || publisher_id.len() > 128
+                    || !crate::apps::package_identity(aumid, package_full_name, publisher_id)
+                    || process_id == &Some(0)
+                    || process_created == &Some(0)
+                    || window == &Some(0)
+                    || (*package_matched && (process_id.is_none() || process_created.is_none()))
+                    || (window.is_some() && !package_matched)
+                    || (outcome == Outcome::Success
+                        && (window.is_none() || !package_matched || *focus_verified == Some(false)))
+                {
+                    return Err(ErrorCode::Malformed);
+                }
+                Ok(())
+            }
             Self::Application {
                 app_id,
                 catalog_revision,
