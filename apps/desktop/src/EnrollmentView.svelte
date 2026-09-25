@@ -6,10 +6,18 @@
   type Candidate = { id: string; revision: string; model_revision: string | null; segments: number | null; state: string };
   let status = $state<Status | null>(null);
   let candidates = $state<Candidate[]>([]);
+  type Owner = { state: string; actor: string | null; revision: string | null };
+  let owner = $state<Owner | null>(null);
+  let ownerGeneration = 0;
+  let ownerContext = "";
   let busy = $state(false);
   let error = $state("");
   let generation = 0;
   let context = "";
+  $effect(() => {
+    const next = `${runtime?.connected}:${runtime?.locked}`;
+    if (next !== ownerContext) { ownerContext = next; ownerGeneration++; owner = null; }
+  });
   $effect(() => {
     const next = `${runtime?.capture_epoch}:${runtime?.connected}`;
     if (next !== context) { context = next; if (!busy) { generation++; status = null; } }
@@ -18,6 +26,17 @@
     const current = generation;
     const next = await command<Candidate[]>("speaker_candidates");
     if (current === generation) candidates = next;
+  }
+  async function refreshOwner() {
+    const current = ++ownerGeneration;
+    try { const next = await command<Owner>("owner_status"); if (current === ownerGeneration) owner = next; }
+    catch (e) { if (current === ownerGeneration) { owner = null; error = String(e); } }
+  }
+  async function createOwner() {
+    busy = true; error = ""; const current = ++ownerGeneration;
+    try { const next = await command<Owner>("create_owner"); if (current === ownerGeneration) owner = next; }
+    catch (e) { if (current === ownerGeneration) { owner = null; error = String(e); } }
+    finally { busy = false; }
   }
   async function prepare() {
     busy = true; error = "";
@@ -53,15 +72,19 @@
     catch (e) { error = String(e); }
     finally { busy = false; }
   }
-  onMount(() => { if (native) void refresh().catch(e => error = String(e)); return () => { generation++; }; });
+  onMount(() => { if (native) { void refresh().catch(e => error = String(e)); void refreshOwner(); } return () => { generation++; ownerGeneration++; }; });
 </script>
 
 <section class="section">
   <span class="av-kicker">Owner</span>
   <div class="av-card flex flex-col gap-3 p-3.5">
-    <div class="row"><h2>No owner enrolled</h2><span class="av-chip text-amber-200 ring-amber-400/30">Setup required</span></div>
-    <p class="av-hint">Enrollment collects prompted phrases, natural speech and separate held-out phrases. Windows verification is required to prepare it.</p>
-    <button class="av-btn av-btn-primary self-start" disabled={busy || !runtime?.connected || !runtime.settings.microphone || runtime.settings.explicit_mute || !!status} onclick={prepare}>Prepare owner enrollment</button>
+    <div class="flex items-center gap-3"><span class="grid size-9 shrink-0 place-items-center bg-[#3a5dd8]/25 font-mono text-[12px] font-medium text-[#b9c7f5]">YOU</span><div class="flex min-w-0 flex-1 flex-col"><span class="text-[13px] font-medium text-zinc-50">{owner?.state === "configured" ? "You · local owner" : owner?.state === "missing" ? "Set up the owner" : "Owner status unavailable"}</span><span class="av-hint">{owner?.state === "configured" ? "Bound to this Windows user. Voice enrollment remains unqualified." : "Create one protected owner identity after Windows verification."}</span></div><span class="av-chip text-amber-200 ring-amber-400/30">Voice setup required</span></div>
+    <div class="flex items-center gap-2">
+      {#if owner?.state === "missing"}<button class="av-btn av-btn-primary av-btn-sm" disabled={busy || !runtime?.connected || runtime.locked} onclick={createOwner}>Create owner</button>{/if}
+      <button class="av-btn av-btn-ghost av-btn-sm" disabled={busy || !native} onclick={() => refreshOwner().catch(e => error = String(e))}>Refresh owner status</button>
+    </div>
+    <p class="av-hint">Owner creation uses the one-use Windows verification above. It grants no voice readiness. Enrollment collects prompted phrases, natural speech and separate held-out phrases; verify again before preparing it.</p>
+    <button class="av-btn av-btn-primary self-start" disabled={owner?.state !== "configured" || busy || !runtime?.connected || !runtime.settings.microphone || runtime.settings.explicit_mute || !!status} onclick={prepare}>Prepare owner enrollment</button>
     {#if runtime?.settings.explicit_mute}<p class="av-hint">Deliberate microphone mute is on. Unmute in Audio & Voice before verifying and preparing enrollment.</p>{/if}
   </div>
   {#if status}

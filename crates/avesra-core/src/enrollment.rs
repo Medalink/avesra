@@ -88,6 +88,7 @@ fn normalized(value: &[f32]) -> Result<Vec<f32>, ErrorCode> {
 }
 pub struct Enrollment {
     pub id: Uuid,
+    pub prepared_by: Uuid,
     epoch: u64,
     revision: String,
     microphone: String,
@@ -99,8 +100,14 @@ pub struct Enrollment {
     vectors: Vec<Vec<f32>>,
 }
 impl Enrollment {
-    pub fn new(epoch: u64, revision: String, microphone: String) -> Result<Self, ErrorCode> {
+    pub fn new(
+        epoch: u64,
+        revision: String,
+        microphone: String,
+        prepared_by: Uuid,
+    ) -> Result<Self, ErrorCode> {
         if epoch == 0
+            || prepared_by.is_nil()
             || !valid_revision(&revision)
             || !crate::state::valid_audio_device_id(&microphone)
         {
@@ -108,6 +115,7 @@ impl Enrollment {
         }
         Ok(Self {
             id: Uuid::new_v4(),
+            prepared_by,
             epoch,
             revision,
             microphone,

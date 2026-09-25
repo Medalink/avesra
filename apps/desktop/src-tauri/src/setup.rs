@@ -16,6 +16,20 @@ struct Proof {
     epoch: u64,
     verified_at: Instant,
 }
+pub struct ManagementProof(Proof);
+impl ManagementProof {
+    pub fn current(&self, state: &Runtime) -> bool {
+        let Ok(local) = state.local.lock() else {
+            return false;
+        };
+        !local.locked
+            && local.connected
+            && self.0.verified_at.elapsed() < Duration::from_secs(60)
+            && self.0.challenge == state.setup.generation.load(Ordering::SeqCst)
+            && self.0.epoch == local.capture_epoch
+            && self.0.generation == state.connection_generation.load(Ordering::SeqCst)
+    }
+}
 #[derive(Default)]
 pub struct Setup {
     recording: tokio::sync::Mutex<()>,
@@ -36,11 +50,21 @@ pub struct SetupStatus {
     next_segment: Option<avesra_core::enrollment::SegmentKind>,
 }
 impl Setup {
+    pub fn challenge(&self) -> u64 {
+        self.generation.load(Ordering::SeqCst)
+    }
     fn consume_proof(
         &self,
         local: &avesra_core::state::LocalState,
         generation: u64,
     ) -> Result<(), String> {
+        self.management_proof(local, generation).map(|_| ())
+    }
+    pub fn management_proof(
+        &self,
+        local: &avesra_core::state::LocalState,
+        generation: u64,
+    ) -> Result<ManagementProof, String> {
         let mut proof = self.proof.lock().map_err(|_| "Setup unavailable")?;
         if !proof.as_ref().is_some_and(|proof| {
             proof.challenge == self.generation.load(Ordering::SeqCst)
@@ -50,8 +74,7 @@ impl Setup {
         }) {
             return Err("Verify Windows Hello again for this management action".into());
         }
-        *proof = None;
-        Ok(())
+        Ok(ManagementProof(proof.take().ok_or("Setup unavailable")?))
     }
     pub fn observe(&self, epoch: u64, connection: u64) {
         if let Ok(mut context) = self.context.lock()
@@ -162,6 +185,7 @@ pub async fn begin_enrollment(
     {
         return Err("Open Settings to enroll".into());
     }
+    let owner_actor = crate::owner::current_actor(&app).await?;
     let state = app.state::<Runtime>();
     {
         let local = state.local.lock().map_err(|_| "Local state unavailable")?;
@@ -204,6 +228,7 @@ pub async fn begin_enrollment(
                 local.capture_epoch,
                 "0f99f2d0ebe89ac095bcc5903c4dd8f72b367286".into(),
                 microphone,
+                owner_actor,
             )
             .map_err(|e| e.to_string())?,
         );
@@ -260,6 +285,7 @@ pub async fn record_enrollment(
             local.capture_epoch,
             state.setup.generation.load(Ordering::SeqCst),
             state.connection_generation.load(Ordering::SeqCst),
+            session.prepared_by,
         )
     };
     let check_admission = || -> Result<(), String> {
@@ -284,6 +310,11 @@ pub async fn record_enrollment(
         .path()
         .app_data_dir()
         .map_err(|_| "Pairing directory unavailable")?;
+    let owner_actor = crate::owner::current_actor(&app).await?;
+    check_admission()?;
+    if owner_actor != admission.4 {
+        return Err("Enrollment belongs to a different owner identity".into());
+    }
     let pairing = tauri::async_runtime::spawn_blocking(move || crate::connection::load(&directory))
         .await
         .map_err(|_| "Pairing reader stopped")??;
@@ -494,6 +525,21 @@ pub async fn finish_enrollment(
         return Err("Open Settings to finish".into());
     }
     let state = app.state::<Runtime>();
+    let admission = {
+        let active = state
+            .setup
+            .enrollment
+            .lock()
+            .map_err(|_| "Enrollment unavailable")?;
+        active
+            .as_ref()
+            .map(|v| (v.id, v.prepared_by))
+            .ok_or("Enrollment unavailable")?
+    };
+    let owner_actor = crate::owner::current_actor(&app).await?;
+    if owner_actor != admission.1 {
+        return Err("Enrollment owner changed".into());
+    }
     let candidate = {
         let local = state.local.lock().map_err(|_| "Local state unavailable")?;
         let mut active = state
@@ -502,7 +548,9 @@ pub async fn finish_enrollment(
             .lock()
             .map_err(|_| "Enrollment unavailable")?;
         if !active.as_ref().is_some_and(|session| {
-            session.current(local.capture_epoch)
+            session.id == admission.0
+                && session.prepared_by == owner_actor
+                && session.current(local.capture_epoch)
                 && session.completed() == avesra_core::enrollment::SEGMENTS
         }) {
             return Err("Complete actual prompted and held-out collection first".into());
@@ -554,6 +602,7 @@ pub async fn delete_speaker_candidate(
     {
         return Err("Open Settings to remove a candidate".into());
     }
+    let _owner_actor = crate::owner::current_actor(&app).await?;
     let state = app.state::<Runtime>();
     {
         let mut local = state.local.lock().map_err(|_| "Local state unavailable")?;
@@ -609,6 +658,8 @@ pub async fn select_speaker_candidate(
     id: uuid::Uuid,
     revision: uuid::Uuid,
 ) -> Result<(), String> {
+    settings_only(&window)?;
+    let _owner_actor = crate::owner::current_actor(&app).await?;
     let microphone = authorize_profile_selection(&window, &app)?
         .ok_or("Select the enrollment microphone first")?;
     let directory = app
@@ -626,6 +677,8 @@ pub async fn clear_speaker_selection(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
+    settings_only(&window)?;
+    let _owner_actor = crate::owner::current_actor(&app).await?;
     authorize_profile_selection(&window, &app)?;
     let directory = app
         .path()

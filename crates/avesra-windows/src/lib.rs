@@ -65,3 +65,5 @@ pub fn audio_devices() -> Result<Vec<AudioDevice>, ErrorCode> {
 pub mod apps;
 #[cfg(windows)]
 pub mod discovery;
+#[cfg(windows)]
+pub mod principal;

@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod connection;
 mod media;
+mod owner;
 mod preview;
 mod profiles;
 mod setup;
@@ -64,6 +65,7 @@ struct Runtime {
     voice_panel: Mutex<Option<uuid::Uuid>>,
     hotkeys: Mutex<Option<avesra_windows::shortcuts::Hotkeys>>,
     shortcut_edit: tokio::sync::Mutex<()>,
+    owner_setup: std::sync::Arc<tokio::sync::Mutex<()>>,
     shortcut_recording: Mutex<Option<shortcuts::Recording>>,
     shortcut_focus_generation: std::sync::atomic::AtomicU64,
 }
@@ -469,6 +471,7 @@ fn main() {
                 voice_panel: Mutex::new(None),
                 hotkeys: Mutex::new(None),
                 shortcut_edit: tokio::sync::Mutex::new(()),
+                owner_setup: std::sync::Arc::new(tokio::sync::Mutex::new(())),
                 shortcut_recording: Mutex::new(None),
                 shortcut_focus_generation: std::sync::atomic::AtomicU64::new(1),
             });
@@ -591,6 +594,8 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             shortcuts::shortcut_status,
+            owner::owner_status,
+            owner::create_owner,
             shortcuts::set_shortcut,
             shortcuts::begin_shortcut_recording,
             shortcuts::end_shortcut_recording,

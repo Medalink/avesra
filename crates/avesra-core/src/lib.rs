@@ -7,4 +7,5 @@ pub mod store;
 pub mod voice;
 
 pub mod apps;
+pub mod owner;
 pub mod shortcuts;

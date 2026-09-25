@@ -50,7 +50,9 @@ pub fn request_for_settings(handle: isize) -> Result<Verification, ErrorCode> {
     unsafe {
         verifier.RequestVerificationForWindowAsync(
             hwnd,
-            &HSTRING::from("Verify your Windows user to manage Avesra voice enrollment."),
+            &HSTRING::from(
+                "Verify your Windows user to manage Avesra ownership, people and permissions.",
+            ),
         )
     }
     .map(Verification)
