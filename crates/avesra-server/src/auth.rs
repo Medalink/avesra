@@ -1,3 +1,5 @@
+#[path = "auth_actors.rs"]
+mod actors;
 use rand::RngCore;
 use rusqlite::{Connection, OptionalExtension, params};
 use sha2::{Digest, Sha256};
@@ -33,18 +35,34 @@ impl AuthStore {
         let version: i64 = connection
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(|_| "Authentication version unavailable")?;
-        if version != 0 && version != 1 {
+        if !(0..=2).contains(&version) {
             return Err("Unsupported authentication schema".into());
         }
+        actors::check_schema(&connection, version)?;
         if version == 0 {
-            let tables:i64=connection.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",[],|r|r.get(0)).map_err(|_|"Authentication schema unavailable")?;
+            let tables: i64 = connection
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE name NOT GLOB 'sqlite_*'",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(|_| "Authentication schema unavailable")?;
             if tables != 0 {
                 return Err("Unversioned authentication database is not empty".into());
             }
+        }
+        if version < 2 {
             let tx = connection
                 .transaction()
                 .map_err(|_| "Authentication schema unavailable")?;
-            tx.execute_batch("CREATE TABLE pairing(id INTEGER PRIMARY KEY CHECK(id=1),hash BLOB NOT NULL,expires_ms INTEGER NOT NULL,attempts INTEGER NOT NULL); CREATE TABLE devices(id TEXT PRIMARY KEY,hash BLOB NOT NULL UNIQUE,revoked INTEGER NOT NULL DEFAULT 0,created_ms INTEGER NOT NULL); PRAGMA user_version=1;").map_err(|_|"Authentication schema unavailable")?;
+            if version == 0 {
+                tx.execute_batch("CREATE TABLE pairing(id INTEGER PRIMARY KEY CHECK(id=1),hash BLOB NOT NULL,expires_ms INTEGER NOT NULL,attempts INTEGER NOT NULL); CREATE TABLE devices(id TEXT PRIMARY KEY,hash BLOB NOT NULL UNIQUE,revoked INTEGER NOT NULL DEFAULT 0,created_ms INTEGER NOT NULL); ").map_err(|_|"Authentication schema unavailable")?;
+            }
+            tx.execute_batch(actors::SCHEMA)
+                .map_err(|_| "Actor schema unavailable")?;
+            actors::check_schema(&tx, 2)?;
+            tx.execute_batch("PRAGMA user_version=2;")
+                .map_err(|_| "Authentication schema unavailable")?;
             tx.commit()
                 .map_err(|_| "Authentication schema unavailable")?;
         }

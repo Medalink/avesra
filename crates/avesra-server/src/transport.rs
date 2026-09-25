@@ -21,6 +21,9 @@ use std::{
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use uuid::Uuid;
 #[cfg(unix)]
+#[path = "actor_registration.rs"]
+mod actor_registration;
+#[cfg(unix)]
 #[path = "voice_preview.rs"]
 mod voice_preview;
 #[cfg(unix)]
@@ -49,12 +52,17 @@ struct ServerState {
     speaker_health_admission: Arc<Semaphore>,
     #[cfg(unix)]
     sessions: Mutex<std::collections::HashMap<Uuid, LiveSession>>,
+    #[cfg(unix)]
+    actor_admission: Arc<Semaphore>,
 }
 #[cfg(unix)]
 struct LiveSession {
     device: Uuid,
     epoch: u64,
     output_epoch: u64,
+    action_epoch: u64,
+    action_enabled: bool,
+    action_permission: tokio::sync::watch::Sender<(u64, bool)>,
     enabled: bool,
     output_enabled: bool,
     output_permission: tokio::sync::watch::Sender<(u64, bool)>,
@@ -106,6 +114,7 @@ pub fn router(auth: AuthStore, directory: &std::path::Path) -> Result<Router, St
     let router = Router::new()
         .route("/pair", post(pair))
         .route("/control", get(control))
+        .route("/actors", post(actors))
         .route("/speaker", get(speaker_health).post(speaker_infer))
         .route("/voice-analysis", post(voice_analysis))
         .route("/voice-stream", get(voice_stream_upgrade))
@@ -135,8 +144,27 @@ pub fn router(auth: AuthStore, directory: &std::path::Path) -> Result<Router, St
             speaker_health_admission: Arc::new(Semaphore::new(2)),
             #[cfg(unix)]
             sessions: Mutex::new(std::collections::HashMap::new()),
+            #[cfg(unix)]
+            actor_admission: Arc::new(Semaphore::new(2)),
         }));
     Ok(router)
+}
+async fn actors(
+    State(auth): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<avesra_contracts::actors::Request>,
+) -> Result<Json<avesra_contracts::actors::Reply>, StatusCode> {
+    #[cfg(unix)]
+    {
+        actor_registration::operation(auth, headers, body)
+            .await
+            .map(Json)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (auth, headers, body);
+        Err(StatusCode::SERVICE_UNAVAILABLE)
+    }
 }
 async fn voice_operations(
     State(auth): State<Shared>,
@@ -705,6 +733,9 @@ async fn session(
                 device: device_id,
                 epoch: envelope.capture_epoch,
                 output_epoch: envelope.playback_epoch,
+                action_epoch: envelope.action_epoch,
+                action_enabled: !mode.2,
+                action_permission: tokio::sync::watch::channel((envelope.action_epoch, !mode.2)).0,
                 enabled: !mode.0 && !mode.1 && !mode.2,
                 output_enabled: !mode.1 && !mode.2,
                 output_permission: tokio::sync::watch::channel((
@@ -722,6 +753,17 @@ async fn session(
             });
             live.epoch = envelope.capture_epoch;
             live.output_epoch = envelope.playback_epoch;
+            live.action_epoch = envelope.action_epoch;
+            live.action_enabled = !mode.2;
+            live.action_permission.send_if_modified(|permission| {
+                let next = (live.action_epoch, live.action_enabled);
+                if *permission == next {
+                    false
+                } else {
+                    *permission = next;
+                    true
+                }
+            });
             live.enabled = !mode.0 && !mode.1 && !mode.2;
             live.output_enabled = !mode.1 && !mode.2;
             live.output_permission.send_if_modified(|permission| {
