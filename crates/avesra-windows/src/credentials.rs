@@ -19,8 +19,22 @@ fn transform(bytes: &[u8], protect: bool) -> Result<Vec<u8>, ErrorCode> {
         pbData: bytes.as_ptr().cast_mut(),
     };
     let mut output = CRYPT_INTEGER_BLOB::default();
-    // SAFETY: input points to a live bounded slice. DPAPI owns the returned allocation;
-    // it is copied before LocalFree. No machine-wide flag is used: protection is per user.
+    struct Allocation(CRYPT_INTEGER_BLOB);
+    impl Drop for Allocation {
+        fn drop(&mut self) {
+            if !self.0.pbData.is_null() {
+                // SAFETY: only a successful DPAPI result constructs this owner;
+                // cbData describes its entire allocation, including rejected output.
+                unsafe {
+                    use zeroize::Zeroize;
+                    std::slice::from_raw_parts_mut(self.0.pbData, self.0.cbData as usize).zeroize();
+                    let _ = LocalFree(Some(HLOCAL(self.0.pbData.cast())));
+                }
+            }
+        }
+    }
+    // SAFETY: input points to a live bounded slice. The owner clears/frees every
+    // successful DPAPI output. No machine-wide flag is used: protection is per user.
     unsafe {
         let result = if protect {
             CryptProtectData(
@@ -44,19 +58,15 @@ fn transform(bytes: &[u8], protect: bool) -> Result<Vec<u8>, ErrorCode> {
             )
         };
         result.map_err(|_| ErrorCode::Unauthenticated)?;
+        let allocation = Allocation(output);
+        let output = &allocation.0;
         if output.pbData.is_null() || output.cbData == 0 {
             return Err(ErrorCode::Malformed);
         }
         if output.cbData > 131_072 {
-            let _ = LocalFree(Some(HLOCAL(output.pbData.cast())));
             return Err(ErrorCode::TooLarge);
         }
         let result = std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec();
-        // Clear the owned DPAPI allocation before freeing it, including decrypted
-        // browser credentials; callers separately own and clear their returned copy.
-        use zeroize::Zeroize;
-        std::slice::from_raw_parts_mut(output.pbData, output.cbData as usize).zeroize();
-        let _ = LocalFree(Some(HLOCAL(output.pbData.cast())));
         Ok(result)
     }
 }
