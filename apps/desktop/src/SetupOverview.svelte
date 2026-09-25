@@ -1,6 +1,7 @@
 <script lang="ts">
   import Icon from "./Icon.svelte";
   import { native, type Runtime, type AudioDevice } from "./runtime";
+  import { automaticVoiceLimitation } from "./owner-setup";
 
   let {
     runtime,
@@ -76,10 +77,10 @@
       number: "04",
       icon: "people",
       title: "Make it yours",
-      state: runtime?.enrolled ? "Enrolled" : "Setup needed",
-      ready: !!runtime?.enrolled,
-      detail: "Verify the owner and enroll your voice.",
-      action: "Set up voice identity",
+      state: runtime?.enrolled && runtime.voice_ready ? "Ready" : "Not implemented yet",
+      ready: !!runtime?.enrolled && !!runtime?.voice_ready,
+      detail: runtime?.enrolled && runtime.voice_ready ? "Your owner voice is ready." : automaticVoiceLimitation,
+      action: "Review owner setup",
       section: "people",
     },
     {

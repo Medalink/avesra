@@ -1,70 +1,76 @@
 <script lang="ts">
   import { onMount, untrack } from "svelte";
   import { listen } from "@tauri-apps/api/event";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { command, native, type Runtime } from "./runtime";
   import { ensureManagementVerification } from "./setup";
-  let { runtime, ownerReady, parentBusy }: { runtime: Runtime | null; ownerReady: boolean; parentBusy: boolean } = $props();
+  import type { RegistrationView } from "./owner-setup";
+  let { runtime, ownerReady, parentBusy, onstate, onbusy }: {
+    runtime: Runtime | null; ownerReady: boolean; parentBusy: boolean;
+    onstate: (value: RegistrationView) => void; onbusy: (value: boolean) => void;
+  } = $props();
   type Binding = { device: string; actor: string; owner_revision: string; registration_revision: string; registered_by: string; revoked: boolean };
   type Status = { state: "unregistered" | "different_owner" | "revoked" | "registered" | "unreconciled"; intent: "saved" | "missing" | "unavailable"; binding: Binding | null };
   let status = $state<Status | null>(null), busy = $state(false), error = $state("");
   let progress = $state("");
-  let lifetimeReady = $state(false);
+  let lifetimeReady = $state(false), pageVisible = $state(false), refreshNeeded = $state(true);
   let mounted = false, generation = 0, context = "";
   let captureContext: number | undefined;
-  let inspectedContext = "";
-  const enabled = $derived(native && lifetimeReady && ownerReady && !!runtime?.connected && !runtime.locked && !runtime.settings.paused);
-  const label = $derived(!status ? "Not inspected" : status.state === "registered" ? "Registered" : status.state === "unregistered" ? "Not registered" : status.state === "revoked" ? "Revoked" : status.state === "different_owner" ? "Different owner" : "Needs review");
-  function invalidate() { generation++; status = null; error = ""; }
+  const enabled = $derived(native && lifetimeReady && pageVisible && ownerReady && !!runtime?.connected && !runtime.locked && !runtime.settings.paused);
+  const waiting = $derived(!ownerReady ? "Create your owner account first." : !runtime?.connected ? "Connect your Spark to check this step." : runtime.locked ? "Unlock Windows to continue." : runtime.settings.paused ? "Resume Avesra to check this step." : !pageVisible ? "Open Settings to check registration automatically." : "Waiting for the current setup action to finish.");
+  const detail = $derived(error ? `Couldn't check owner registration. ${error}` : !enabled ? waiting : busy || refreshNeeded ? "Checking whether your owner is already registered…" : status?.state === "registered" ? "Your Spark remembers this owner. This step is complete." : status?.state === "unregistered" ? "Register your owner account on this Spark. Windows will ask you to verify if needed." : status?.state === "revoked" ? "This owner's registration was revoked. Recovery for a revoked registration is not available in this build." : status?.state === "different_owner" ? "This Spark pairing belongs to a different owner. It cannot be replaced from this page." : "The saved owner and Spark records need review. Retry the status check before changing registration.");
+  const label = $derived(!enabled ? "Waiting" : busy || refreshNeeded ? "Checking…" : error ? "Check failed" : status?.state === "registered" ? "Complete" : status?.state === "unregistered" ? "Action needed" : "Needs attention");
+  function invalidate() { generation++; status = null; error = ""; refreshNeeded = true; }
   $effect(() => {
-    const next = `${ownerReady}:${runtime?.connected}:${runtime?.locked}:${runtime?.action_epoch}`;
+    const next = `${ownerReady}:${runtime?.connected}:${runtime?.locked}:${runtime?.settings.paused}:${runtime?.action_epoch}`;
     if (next !== context || (!busy && captureContext !== runtime?.capture_epoch)) { context = next; invalidate(); }
     captureContext = runtime?.capture_epoch;
   });
+  $effect(() => {
+    if (enabled && !busy && !parentBusy && refreshNeeded) untrack(() => void operate("refresh"));
+  });
+  $effect(() => { onstate({ state: !enabled ? "waiting" : busy || refreshNeeded ? "loading" : error ? "error" : status?.state ?? "error", detail }); });
   async function operate(kind: "refresh" | "register" | "revoke") {
     if (!enabled || busy || parentBusy) return;
     const revision = status?.binding?.registration_revision;
     if (kind === "revoke" && (!revision || status?.state === "different_owner" || status?.binding?.revoked)) return;
     if (kind === "register" && (status?.state !== "unregistered" || status.intent === "unavailable")) return;
     const current = ++generation;
-    busy = true; error = "";
+    refreshNeeded = false; busy = true; error = ""; onbusy(true);
     try {
       if (kind !== "refresh") await ensureManagementVerification(() => mounted && current === generation && enabled, message => progress = message);
       if (!mounted || current !== generation || !enabled) return;
-      progress = kind === "refresh" ? "Checking Spark registration…" : kind === "register" ? "Registering this owner on Spark…" : "Revoking registration…";
+      progress = kind === "refresh" ? "Checking Spark registration…" : kind === "register" ? "Registering your owner…" : "Removing owner registration…";
       const next = await command<Status>(kind === "refresh" ? "actor_registration_status" : kind === "register" ? "register_owner_with_spark" : "revoke_owner_registration", kind === "revoke" ? {registrationRevision: revision} : undefined);
       if (mounted && current === generation) status = next;
-    } catch (e) {
-      if (mounted && current === generation) { status = null; error = String(e); }
-    } finally { busy = false; progress = ""; }
+    } catch (e) { if (mounted && current === generation) { status = null; error = String(e); } }
+    finally { busy = false; progress = ""; onbusy(false); }
   }
-  $effect(() => {
-    const key = enabled ? `${ownerReady}:${runtime?.connected}:${runtime?.locked}:${runtime?.action_epoch}` : "";
-    if (key !== inspectedContext) {
-      inspectedContext = key;
-      if (key) untrack(() => void operate("refresh"));
-    }
-  });
   onMount(() => {
     mounted = true;
-    let unlisten: (() => void) | undefined;
-    if (native) void listen("settings-hidden", invalidate).then(stop => {
-      if (!mounted) stop(); else { unlisten = stop; lifetimeReady = true; }
-    }).catch(() => { if (mounted) { invalidate(); error = "Settings lifetime unavailable. Reopen this section."; } });
-    return () => { mounted = false; lifetimeReady = false; invalidate(); unlisten?.(); };
+    const cleanup: (() => void)[] = [];
+    const retain = (stop: () => void) => { if (mounted) cleanup.push(stop); else stop(); };
+    if (native) void (async () => {
+      const window = getCurrentWindow();
+      retain(await listen("settings-hidden", () => { pageVisible = false; invalidate(); }));
+      retain(await window.onFocusChanged(event => { if (event.payload && mounted) pageVisible = true; }));
+      const visible = await window.isVisible();
+      if (mounted) { pageVisible = visible; lifetimeReady = true; }
+    })().catch(() => { if (mounted) { error = "Reopen this page to check registration."; refreshNeeded = false; } });
+    return () => { mounted = false; generation++; cleanup.forEach(stop => stop()); };
   });
 </script>
 
-<!-- Native owner setup extends the approved Owner card's gap-3 and small-button rows (Settings.dc.html565–583). -->
-<div class="flex flex-col gap-3 border-t border-white/10 pt-3">
-  <div class="flex items-center gap-3"><span class="min-w-0 flex-1 text-[13px] font-medium text-zinc-100">Owner registration on Spark</span><span class={status?.state === "registered" && !busy ? "av-chip bg-av-500/10 text-av-300 ring-av-500/40" : "av-chip text-amber-200 ring-amber-400/30"}>{busy ? "Checking…" : label}</span></div>
-  <p class="av-hint">The paired Spark remembers this PC’s local owner. Register and Revoke ask for Windows verification when needed.</p>
-  {#if status?.intent === "unavailable"}<p class="av-hint text-amber-200">The saved registration request is unavailable. You can still refresh Spark’s record and revoke this owner’s registration.</p>{/if}
-  {#if status?.state === "revoked"}<p class="av-hint">This pairing's registration is revoked. It cannot be replaced or revived here.</p>{/if}
-  <div class="flex flex-wrap items-center gap-2">
-    <button class="av-btn av-btn-ghost av-btn-sm" disabled={!enabled || busy || parentBusy} onclick={() => operate("refresh")}>Refresh registration</button>
-    {#if status?.state === "unregistered"}<button class="av-btn av-btn-primary av-btn-sm" disabled={!enabled || busy || parentBusy || status.intent === "unavailable"} onclick={() => operate("register")}>Register owner with Spark</button>{/if}
-    {#if status?.binding && !status.binding.revoked && status.state !== "different_owner"}<button class="av-btn av-btn-ghost av-btn-sm" disabled={!enabled || busy || parentBusy} onclick={() => operate("revoke")}>Revoke this registration</button>{/if}
-  </div>
-  {#if error}<p class="av-hint text-amber-200" role="status">{error}</p>{/if}
-  {#if progress}<p class="av-hint" role="status">{progress}</p>{/if}
+<div class="flex flex-col gap-2 border-t border-white/10 py-3">
+  <div class="flex items-center gap-3"><span class="font-mono text-xs text-zinc-400">02</span><span class="min-w-0 flex-1 text-[13px] font-medium text-zinc-100">Register owner on Spark</span><span class="av-chip {status?.state === 'registered' && !busy && !refreshNeeded ? 'text-emerald-300 ring-emerald-400/30' : 'text-zinc-300 ring-white/15'}">{label}</span></div>
+  <p class="av-hint ml-7" role="status">{progress || detail}</p>
+  {#if enabled && !busy && !refreshNeeded && status?.state !== "registered"}
+    <div class="ml-7 flex flex-wrap gap-2">
+      {#if status?.state === "unregistered" && status.intent !== "unavailable"}<button class="av-btn av-btn-primary av-btn-sm" disabled={parentBusy} onclick={() => operate("register")}>Register owner on Spark</button>{:else}<button class="av-btn av-btn-secondary av-btn-sm" disabled={parentBusy} onclick={() => operate("refresh")}>Retry registration check</button>{/if}
+    </div>
+  {/if}
+  {#if status?.state === "registered" && !busy && !refreshNeeded}
+    <details class="ml-7"><summary class="av-hint cursor-pointer">Registration options</summary><div class="mt-2 flex flex-wrap gap-2"><button class="av-btn av-btn-ghost av-btn-sm" disabled={parentBusy} onclick={() => operate("refresh")}>Check again</button><button class="av-btn av-btn-ghost av-btn-sm" disabled={parentBusy} onclick={() => operate("revoke")}>Remove registration…</button></div><p class="av-hint mt-2">Removing this registration requires Windows verification and cannot be undone here.</p></details>
+  {/if}
+  {#if status?.intent === "unavailable"}<p class="av-hint ml-7 text-amber-200">The local registration record could not be read. Registration changes are blocked; use Retry registration check.</p>{/if}
 </div>

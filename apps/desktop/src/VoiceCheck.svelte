@@ -38,11 +38,11 @@
 </script>
 
 <div class="flex flex-col gap-2.5 border-t border-white/10 pt-3">
-  <span class="text-[12.5px] font-medium">Check your saved voice</span>
-  <p class="av-hint">Record one fresh phrase to see what Spark hears and compare it with your six saved segments. Your saved voice stays unchanged.</p>
+  <span class="text-[12.5px] font-medium">Microphone and transcription check</span>
+  <p class="av-hint">Press Record, then read the sentence below. Recording stops automatically after eight seconds.</p>
   <p class="text-[12.5px] text-zinc-100">“Avesra, tell me what I have planned for today and help me choose what to work on next.”</p>
   <div class="flex items-center gap-2">
-    <button class="av-btn av-btn-primary av-btn-sm" disabled={!!request || blocked || !ready || !runtime?.connected || runtime.locked} onclick={record}>Record voice check</button>
+    <button class="av-btn av-btn-secondary av-btn-sm" disabled={!!request || blocked || !ready || !runtime?.connected || runtime.locked} onclick={record}>Record an eight-second check</button>
     {#if request}<button class="av-btn av-btn-secondary av-btn-sm" onclick={() => cancel().catch(e => error = String(e))}>Cancel</button>{/if}
   </div>
   {#if request}
@@ -56,8 +56,8 @@
     <div class="flex flex-col gap-2 border border-white/10 bg-black/15 p-3" role="status">
       <span class="text-[12.5px] font-medium">What Spark heard</span>
       <p class="text-[12.5px] text-zinc-100">{result.transcript || "No speech was transcribed."}</p>
-      <p class="av-hint">Voice similarity: {result.similarity === null ? "not enough speech" : result.similarity.toFixed(3)} · saved held-out phrases: {result.held_out_similarities.map(v => v.toFixed(3)).join(", ")}</p>
-      <p class="av-hint">{result.seconds} seconds captured · {result.clipped_samples} clipped samples of {result.total_samples.toLocaleString()}. Similarity is a comparison score, not a confidence percentage.</p>
+      <p class="av-hint">{result.transcript && result.similarity !== null ? "Your microphone reached Spark and speech was transcribed. No additional setup step is unlocked by this check." : "Speech could not be fully checked. Check your selected microphone in Audio & Voice, then try speaking again."}</p>
+      <details><summary class="av-hint cursor-pointer">Technical comparison details</summary><p class="av-hint mt-2">Voice similarity: {result.similarity === null ? "not enough speech" : result.similarity.toFixed(3)} · saved held-out phrases: {result.held_out_similarities.map(v => v.toFixed(3)).join(", ")}</p><p class="av-hint">{result.seconds} seconds captured · {result.clipped_samples} clipped samples of {result.total_samples.toLocaleString()}. Similarity is a comparison score, not a confidence percentage.</p></details>
     </div>
   {/if}
   <p class="av-hint">This check sends this phrase to your paired Spark and keeps no recording. It does not run the spoken request or enable automatic listening.</p>

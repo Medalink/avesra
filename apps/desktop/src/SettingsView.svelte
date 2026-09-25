@@ -4,7 +4,6 @@
   import SetupOverview from "./SetupOverview.svelte";
   import { sparkConnection } from "./runtime";
   import Pairing from "./Pairing.svelte";
-  import SetupLock from "./SetupLock.svelte";
   import VoiceDesigner from "./VoiceDesigner.svelte";
   import VoiceAtmosphere from "./VoiceAtmosphere.svelte";
   import ShortcutSettings from "./ShortcutSettings.svelte";
@@ -117,7 +116,7 @@
     [
       "people",
       "People & Voice ID",
-      "Who Avesra recognizes and what each person may ask it to do.",
+      "Save your owner account and voice. See exactly what is complete and what is still needed.",
     ],
     [
       "awareness",
@@ -490,8 +489,7 @@
             </div>
           </section>
         {:else if section === "people"}
-          <SetupLock {runtime} />
-          <EnrollmentView {runtime} />
+          <EnrollmentView {runtime} {navigate} />
           <section class="section">
             <span class="av-kicker">Other people</span>
             <p class="av-hint">
