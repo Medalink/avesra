@@ -29,6 +29,7 @@ pub struct SessionIdentity {
 fn actor_client(record: &PairingRecord, seconds: u64) -> Result<reqwest::Client, String> {
     record.validate()?;
     reqwest::Client::builder()
+        .retry(reqwest::retry::never())
         .no_proxy()
         .tls_built_in_root_certs(false)
         .add_root_certificate(

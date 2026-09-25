@@ -209,6 +209,7 @@ dependencies = [
  "hex",
  "rand 0.9.5",
  "rcgen",
+ "reqwest 0.12.28",
  "rusqlite",
  "rustls",
  "serde",
@@ -217,6 +218,7 @@ dependencies = [
  "subtle",
  "tokio",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]
