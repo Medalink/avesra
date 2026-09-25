@@ -158,6 +158,21 @@ pub async fn verify_setup(
         .operation
         .lock()
         .map_err(|_| "Setup unavailable")? = Some(operation.clone());
+    {
+        let local = state.local.lock().map_err(|_| "Local state unavailable")?;
+        if state.setup.generation.load(Ordering::SeqCst) != challenge
+            || state.connection_generation.load(Ordering::SeqCst) != generation
+            || local.capture_epoch != epoch
+            || !local.connected
+            || local.locked
+            || !window
+                .is_visible()
+                .map_err(|_| "Settings window unavailable")?
+        {
+            operation.cancel();
+            return Err("Setup changed while Windows verification opened".into());
+        }
+    }
     tokio::time::timeout(Duration::from_secs(60), operation.verified())
         .await
         .map_err(|_| "Local verification timed out")?

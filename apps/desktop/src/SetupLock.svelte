@@ -8,27 +8,36 @@
   let error = $state("");
   let mounted = true;
   let refreshing = false;
+  let operationGeneration = 0;
+  let context = "";
+  $effect(() => {
+    const next = `${runtime?.capture_epoch}:${runtime?.connected}:${runtime?.locked}`;
+    if (next !== context) { context = next; operationGeneration++; status = null; }
+  });
   const unlocked = $derived(status?.local_authentication === "verified");
   async function refresh() {
     if (!native || busy || refreshing) return;
     refreshing = true;
-    try { const next = await command<Status>("setup_status"); if (mounted) status = next; }
-    catch (e) { if (mounted) error = String(e); }
+    const generation = operationGeneration;
+    try { const next = await command<Status>("setup_status"); if (mounted && generation === operationGeneration) status = next; }
+    catch (e) { if (mounted && generation === operationGeneration) error = String(e); }
     finally { refreshing = false; }
   }
   async function unlock() {
     busy = true; error = "";
-    try { const next = await command<Status>("verify_setup"); if (mounted) status = next; }
-    catch (e) { if (mounted) error = String(e); }
+    const generation = ++operationGeneration;
+    try { const next = await command<Status>("verify_setup"); if (mounted && generation === operationGeneration) status = next; }
+    catch (e) { if (mounted && generation === operationGeneration) error = String(e); }
     finally { busy = false; }
   }
   async function lock() {
-    await command("cancel_setup"); status = null; await refresh();
+    operationGeneration++; status = null;
+    await command("cancel_setup"); await refresh();
   }
   onMount(() => {
     mounted = true; void refresh();
     const interval = setInterval(() => void refresh(), 2000);
-    return () => { mounted = false; clearInterval(interval); if (native) void command("cancel_setup").catch(() => {}); };
+    return () => { mounted = false; operationGeneration++; clearInterval(interval); if (native) void command("cancel_setup").catch(() => {}); };
   });
 </script>
 
