@@ -12,4 +12,6 @@ The focused Settings editor owns a native ten-second recording token. Blur, clos
 
 Once a rebind enters the bounded native queue, its coordinator waits for the actual result even if posting the optional wake message fails. A 100 ms maximum message wait ensures accepted commands are drained; terminal registration failure publishes unavailable before replying. Generic settings saves reject changed shortcut fields so stale unrelated settings writes cannot overwrite an applied binding.
 
+Reporting an owned chord does not consume the native recording token: explicit editor end or expiry releases it. The frontend subscribes before enabling Change and buffers a bounded early event until its exact native token returns. This prevents an event/IPC ordering race from leaving a recording editor whose next chord unexpectedly executes a control. Status reads carry a publication generation; a read started before a rebind cannot replace the later observed registration state.
+
 2026-09-25 source verification: formatting, locked desktop Clippy with warnings denied, extension TypeScript and Svelte checks pass (zero Svelte errors/warnings). No hotkey registration, invocation, desktop inspection or tests were run. This is implementation and static evidence, not operational qualification.

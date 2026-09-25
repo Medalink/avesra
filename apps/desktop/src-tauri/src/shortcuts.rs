@@ -112,7 +112,7 @@ fn record_owned(app: &tauri::AppHandle, action: ShortcutAction) -> bool {
     let Some(chord) = chord else {
         return false;
     };
-    let Ok(mut slot) = state.shortcut_recording.lock() else {
+    let Ok(slot) = state.shortcut_recording.lock() else {
         return false;
     };
     if !slot
@@ -121,7 +121,6 @@ fn record_owned(app: &tauri::AppHandle, action: ShortcutAction) -> bool {
     {
         return false;
     }
-    *slot = None;
     drop(slot);
     drop(local);
     let _ = window.emit("shortcut-recorded", Recorded { id, chord });

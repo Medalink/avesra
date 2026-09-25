@@ -12,6 +12,7 @@
   let statuses = $state<Status[]>([]);
   let recording = $state<ShortcutAction | null>(null);
   let busy = $state(false);
+  let listenerReady = $state(false);
   let error = $state("");
   let errorAction = $state<ShortcutAction | null>(null);
   let editor = $state<HTMLButtonElement>();
@@ -19,6 +20,8 @@
   let generation = 0;
   let disposed = false;
   let refreshing = false;
+  let statusGeneration = 0;
+  let early: { id: string; chord: Chord } | null = null;
   let timer: ReturnType<typeof setTimeout> | undefined;
   function keys(chord: Chord | null | undefined) {
     if (!chord) return ["Unassigned"];
@@ -27,12 +30,13 @@
   async function refresh() {
     if (refreshing || disposed || !native || document.visibilityState !== "visible") return;
     refreshing = true;
-    try { const value = await command<Status[]>("shortcut_status"); if (!disposed) statuses = value; }
-    catch (e) { if (!disposed) { statuses = []; error = String(e); } }
+    const mine = statusGeneration;
+    try { const value = await command<Status[]>("shortcut_status"); if (!disposed && mine === statusGeneration) statuses = value; }
+    catch (e) { if (!disposed && mine === statusGeneration) { statuses = []; error = String(e); } }
     finally { refreshing = false; }
   }
   function cancel() {
-    generation++; recording = null; clearTimeout(timer);
+    generation++; recording = null; clearTimeout(timer); early = null;
     const id = token; token = null;
     if (id) void command("end_shortcut_recording", { id }).catch(() => {});
   }
@@ -46,13 +50,15 @@
       await tick(); if (mine === generation) editor?.focus();
     } catch (e) { if (!disposed && mine === generation) error = String(e); }
     finally { busy = false; }
+    const captured = early as { id: string; chord: Chord } | null; early = null;
+    if (!disposed && mine === generation && captured?.id === token) void save(captured.chord);
   }
   async function save(binding: Chord | null) {
     const action = recording; if (!action || busy) return;
-    cancel(); busy = true; error = ""; errorAction = action;
+    cancel(); statusGeneration++; busy = true; error = ""; errorAction = action;
     try { await command("set_shortcut", { action, binding }); }
     catch (e) { if (!disposed) error = String(e); }
-    finally { busy = false; await refresh(); }
+    finally { statusGeneration++; busy = false; await refresh(); }
   }
   function capture(event: KeyboardEvent) {
     if (!recording || busy) return;
@@ -71,7 +77,7 @@
   $effect(() => { if (runtime?.locked) cancel(); });
   onMount(() => {
     let unlisten: (() => void) | undefined;
-    void listen<{ id: string; chord: Chord }>("shortcut-recorded", event => { if (event.payload.id === token) void save(event.payload.chord); }).then(stop => { if (disposed) stop(); else unlisten = stop; });
+    void listen<{ id: string; chord: Chord }>("shortcut-recorded", event => { if (event.payload.id === token && !busy) void save(event.payload.chord); else if (busy && !recording) early = event.payload; }).then(stop => { if (disposed) stop(); else { unlisten = stop; listenerReady = true; } }).catch(e => { if (!disposed) error = String(e); });
     const blur = () => cancel();
     window.addEventListener("blur", blur);
     document.addEventListener("visibilitychange", blur);
@@ -93,7 +99,7 @@
             <button class="av-btn av-btn-ghost av-btn-sm" onclick={cancel}>Cancel</button>
           {:else}
             <span class="flex items-center gap-1">{#each keys(status?.binding ?? runtime?.settings.shortcuts[row.action]) as key}<span class="av-kbd">{key}</span>{/each}</span>
-            <button class="av-btn av-btn-secondary av-btn-sm" disabled={!native || !runtime || runtime.locked || busy || !!recording} onclick={() => start(row.action)}>Change</button>
+            <button class="av-btn av-btn-secondary av-btn-sm" disabled={!native || !listenerReady || !runtime || runtime.locked || busy || !!recording} onclick={() => start(row.action)}>Change</button>
           {/if}
         </div>
         {#if error && errorAction === row.action}<span class="text-[11.5px] text-red-400" role="alert">{error}</span>{/if}
