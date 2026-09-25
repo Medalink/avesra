@@ -19,15 +19,23 @@ STEM = re.compile(r"^[0-9a-f-]{36}-[0-9a-f-]{36}$")
 
 
 def identity(value):
-    if not isinstance(value, dict) or set(value) != {"id", "revision", "audio_sha256"}:
+    if not isinstance(value, dict) or set(value) != {"id", "revision", "audio_sha256", "metadata_sha256"}:
         raise ValueError("invalid_voice_identity")
     for key in ("id", "revision"):
         if not isinstance(value[key], str) or str(uuid.UUID(value[key])) != value[key] or uuid.UUID(value[key]).int == 0:
             raise ValueError("invalid_voice_identity")
-    digest = value["audio_sha256"]
-    if not isinstance(digest, str) or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
-        raise ValueError("invalid_voice_identity")
+    for field in ("audio_sha256", "metadata_sha256"):
+        digest = value[field]
+        if not isinstance(digest, str) or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+            raise ValueError("invalid_voice_identity")
     return value
+
+
+def metadata_digest(metadata):
+    value = dict(metadata)
+    value["identity"] = dict(metadata["identity"])
+    value["identity"].pop("metadata_sha256", None)
+    return hashlib.sha256(json.dumps(value, ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
 class Store:
@@ -95,7 +103,7 @@ class Store:
             if entry.suffix not in {".json", ".wav"} or not STEM.fullmatch(entry.stem):
                 continue
             first, second = entry.stem[:36], entry.stem[37:]
-            identity({"id": first, "revision": second, "audio_sha256": "0" * 64})
+            identity({"id": first, "revision": second, "audio_sha256": "0" * 64, "metadata_sha256": "0" * 64})
             stems.add(entry.stem)
             if len(stems) > 32:
                 raise ValueError("voice_candidate_capacity")
@@ -124,6 +132,8 @@ class Store:
                 raise ValueError("voice_metadata_invalid")
         if type(metadata["created_at_ms"]) is not int or metadata["created_at_ms"] <= 0 or type(metadata["sample_rate"]) is not int or metadata["sample_rate"] != 24000 or type(metadata["samples"]) is not int or not 24000 <= metadata["samples"] <= 720000:
             raise ValueError("voice_metadata_invalid")
+        if metadata_digest(metadata) != value["metadata_sha256"]:
+            raise ValueError("voice_prompt_changed")
         audio = self.read(stem + ".wav", 1_440_044)
         if hashlib.sha256(audio).hexdigest() != value["audio_sha256"]:
             raise ValueError("voice_content_changed")
@@ -153,6 +163,7 @@ class Store:
         audio = buffer.getvalue()
         value = {"id": str(uuid.uuid4()), "revision": str(uuid.uuid4()), "audio_sha256": hashlib.sha256(audio).hexdigest()}
         metadata = {"version": 1, "identity": value, "base_revision": BASE, "design_revision": DESIGN, "kind": "generated_voice_candidate", "text": text, "description": description, "created_at_ms": int(time.time() * 1000), "sample_rate": 24000, "samples": len(pcm) // 2}
+        value["metadata_sha256"] = metadata_digest(metadata)
         encoded_metadata = json.dumps(metadata, allow_nan=False, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         if len(encoded_metadata) > 8192:
             raise ValueError("voice_metadata_too_large")
@@ -181,7 +192,7 @@ class Store:
             self.sync_directory()
 
     def discard(self, candidate_id, revision):
-        identity({"id": candidate_id, "revision": revision, "audio_sha256": "0" * 64})
+        identity({"id": candidate_id, "revision": revision, "audio_sha256": "0" * 64, "metadata_sha256": "0" * 64})
         with self.locked():
             selected, file_revision = self.selection()
             if selected is None and file_revision is not None:

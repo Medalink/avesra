@@ -103,11 +103,16 @@ class Driver:
                     ref_audio=(wave, rate), ref_text=text(metadata.get("text"), 2048),
                 )
             if self.lane == "tts" and self.voices is not None:
-                selected, revision = self.voices.selection()
-                if selected is None and revision is not None:
-                    raise ValueError("voice_selection_unreadable")
-                if selected is not None:
-                    self.prompt, self.selected_voice = self.prepare_voice(selected)
+                try:
+                    selected, revision = self.voices.selection()
+                    if selected is None and revision is not None:
+                        raise ValueError("voice_selection_unreadable")
+                    if selected is not None:
+                        self.prompt, self.selected_voice = self.prepare_voice(selected)
+                except Exception:
+                    # Preserve the durable record and keep metadata recovery
+                    # available; an unusable prompt cannot disable explicit clear.
+                    self.prompt = self.selected_voice = None
 
     def prepare_voice(self, selected):
         import numpy as np
@@ -160,10 +165,13 @@ class Driver:
                 raise ValueError("voice_selection_changed")
             self.voices.candidate(selected)  # Revalidate durable identity/content before use.
         if envelope["operation"] == "tts_stream":
-            if self.lane != "tts" or self.prompt is None or set(envelope["payload"]) != {"text"}:
+            if self.lane != "tts" or self.prompt is None or self.selected_voice is None or set(envelope["payload"]) != {"text", "voice"} or envelope["payload"]["voice"] != self.selected_voice:
                 raise ValueError("selected_voice_required")
             from .streaming_tts import synthesize
-            return synthesize(self.model, self.prompt, self.torch, text(envelope["payload"]["text"], 512), envelope["deadline"], emit)
+            selected = dict(self.selected_voice)
+            result = synthesize(self.model, self.prompt, self.torch, text(envelope["payload"]["text"], 512), envelope["deadline"], lambda chunk: emit(dict(chunk, voice=selected)))
+            result["voice"] = selected
+            return result
         if envelope["operation"] != "stream":
             if self.stream is not None:
                 raise ValueError("stream_active")

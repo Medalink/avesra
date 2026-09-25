@@ -2,6 +2,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 pub mod media;
+pub mod voice;
 
 pub const PROTOCOL_VERSION: u16 = 1;
 pub const MAX_CONTROL_BYTES: usize = 65_536;

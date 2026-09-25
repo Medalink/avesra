@@ -1,5 +1,6 @@
 //! Bounded private early-audio receiver. Callers must separately authorize speech.
 use super::{AudioClient, ErrorCode, STANDARD};
+use avesra_contracts::voice::VoiceIdentity;
 use base64::Engine;
 use serde::Deserialize;
 use std::{
@@ -20,6 +21,7 @@ struct Chunk {
     sample_rate: u32,
     sequence: u64,
     samples: usize,
+    voice: VoiceIdentity,
 }
 #[derive(Deserialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -34,6 +36,7 @@ struct Terminal {
     chunks: u64,
     samples: usize,
     sample_rate: u32,
+    voice: VoiceIdentity,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -70,6 +73,7 @@ pub enum SpeechEvent {
         playback_epoch: u64,
         sequence: u64,
         samples: Vec<i16>,
+        voice: VoiceIdentity,
     },
     End {
         utterance_id: Uuid,
@@ -77,6 +81,7 @@ pub enum SpeechEvent {
         playback_epoch: u64,
         outcome: Completion,
         samples: usize,
+        voice: VoiceIdentity,
     },
 }
 pub struct TtsStream {
@@ -93,14 +98,17 @@ pub struct TtsStream {
     sent: bool,
     failed: bool,
     complete: bool,
+    voice: VoiceIdentity,
 }
 impl AudioClient {
     pub async fn synthesize(
         self: &Arc<Self>,
         epoch: u64,
         utterance_id: Uuid,
+        voice: &VoiceIdentity,
         text: &str,
     ) -> Result<TtsStream, ErrorCode> {
+        voice.validate()?;
         if utterance_id.is_nil() || epoch != self.epoch.load(Ordering::SeqCst) {
             return Err(ErrorCode::Stale);
         }
@@ -142,7 +150,7 @@ impl AudioClient {
         let issued = request["issued_at_ms"]
             .as_u64()
             .ok_or(ErrorCode::Malformed)?;
-        request["payload"] = serde_json::json!({"text":text});
+        request["payload"] = serde_json::json!({"text":text,"voice":voice});
         let encoded = serde_json::to_vec(&request).map_err(|_| ErrorCode::Malformed)?;
         drop(request);
         let mut stream = TtsStream {
@@ -159,6 +167,7 @@ impl AudioClient {
             sent: false,
             failed: false,
             complete: false,
+            voice: voice.clone(),
         };
         tokio::time::timeout(Duration::from_secs(3), async {
             let mut socket = UnixStream::connect(&self.socket)
@@ -259,6 +268,7 @@ impl TtsStream {
             Reply::Audio(value) => {
                 let chunk = value.chunk;
                 if chunk.sequence != self.chunks + 1
+                    || chunk.voice != self.voice
                     || self.chunks >= 375
                     || chunk.sample_rate != 24_000
                     || chunk.samples != 1920
@@ -284,11 +294,13 @@ impl TtsStream {
                     playback_epoch: epoch,
                     sequence: self.chunks,
                     samples,
+                    voice: self.voice.clone(),
                 }
             }
             Reply::End(value) => {
                 let terminal = value.result;
                 if self.chunks == 0
+                    || terminal.voice != self.voice
                     || terminal.chunks != self.chunks
                     || terminal.samples != self.samples
                     || terminal.sample_rate != 24_000
@@ -304,6 +316,7 @@ impl TtsStream {
                     playback_epoch: epoch,
                     outcome: terminal.outcome,
                     samples: self.samples,
+                    voice: self.voice.clone(),
                 }
             }
         };

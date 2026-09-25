@@ -242,6 +242,12 @@ class Service:
                 return {"error": "load_required"}
             if not isinstance(payload, dict):
                 return {"error": "invalid_arguments"}
+            expected_voice = None
+            if operation == "tts_stream":
+                from .voice_presets import identity
+                if set(payload) != {"text", "voice"}:
+                    return {"error": "invalid_arguments"}
+                expected_voice = dict(identity(payload["voice"]))
             # Off-loop send: OS pipe capacity must never block cancellation/health.
             envelope = {"operation": operation, "payload": payload, "first": first, "final": final, "deadline": deadline}
             await asyncio.wait_for(asyncio.to_thread(self.pipe.send, envelope), max(0.001, min(2, deadline - time.monotonic())))
@@ -253,7 +259,7 @@ class Service:
             chunk_count = 0
             while "chunk" in result:
                 chunk = result["chunk"]
-                if operation != "tts_stream" or not isinstance(chunk, dict) or set(chunk) != {"pcm_s16le", "sample_rate", "sequence", "samples"}:
+                if operation != "tts_stream" or not isinstance(chunk, dict) or set(chunk) != {"pcm_s16le", "sample_rate", "sequence", "samples", "voice"} or chunk["voice"] != expected_voice:
                     raise ValueError("invalid_stream_reply")
                 if type(chunk["sequence"]) is not int or chunk["sequence"] != chunk_count + 1 or chunk_count >= 375 or type(chunk["sample_rate"]) is not int or chunk["sample_rate"] != 24000 or type(chunk["samples"]) is not int or chunk["samples"] != 1920:
                     raise ValueError("invalid_stream_reply")
@@ -271,7 +277,7 @@ class Service:
                     raise ValueError("stale_reply")
             if operation == "tts_stream" and "result" in result:
                 terminal = result["result"]
-                if not isinstance(terminal, dict) or set(terminal) != {"outcome", "chunks", "samples", "sample_rate"} or terminal["outcome"] not in {"complete", "truncated"} or type(terminal["chunks"]) is not int or terminal["chunks"] != chunk_count or chunk_count == 0 or type(terminal["samples"]) is not int or terminal["samples"] != chunk_count * 1920 or type(terminal["sample_rate"]) is not int or terminal["sample_rate"] != 24000:
+                if not isinstance(terminal, dict) or set(terminal) != {"outcome", "chunks", "samples", "sample_rate", "voice"} or terminal["voice"] != expected_voice or terminal["outcome"] not in {"complete", "truncated"} or type(terminal["chunks"]) is not int or terminal["chunks"] != chunk_count or chunk_count == 0 or type(terminal["samples"]) is not int or terminal["samples"] != chunk_count * 1920 or type(terminal["sample_rate"]) is not int or terminal["sample_rate"] != 24000:
                     raise ValueError("invalid_stream_terminal")
                 result.update(request_id=owner[1], session_id=key, capture_epoch=epoch)
             if "result" in result:
@@ -281,6 +287,8 @@ class Service:
                     self.last_inference_ms = round((time.monotonic() - started) * 1000, 3)
                 result["lane"] = self.config["lane"]
                 result["model_revision"] = self.config["model_revision"]
+                if operation in voice_operations:
+                    result.update(request_id=owner[1], session_id=key, capture_epoch=epoch)
                 if operation == "stream":
                     result["request_id"], result["session_id"], result["capture_epoch"] = owner[1], key, epoch
                     result["chunk_sequence"] = self.stream["next"]
