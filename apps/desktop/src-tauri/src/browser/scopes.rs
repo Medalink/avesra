@@ -88,6 +88,7 @@ pub async fn revoke_browser_scope(
             .ok_or("Restart Avesra")?;
         inner.attempt = None;
         state.browser.scopes.invalidate();
+        state.browser.documents.invalidate();
         let work = state
             .browser
             .scopes
@@ -132,19 +133,19 @@ pub(super) struct Coordinator {
     pending: Mutex<Option<Pending>>,
 }
 #[derive(Clone, Copy)]
-struct Context {
-    attempt: Uuid,
-    transport: u64,
-    settings: u64,
-    connection: u64,
-    session: Id,
-    selection: Id,
-    action: u64,
-    capture: u64,
-    actor: Uuid,
+pub(super) struct Context {
+    pub(super) attempt: Uuid,
+    pub(super) transport: u64,
+    pub(super) settings: u64,
+    pub(super) connection: u64,
+    pub(super) session: Id,
+    pub(super) selection: Id,
+    pub(super) action: u64,
+    pub(super) capture: u64,
+    pub(super) actor: Uuid,
 }
 impl Context {
-    fn matches(
+    pub(super) fn matches(
         &self,
         state: &Runtime,
         local: &avesra_core::state::LocalState,

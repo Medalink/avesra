@@ -18,6 +18,7 @@ use std::{
 };
 use tauri::Manager;
 use uuid::Uuid;
+pub mod documents;
 pub mod scopes;
 
 #[derive(Default)]
@@ -25,6 +26,7 @@ pub struct BrowserSetup {
     work: Arc<tokio::sync::Mutex<()>>,
     inner: Mutex<Inner>,
     scopes: scopes::Coordinator,
+    documents: documents::Coordinator,
 }
 #[derive(Default)]
 struct Inner {
@@ -45,6 +47,7 @@ struct Attempt {
     session: Option<Id>,
     pairing: Option<browser::PairingRef>,
     actor: Option<Uuid>,
+    observation_revision: u64,
     state: &'static str,
 }
 impl Attempt {
@@ -80,6 +83,7 @@ impl BrowserSetup {
             inner.attempt = None;
         }
         self.scopes.invalidate();
+        self.documents.invalidate();
     }
     pub fn settings_hidden(&self) {
         if let Ok(mut inner) = self.inner.lock() {
@@ -93,6 +97,7 @@ impl BrowserSetup {
             }
         }
         self.scopes.invalidate();
+        self.documents.invalidate();
     }
     /// Runtime.local owns every publication. Future document ingress must match
     /// this exact epoch even when a transport survives Stop/Pause for status.
@@ -101,6 +106,7 @@ impl BrowserSetup {
             inner.action_epoch = local.action_epoch;
             inner.action_allowed = local.connected && !local.locked && !local.settings.paused;
             self.scopes.observe(local);
+            self.documents.observe(local);
         }
     }
 }
@@ -183,6 +189,7 @@ pub async fn revoke_browser_pairing(
             .ok_or("Restart Avesra")?;
         inner.attempt = None;
         state.browser.scopes.invalidate();
+        state.browser.documents.invalidate();
         let work = state.browser.work.clone().try_lock_owned().map_err(
             |_| "Connection is closing. Refresh, then explicitly revoke the saved revision.",
         )?;
@@ -227,6 +234,7 @@ fn selection_change(
         .ok_or("Restart Avesra")?;
     inner.attempt = None;
     state.browser.scopes.invalidate();
+    state.browser.documents.invalidate();
     let work = state
         .browser
         .work
@@ -440,6 +448,7 @@ pub fn browser_pairing_status(
                 .map_err(|_| "Scope state unavailable")?
         } else {
             state.browser.scopes.invalidate();
+            state.browser.documents.invalidate();
             None
         },
     })
@@ -465,6 +474,7 @@ pub fn cancel_browser_pairing(
         inner.settings_generation = inner.settings_generation.saturating_add(1);
         inner.attempt = None;
         state.browser.scopes.invalidate();
+        state.browser.documents.invalidate();
     }
     Ok(())
 }
@@ -492,6 +502,7 @@ pub fn release_browser_management(
             && current.current_time();
         inner.settings_generation = inner.settings_generation.saturating_add(1);
         state.browser.scopes.invalidate();
+        state.browser.documents.invalidate();
         if !established {
             inner.generation = inner.generation.saturating_add(1);
             inner.attempt = None;
@@ -591,6 +602,7 @@ fn begin(
             .checked_add(1)
             .ok_or("Restart Avesra to reset browser ownership")?;
         state.browser.scopes.invalidate();
+        state.browser.documents.invalidate();
         inner.attempt = Some(Attempt {
             id,
             connection: state.connection_generation.load(Ordering::SeqCst),
@@ -602,6 +614,7 @@ fn begin(
             session: None,
             pairing: None,
             actor: None,
+            observation_revision: 0,
             state: "preparing",
         });
         inner.generation
@@ -778,10 +791,67 @@ async fn run(
             })?;
             let message: Client = browser::decode(&pipe.receive().await?)?;
             with_attempt(app, id, generation, |_, _, _| Ok(()))?;
+            let revision = match &message {
+                Client::Poll {
+                    session,
+                    sequence,
+                    observation_revision,
+                } => Some((*session, *sequence, *observation_revision)),
+                Client::ScopeResult {
+                    session,
+                    sequence,
+                    observation_revision,
+                    ..
+                } => Some((*session, *sequence, *observation_revision)),
+                Client::DocumentResult {
+                    session,
+                    sequence,
+                    reply,
+                } => Some((*session, *sequence, reply.observation_revision)),
+                _ => None,
+            };
+            if let Some((session, next, revision)) = revision {
+                if session != challenge.session
+                    || sequence.checked_add(1) != Some(next)
+                    || (!authenticated && !matches!(message, Client::Poll { .. }))
+                {
+                    return Err(ErrorCode::Malformed);
+                }
+                with_attempt(app, id, generation, |state, _, attempt| {
+                    if revision == 0
+                        || revision > browser::MAX_SAFE_COUNTER
+                        || revision < attempt.observation_revision
+                    {
+                        return Err(ErrorCode::Malformed);
+                    }
+                    if revision > attempt.observation_revision {
+                        attempt.observation_revision = revision;
+                        state.browser.documents.invalidate();
+                    }
+                    Ok(())
+                })?;
+            }
             let message = match message {
+                Client::DocumentResult {
+                    session,
+                    sequence: next,
+                    reply,
+                } if authenticated
+                    && session == challenge.session
+                    && sequence.checked_add(1) == Some(next) =>
+                {
+                    let observation_revision = reply.observation_revision;
+                    discard_withdrawn(documents::reply(app, id, generation, session, reply))?;
+                    Client::Poll {
+                        session,
+                        sequence: next,
+                        observation_revision,
+                    }
+                }
                 Client::ScopeResult {
                     session,
                     sequence: next,
+                    observation_revision,
                     reference,
                     action_epoch,
                     permitted,
@@ -789,7 +859,7 @@ async fn run(
                     && session == challenge.session
                     && sequence.checked_add(1) == Some(next) =>
                 {
-                    scopes::decision(
+                    discard_withdrawn(scopes::decision(
                         app,
                         id,
                         generation,
@@ -797,10 +867,11 @@ async fn run(
                         reference,
                         action_epoch,
                         permitted,
-                    )?;
+                    ))?;
                     Client::Poll {
                         session,
                         sequence: next,
+                        observation_revision,
                     }
                 }
                 other => other,
@@ -810,6 +881,7 @@ async fn run(
                 Client::Poll {
                     session,
                     sequence: next,
+                    observation_revision: _,
                 } if session == challenge.session && sequence.checked_add(1) == Some(next) => {
                     sequence = next;
                     if job.as_ref().is_some_and(|v| v.is_finished()) {
@@ -903,6 +975,14 @@ async fn run(
                                         && !local.settings.paused,
                                 },
                             ),
+                            document: if authenticated && attempt.selection.is_some() {
+                                state
+                                    .browser
+                                    .documents
+                                    .request(state, local, generation, attempt)?
+                            } else {
+                                None
+                            },
                             scope: if authenticated && attempt.selection.is_some() {
                                 state
                                     .browser
@@ -955,6 +1035,7 @@ async fn run(
         attempt.approval = None;
         attempt.state = "closing";
         state.browser.scopes.invalidate();
+        state.browser.documents.invalidate();
         Ok(())
     });
     drop(pipe);
@@ -962,4 +1043,11 @@ async fn run(
         let _ = job.await;
     }
     result
+}
+
+fn discard_withdrawn(result: Result<(), ErrorCode>) -> Result<(), ErrorCode> {
+    match result {
+        Ok(()) | Err(ErrorCode::Stale | ErrorCode::Expired) => Ok(()),
+        other => other,
+    }
 }

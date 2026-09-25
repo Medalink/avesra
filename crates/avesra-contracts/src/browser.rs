@@ -4,7 +4,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error};
 use uuid::Uuid;
 pub mod documents;
 
-pub const VERSION: u16 = 4;
+pub const VERSION: u16 = 5;
 pub const MAX_MESSAGE: usize = 65536;
 pub const HANDSHAKE_SECONDS: u64 = 45;
 
@@ -277,6 +277,8 @@ pub struct StatusReply {
     pub authority: Option<Authority>,
     #[serde(deserialize_with = "required_nullable")]
     pub scope: Option<ScopeStatus>,
+    #[serde(deserialize_with = "required_nullable")]
+    pub document: Option<documents::Request>,
 }
 fn required_nullable<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
@@ -307,6 +309,12 @@ impl StatusReply {
             }
             scope.validate()?;
         }
+        if let Some(document) = &self.document {
+            if self.authority.is_none() {
+                return Err(ErrorCode::Malformed);
+            }
+            document.validate()?;
+        }
         Ok(())
     }
 }
@@ -323,13 +331,20 @@ pub enum Client {
     Poll {
         session: Id,
         sequence: u64,
+        observation_revision: u64,
     },
     ScopeResult {
         session: Id,
         sequence: u64,
+        observation_revision: u64,
         reference: ScopeRef,
         action_epoch: u64,
         permitted: bool,
+    },
+    DocumentResult {
+        session: Id,
+        sequence: u64,
+        reply: documents::Reply,
     },
     Disconnect {
         session: Id,
@@ -343,7 +358,7 @@ pub fn comparison_transcript(challenge: &Challenge) -> Result<Vec<u8>, ErrorCode
         return Err(ErrorCode::Unsupported);
     }
     Ok(format!(
-        "AVESRA-BROWSER-COMPARE-4\n{}\n{}\n{}\n{}\n{}\n",
+        "AVESRA-BROWSER-COMPARE-5\n{}\n{}\n{}\n{}\n{}\n",
         challenge.installation.uuid(),
         challenge.connection.uuid(),
         challenge.session.uuid(),
@@ -370,7 +385,7 @@ pub fn transcript(
         return Err(ErrorCode::Stale);
     }
     Ok(format!(
-        "AVESRA-BROWSER-AUTH-4\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n",
+        "AVESRA-BROWSER-AUTH-5\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n",
         pairing.id.uuid(),
         pairing.revision.uuid(),
         hello.installation.uuid(),

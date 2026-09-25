@@ -1,5 +1,6 @@
 import * as p from "./protocol.js";
 import { ObservationAuthority } from "./authority.js";
+import { Documents } from "./documents.js";
 import { PermissionProposal, view } from "./permissions.js";
 let port: chrome.runtime.Port | null = null;
 let generation = 0;
@@ -14,10 +15,12 @@ let busy = false;
 let poll: ReturnType<typeof setTimeout> | undefined;
 let observation: ObservationAuthority | null = null;
 let permissions: PermissionProposal | null = null;
+let documents: Documents | null = null;
 let scopeOutcome: p.Scope | null = null;
 function current(owned: chrome.runtime.Port, epoch: number) { return owned === port && generation === epoch; }
 function close(reason: string, owned = port, epoch = generation, unavailable = false) {
   if (owned !== port || epoch !== generation) return;
+  documents?.dispose(); documents = null;
   permissions?.dispose(); permissions = null; scopeOutcome = null;
   observation?.dispose(); observation = null;
   port = null; generation++; state = reason; connected = false; comparison = "";
@@ -41,6 +44,8 @@ async function connect() {
     observation = authority;
     const scopes = new PermissionProposal(authority, () => current(owned, epoch));
     permissions = scopes;
+    const metadata = new Documents(authority, () => current(owned, epoch), () => close("Document observation revision exhausted; reconnect explicitly.", owned, epoch, true));
+    documents = metadata;
     let challenge: p.Challenge | null = null, handling = false, waiting = true, sequence = 0;
     let nativeGeneration: number | null = null;
     let phase: "challenge" | "pending" | "proof" | "authenticated" = "challenge";
@@ -53,8 +58,10 @@ async function connect() {
       poll = setTimeout(() => {
         if (!current(owned, epoch) || !challenge || waiting || handling) return;
         if (!p.counter(sequence + 1)) { close("Browser sequence exhausted", owned, epoch, true); return; }
+        const result = metadata.takeReply();
+        if (result) { send({type:"document_result",body:{session:challenge.session,sequence:++sequence,reply:result}}); return; }
         const decision = scopes.takeDecision();
-        send(decision ? { type: "scope_result", body: { session: challenge.session, sequence: ++sequence, ...decision } } : { type: "poll", body: { session: challenge.session, sequence: ++sequence } });
+        send(decision ? { type: "scope_result", body: { session: challenge.session, sequence: ++sequence, observation_revision:metadata.observationRevision(), ...decision } } : { type: "poll", body: { session: challenge.session, sequence: ++sequence, observation_revision:metadata.observationRevision() } });
       }, 1000);
     }
     async function authenticate() {
@@ -62,7 +69,7 @@ async function connect() {
       const proof = await p.proof(challenge, record, nonce);
       if (!current(owned, epoch)) return;
       phase = "proof"; state = "Verifying saved pairing";
-      send({ type: "authenticate", body: { version: 4, session: challenge.session, challenge: challenge.challenge, pairing: record.pairing, proof } });
+      send({ type: "authenticate", body: { version: 5, session: challenge.session, challenge: challenge.challenge, pairing: record.pairing, proof } });
     }
     async function receive(value: unknown) {
       if (!current(owned, epoch)) return;
@@ -77,7 +84,7 @@ async function connect() {
           comparison = code;
           if (record) await authenticate();
           else { phase = "pending"; state = "Compare this code and approve once in Windows Settings"; schedule(); }
-        } else if (p.object(value, ["type", "version", "challenge", "pairing", "credential"]) && value.type === "issued" && value.version === 4 && p.challenge(value.challenge) && p.pairing(value.pairing) && p.hex(value.credential)) {
+        } else if (p.object(value, ["type", "version", "challenge", "pairing", "credential"]) && value.type === "issued" && value.version === 5 && p.challenge(value.challenge) && p.pairing(value.pairing) && p.hex(value.credential)) {
           const next = value.challenge;
           if (phase !== "pending" || record || !challenge || next.session !== challenge.session || next.challenge !== challenge.challenge || next.nonce !== challenge.nonce || next.installation !== installation || next.connection !== connection || !p.equal(next.pairing, value.pairing)) throw new Error("Issued pairing mismatch");
           record = { version: 1, installation, pairing: value.pairing, credential: value.credential };
@@ -88,7 +95,7 @@ async function connect() {
           savedPairing = record.pairing; challenge = next; await authenticate();
         } else if (p.object(value, ["type", "body"]) && value.type === "authenticated" && p.object(value.body, ["version", "session", "installation", "connection", "pairing", "generation"])) {
           const body = value.body;
-          if (phase !== "proof" || !challenge || !record || body.version !== 4 || body.session !== challenge.session || body.installation !== installation || body.connection !== connection || !p.pairing(body.pairing) || !p.equal(body.pairing, record.pairing) || !Number.isSafeInteger(body.generation) || Number(body.generation) <= 0) throw new Error("Authentication reply mismatch");
+          if (phase !== "proof" || !challenge || !record || body.version !== 5 || body.session !== challenge.session || body.installation !== installation || body.connection !== connection || !p.pairing(body.pairing) || !p.equal(body.pairing, record.pairing) || !Number.isSafeInteger(body.generation) || Number(body.generation) <= 0) throw new Error("Authentication reply mismatch");
           if (nativeGeneration !== null && body.generation !== nativeGeneration) throw new Error("Native generation changed during authentication");
           nativeGeneration = Number(body.generation);
           phase = "authenticated"; connected = true; comparison = ""; state = "Paired connection · page operations unavailable"; displayPhase = "Paired"; tone = "paired"; schedule();
@@ -98,6 +105,7 @@ async function connect() {
           if (nativeGeneration === null) nativeGeneration = status.generation;
           if (phase === "authenticated") {
             authority.observe(status.authority);
+            metadata.observe(status.document,status.session,status.generation);
             scopes.observe(status);
             scopeOutcome = status.scope;
             void scopes.reconcile();
@@ -116,7 +124,7 @@ async function connect() {
       if (!current(owned, epoch)) return;
       close(failed ? "Native companion unavailable or expired. Open pairing in Windows Settings." : "Disconnected", owned, epoch, !!failed);
     });
-    send({ type: "hello", body: { version: 4, installation, connection, extension: chrome.runtime.id, nonce, pairing: savedPairing } });
+    send({ type: "hello", body: { version: 5, installation, connection, extension: chrome.runtime.id, nonce, pairing: savedPairing } });
   } catch {
     if (generation === epoch) {
       const identity = await p.recoveryIdentity().catch(() => null);
@@ -155,3 +163,20 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, reply) => {
 // Register synchronously: worker restart discards pending proposal authority.
 chrome.permissions.onAdded.addListener(() => { void permissions?.reconcile(); });
 chrome.permissions.onRemoved.addListener(() => { close("Browser permission removed; connection authority withdrawn.", port, generation, true); });
+
+// These listeners only invalidate in-memory ownership; no page data is retained.
+const invalidateDocuments = () => documents?.invalidate();
+chrome.webNavigation.onBeforeNavigate.addListener(invalidateDocuments);
+chrome.webNavigation.onCommitted.addListener(invalidateDocuments);
+chrome.webNavigation.onErrorOccurred.addListener(invalidateDocuments);
+chrome.webNavigation.onHistoryStateUpdated.addListener(invalidateDocuments);
+chrome.webNavigation.onReferenceFragmentUpdated.addListener(invalidateDocuments);
+chrome.webNavigation.onTabReplaced.addListener(invalidateDocuments);
+chrome.tabs.onRemoved.addListener(invalidateDocuments);
+chrome.tabs.onReplaced.addListener(invalidateDocuments);
+chrome.tabs.onUpdated.addListener(invalidateDocuments);
+chrome.tabs.onAttached.addListener(invalidateDocuments);
+chrome.tabs.onDetached.addListener(invalidateDocuments);
+chrome.tabs.onMoved.addListener(invalidateDocuments);
+chrome.tabs.onActivated.addListener(invalidateDocuments);
+chrome.windows.onFocusChanged.addListener(invalidateDocuments);

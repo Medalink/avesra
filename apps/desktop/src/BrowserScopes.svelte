@@ -1,4 +1,5 @@
 <script lang="ts">
+  import BrowserDocuments from "./BrowserDocuments.svelte";
   import { onMount } from "svelte";
   import { command, native, type Runtime } from "./runtime";
   type Reference = { id: string; revision: string };
@@ -9,6 +10,7 @@
   let origin = $state(""), read = $state(true), navigate = $state(false);
   let busy = $state(false), error = $state(""), saved = $state<Grant[] | null>(null);
   let owned = $state<Reference | null>(null);
+  let documentScope = $state<Grant | null>(null);
   let submitted = $state<{ reference: Reference; origin: string; operations: string[] } | null>(null);
   let mounted = false, generation = 0, context = "";
   const enabled = $derived(native && !!runtime?.connected && !runtime.locked);
@@ -19,7 +21,7 @@
   const shownOperations = $derived(pending?.operations ?? (submittedMatches ? submitted!.operations : null));
   const pendingLabel = $derived(pending ? ({ pending: "Awaiting extension approval", saving: "Saving scope metadata", saved: "Scope metadata saved", declined: "Declined", unavailable: "Save unverified" }[pending.state] ?? "Unavailable") : "");
   function invalidate() {
-    generation++; saved = null; submitted = null;
+    generation++; saved = null; submitted = null; documentScope = null;
     const reference = owned; owned = null;
     if (native && reference) void command("cancel_browser_scope", { reference }).catch(() => {});
   }
@@ -87,8 +89,14 @@
 {#if saved !== null}
   <div class="av-card divide-y divide-white/[0.06]">
     {#each saved as record (`${record.id}:${record.revision}`)}
-      <div class="flex items-start gap-3 px-3.5 py-2.5"><div class="min-w-0 flex-1"><span class="text-[12.5px] text-zinc-200">{record.origin}</span><p class="av-hint">Saved metadata · {record.operations.join(" · ")} · Chrome permission not inspected</p><p class="break-all font-mono text-[10.5px] leading-4 text-zinc-400">{record.id} / {record.revision}<br />Selection: {record.selection}<br />Application: {record.browser_app} / {record.browser_revision}</p></div><button class="av-btn av-btn-ghost av-btn-sm" disabled={!enabled || busy} onclick={() => revoke(record)}>Revoke</button></div>
+      <div class="flex items-start gap-3 px-3.5 py-2.5"><div class="min-w-0 flex-1"><span class="text-[12.5px] text-zinc-200">{record.origin}</span><p class="av-hint">Saved metadata · {record.operations.join(" · ")} · Chrome permission not inspected</p><p class="break-all font-mono text-[10.5px] leading-4 text-zinc-400">{record.id} / {record.revision}<br />Selection: {record.selection}<br />Application: {record.browser_app} / {record.browser_revision}</p></div><div class="flex flex-col items-end gap-1.5"><button class="av-btn av-btn-secondary av-btn-sm" disabled={!canPropose || busy || !record.operations.includes("read") || record.selection !== status?.selection} onclick={() => documentScope = record}>Choose document</button><button class="av-btn av-btn-ghost av-btn-sm" disabled={!enabled || busy} onclick={() => revoke(record)}>Revoke</button></div></div>
     {:else}<p class="av-hint px-3.5 py-2.5">No saved native site scopes.</p>{/each}
   </div>
   <p class="av-hint">Revoking a native scope closes its browser connection. It does not remove an independently granted Chrome site permission; manage that in the browser's extension settings.</p>
+{/if}
+
+{#if documentScope}
+  {#key `${documentScope.id}:${documentScope.revision}`}
+    <BrowserDocuments {runtime} reference={{id:documentScope.id,revision:documentScope.revision}} origin={documentScope.origin} />
+  {/key}
 {/if}

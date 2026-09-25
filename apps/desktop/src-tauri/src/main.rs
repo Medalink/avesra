@@ -623,6 +623,10 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             browser::begin_browser_pairing,
             browser::connect_selected_browser,
+            browser::documents::inspect_browser_documents,
+            browser::documents::browser_documents_status,
+            browser::documents::cancel_browser_documents,
+            browser::documents::select_browser_document,
             browser::scopes::propose_browser_scope,
             browser::scopes::saved_browser_scopes,
             browser::scopes::cancel_browser_scope,

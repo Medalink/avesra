@@ -23,9 +23,11 @@ export class Documents {
   private disposed = false;
   private revision = 1;
   private job: Job | null = null;
-  constructor(private readonly authority: ObservationAuthority, private readonly connected: () => boolean) {}
+  private seen = new Set<string>();
+  observationRevision() { return this.revision; }
+  constructor(private readonly authority: ObservationAuthority, private readonly connected: () => boolean, private readonly exhausted: () => void) {}
   invalidate() {
-    if (!Number.isSafeInteger(this.revision + 1)) { this.dispose(); return; }
+    if (!Number.isSafeInteger(this.revision + 1)) { this.dispose(); this.exhausted(); return; }
     this.revision++;
     if (this.job) this.job.reply = null;
   }
@@ -40,6 +42,8 @@ export class Documents {
       job.deadline = Math.min(job.deadline, performance.now() + value.remaining_ms);
       return;
     }
+    if (this.seen.has(value.request) || this.seen.size >= 64) throw new Error("Document request identity reused or exhausted");
+    this.seen.add(value.request);
     const owner = this.authority.snapshot();
     if (!owner) return;
     const job: Job = { request: value, deadline: performance.now() + value.remaining_ms, revision: this.revision, owner, session, generation, reply: null, sent: false };
