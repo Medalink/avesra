@@ -94,7 +94,7 @@ export function beginPageExcerpt(input: ReadParameters): Extracted {
           if (++depth > 64) { excluded = true; return NodeFilter.FILTER_REJECT; }
           if (performance.now() >= cutoff) throw limit;
         }
-        if (["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "IFRAME", "FRAME", "OBJECT", "EMBED", "FORM", "INPUT", "TEXTAREA", "SELECT", "BUTTON"].includes(node.tagName) ||
+        if (["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "IFRAME", "FRAME", "OBJECT", "EMBED", "CANVAS", "VIDEO", "AUDIO", "METER", "PROGRESS", "FORM", "INPUT", "TEXTAREA", "SELECT", "BUTTON"].includes(node.tagName) ||
           node.isContentEditable || node.hidden || node.inert || node.getAttribute("aria-hidden") === "true" ||
           (node.tagName === "DETAILS" && !node.hasAttribute("open")) || node.getAttribute("aria-expanded") === "false" ||
           ["textbox", "combobox", "spinbutton"].includes(node.getAttribute("role") ?? "") || node.hasAttribute("autocomplete")) {
