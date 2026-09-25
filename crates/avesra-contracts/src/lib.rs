@@ -397,15 +397,14 @@ impl Envelope {
             ControlMessage::Cancel { task_id } if task_id.is_nil() => {
                 return Err(ErrorCode::Malformed);
             }
-            ControlMessage::Hello { capabilities } => {
+            ControlMessage::Hello { capabilities }
                 if capabilities.len() > 7
                     || capabilities
                         .iter()
                         .enumerate()
-                        .any(|(i, lane)| capabilities[..i].contains(lane))
-                {
-                    return Err(ErrorCode::Malformed);
-                }
+                        .any(|(i, lane)| capabilities[..i].contains(lane)) =>
+            {
+                return Err(ErrorCode::Malformed);
             }
             _ => {}
         }
