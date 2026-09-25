@@ -72,24 +72,30 @@ pub fn spawn(app: tauri::AppHandle, record: PairingRecord, generation: u64) -> W
 fn current(app: &tauri::AppHandle, expected: SessionIdentity) -> Result<(), String> {
     let state = app.state::<Runtime>();
     let local = state.local.lock().map_err(|_| "Local state unavailable")?;
+    current_locked(&state, &local, expected).map(|_| ())
+}
+fn current_locked(
+    state: &Runtime,
+    local: &avesra_core::state::LocalState,
+    expected: SessionIdentity,
+) -> Result<SessionIdentity, String> {
     let session = state
         .acknowledged_session
         .lock()
         .map_err(|_| "Session unavailable")?;
+    let acknowledged = session.ok_or("No acknowledged voice session")?;
     if state.connection_generation.load(Ordering::SeqCst) != expected.generation
         || local.capture_epoch != expected.epoch
         || !local.capture_allowed()
         || !local.voice_ready
         || local.enrollment_capture
-        || session.is_none_or(|value| {
-            value.id != expected.id
-                || value.epoch != expected.epoch
-                || value.generation != expected.generation
-        })
+        || acknowledged.id != expected.id
+        || acknowledged.epoch != expected.epoch
+        || acknowledged.generation != expected.generation
     {
         return Err("Voice media context changed".into());
     }
-    Ok(())
+    Ok(acknowledged)
 }
 async fn invalidated(
     app: &tauri::AppHandle,
@@ -204,16 +210,12 @@ async fn window(
     let original_context = {
         let state = app.state::<Runtime>();
         let local = state.local.lock().map_err(|_| "Local state unavailable")?;
-        if local.capture_epoch != session.epoch
-            || state.connection_generation.load(Ordering::SeqCst) != session.generation
-        {
-            return Err("Capture epoch changed".into());
-        }
+        let acknowledged = current_locked(&state, &local, session)?;
         state.media.open_voice_window(&local)?;
         avesra_core::voice::Context {
             device: record.device_id,
-            session: session.id,
-            capture_epoch: session.epoch,
+            session: acknowledged.id,
+            capture_epoch: acknowledged.epoch,
             action_epoch: local.action_epoch,
             microphone: local
                 .settings
@@ -259,7 +261,8 @@ async fn window(
                         if sent!=500||value.version!=1||value.session_id!=session.id||value.capture_epoch!=session.epoch||value.utterance_id!=utterance||value.sequence!=sent||value.sequence!=received+1||value.asr_revision!="ebe59e5a817142986528bbbee5dba8db7b38ed50"||value.speaker_revision!="0f99f2d0ebe89ac095bcc5903c4dd8f72b367286"||value.transcript.len()>8192||value.embedding.as_ref().is_some_and(|v|v.len()!=192||v.iter().any(|n|!n.is_finite()))||value.outcome!="abstain"||value.reason!="owner_overlap_directness_qualification_required"||value.accepted_turn {return Err("Invalid final voice analysis".into());}
                         let state=app.state::<Runtime>();
                         let local=state.local.lock().map_err(|_|"Local state unavailable")?;
-                        let context=avesra_core::voice::Context{device:record.device_id,session:session.id,capture_epoch:local.capture_epoch,action_epoch:local.action_epoch,microphone:local.settings.microphone.clone().ok_or("Microphone not selected")?,grant_revision:None,actor:None};
+                        let acknowledged=current_locked(&state,&local,session)?;
+                        let context=avesra_core::voice::Context{device:record.device_id,session:acknowledged.id,capture_epoch:acknowledged.epoch,action_epoch:local.action_epoch,microphone:local.settings.microphone.clone().ok_or("Microphone not selected")?,grant_revision:None,actor:None};
                         let observation=avesra_core::voice::Observation{utterance,context:original_context,asr_revision:value.asr_revision,speaker_revision:value.speaker_revision,started:opened,completed:Instant::now(),transcript:value.transcript,embedding:value.embedding,overlap:avesra_core::voice::AudioCondition::Unknown,echo:avesra_core::voice::AudioCondition::Unknown,signal:avesra_core::voice::SignalEvidence::Unknown,directed:avesra_core::voice::DirectedIntent::Unknown};
                         let decision=state.turns.lock().map_err(|_|"Turn gate unavailable")?.analyze(&context,None,observation,None);
                         // No qualified profile exists: discard every observation
