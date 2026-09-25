@@ -38,7 +38,7 @@ struct Renderer {
     output: [f32; 3840],
     output_len: usize,
     output_index: usize,
-    previous: Option<Uuid>,
+    recent: [Option<(Uuid, Instant)>; 64],
 }
 impl Renderer {
     fn new(source_rate: PlaybackRate, output_rate: u32) -> Result<Self, ErrorCode> {
@@ -64,7 +64,7 @@ impl Renderer {
             output: [0.0; 3840],
             output_len: 0,
             output_index: 0,
-            previous: None,
+            recent: [None; 64],
         })
     }
     fn clear(&mut self) {
@@ -128,7 +128,6 @@ impl Renderer {
                 || first.epoch != epoch
                 || first.rate != self.source_rate
                 || first.sequence != 1
-                || self.previous == Some(first.utterance)
             {
                 return Err(ErrorCode::Stale);
             }
@@ -144,6 +143,28 @@ impl Renderer {
                 }
             }
             let first = self.waiting.take().ok_or(ErrorCode::Malformed)?;
+            let now = Instant::now();
+            for entry in &mut self.recent {
+                if entry.is_some_and(|(_, expiry)| now >= expiry) {
+                    *entry = None;
+                }
+            }
+            if self
+                .recent
+                .iter()
+                .flatten()
+                .any(|(id, _)| *id == first.utterance)
+            {
+                return Err(ErrorCode::Stale);
+            }
+            let entry = self
+                .recent
+                .iter_mut()
+                .find(|entry| entry.is_none())
+                .ok_or(ErrorCode::TooLarge)?;
+            // Fixed storage, longer than the maximum 30s packet deadline. Keep
+            // tombstones through filter/utterance reset; capacity fails closed.
+            *entry = Some((first.utterance, now + Duration::from_secs(31)));
             let binding = Binding {
                 epoch,
                 utterance: first.utterance,
@@ -210,7 +231,6 @@ impl Renderer {
         self.emitted += 1;
         let last = self.target == Some(self.emitted);
         if last {
-            self.previous = Some(binding.utterance);
             self.clear();
         }
         Ok(Some((value, binding, last)))
