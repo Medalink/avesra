@@ -5,6 +5,7 @@ mod preview;
 mod profiles;
 mod setup;
 mod voice;
+mod voices;
 use avesra_core::{
     state::{LocalControl, LocalState, Settings},
     store::Store,
@@ -59,6 +60,7 @@ struct Runtime {
     pairing: tokio::sync::Mutex<()>,
     health: tokio::sync::Mutex<()>,
     preview: tokio::sync::Mutex<()>,
+    voice_panel: Mutex<Option<uuid::Uuid>>,
 }
 impl Runtime {
     fn publish(&self, local: &LocalState) {
@@ -446,6 +448,7 @@ fn main() {
                 pairing: tokio::sync::Mutex::new(()),
                 health: tokio::sync::Mutex::new(()),
                 preview: tokio::sync::Mutex::new(()),
+                voice_panel: Mutex::new(None),
             });
             if let Some(window) = app.get_webview_window("settings") {
                 let handle = window.hwnd()?;
@@ -535,6 +538,9 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             preview::preview_voice,
+            voices::open_voice_panel,
+            voices::close_voice_panel,
+            voices::voice_operation,
             setup::setup_status,
             setup::verify_setup,
             setup::cancel_setup,

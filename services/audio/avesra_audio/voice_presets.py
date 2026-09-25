@@ -219,7 +219,7 @@ class Store:
                     pcm = None
                     if metadata["identity"]["id"] != value["id"] or metadata["identity"]["revision"] != value["revision"]:
                         raise ValueError("voice_identity_mismatch")
-                    value.update(identity=metadata["identity"], description=metadata["description"], created_at_ms=metadata["created_at_ms"], state="available")
+                    value.update(identity=metadata["identity"], description=metadata["description"], text=metadata["text"], created_at_ms=metadata["created_at_ms"], state="available")
                     if selected == metadata["identity"]:
                         selection_state = "available"
                 except (OSError, ValueError, TypeError, KeyError, wave.Error):

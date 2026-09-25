@@ -22,12 +22,17 @@ struct Lease {
     session: SessionIdentity,
     epoch: u64,
     id: Uuid,
+    panel: Uuid,
 }
 impl Lease {
     fn current(&self, acknowledged: bool) -> Result<(), String> {
         let state = self.app.state::<Runtime>();
         let local = state.local.lock().map_err(|_| "Local state unavailable")?;
-        if !local.connected
+        if !state
+            .voice_panel
+            .lock()
+            .is_ok_and(|value| *value == Some(self.panel))
+            || !local.connected
             || local.locked
             || local.settings.deafened
             || local.settings.paused
@@ -73,6 +78,7 @@ pub async fn preview_voice(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
     voice: VoiceIdentity,
+    panel: Uuid,
 ) -> Result<String, String> {
     let admission_epoch = app
         .state::<Runtime>()
@@ -93,7 +99,11 @@ pub async fn preview_voice(
         .map_err(|_| "A preview is already active")?;
     let (lease, gain) = {
         let mut local = state.local.lock().map_err(|_| "Local state unavailable")?;
-        if local.capture_epoch != admission_epoch
+        if !state
+            .voice_panel
+            .lock()
+            .is_ok_and(|value| *value == Some(panel))
+            || local.capture_epoch != admission_epoch
             || !local.connected
             || local.locked
             || local.settings.deafened
@@ -119,6 +129,7 @@ pub async fn preview_voice(
             session,
             epoch: local.playback_epoch,
             id,
+            panel,
         };
         let _ = app.emit("runtime-state", local.clone());
         (lease, f32::from(local.settings.speech_volume) / 100.0)

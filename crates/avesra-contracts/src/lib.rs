@@ -4,6 +4,7 @@ use uuid::Uuid;
 pub mod media;
 pub mod preview;
 pub mod voice;
+pub mod voices;
 
 pub const PROTOCOL_VERSION: u16 = 2;
 pub const MAX_CONTROL_BYTES: usize = 65_536;

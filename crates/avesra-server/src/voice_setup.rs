@@ -1,31 +1,11 @@
 //! Paired explicit voice setup. Microphone permission is independent of output.
 use super::{Shared, active, authenticate_headers};
-use avesra_contracts::{ErrorCode, voice::VoiceIdentity};
+use avesra_contracts::{ErrorCode, voices::VoiceCommand as Command};
 use axum::http::{HeaderMap, StatusCode};
 use serde::Deserialize;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
-#[derive(Deserialize)]
-#[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
-enum Command {
-    Status,
-    Generate {
-        text: String,
-        description: String,
-    },
-    Select {
-        voice: VoiceIdentity,
-        expected_selection: Option<String>,
-    },
-    Clear {
-        expected_selection: Option<String>,
-    },
-    Discard {
-        id: Uuid,
-        revision: Uuid,
-    },
-}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Request {
@@ -106,6 +86,10 @@ pub(super) async fn operation(
 ) -> Result<serde_json::Value, StatusCode> {
     let device = authenticate_headers(auth.clone(), &headers).await?;
     let request: Request = serde_json::from_value(body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    request
+        .command
+        .validate()
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
     if request.version != 1 {
         return Err(StatusCode::BAD_REQUEST);
     }

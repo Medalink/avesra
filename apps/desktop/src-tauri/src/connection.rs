@@ -22,6 +22,129 @@ pub struct SessionIdentity {
     pub playback_epoch: u64,
     pub generation: u64,
 }
+#[derive(Serialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum VoiceResult {
+    Status(Box<avesra_contracts::voices::VoiceStatus>),
+    Candidate(Box<avesra_contracts::voices::Candidate>),
+    Changed,
+}
+pub async fn voice_operation(
+    record: &PairingRecord,
+    session: SessionIdentity,
+    command: &avesra_contracts::voices::VoiceCommand,
+) -> Result<VoiceResult, String> {
+    use avesra_contracts::voices::{Candidate, VoiceCommand, VoiceStatus};
+    record.validate()?;
+    command.validate().map_err(|_| "Invalid voice command")?;
+    let request_id = Uuid::new_v4();
+    let body=serde_json::to_vec(&serde_json::json!({"version":1,"request_id":request_id,"session_id":session.id,"capture_epoch":session.epoch,"command":command})).map_err(|_|"Voice command encoding failed")?;
+    if body.len() > 16384 {
+        return Err("Voice description exceeds transport limit".into());
+    }
+    let cert = certificate(&record.certificate)?;
+    let client = reqwest::Client::builder()
+        .tls_built_in_root_certs(false)
+        .add_root_certificate(
+            reqwest::Certificate::from_der(&cert).map_err(|_| "Invalid TLS certificate")?,
+        )
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(35))
+        .build()
+        .map_err(|_| "Voice TLS unavailable")?;
+    let mut response = client
+        .post(
+            endpoint(&record.url)?
+                .join("voices")
+                .map_err(|_| "Invalid voice endpoint")?,
+        )
+        .bearer_auth(&record.credential)
+        .header("Content-Type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .map_err(|_| "Voice request unavailable; refresh status before retrying")?;
+    if !response.status().is_success() {
+        return Err("Voice service rejected the operation; refresh status before retrying".into());
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| "Voice response interrupted; refresh status before retrying")?
+    {
+        if bytes.len() + chunk.len() > 524288 {
+            return Err("Voice response exceeds limit".into());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Reply {
+        version: u16,
+        request_id: Uuid,
+        session_id: Uuid,
+        capture_epoch: u64,
+        result: serde_json::Value,
+    }
+    let reply: Reply = serde_json::from_slice(&bytes).map_err(|_| "Invalid voice response")?;
+    if reply.version != 1
+        || reply.request_id != request_id
+        || reply.session_id != session.id
+        || reply.capture_epoch != session.epoch
+    {
+        return Err("Stale voice response".into());
+    }
+    match command {
+        VoiceCommand::Status => {
+            let value: VoiceStatus =
+                serde_json::from_value(reply.result).map_err(|_| "Invalid voice status")?;
+            value.validate().map_err(|_| "Invalid voice status")?;
+            Ok(VoiceResult::Status(Box::new(value)))
+        }
+        VoiceCommand::Generate { text, description } => {
+            let value: Candidate =
+                serde_json::from_value(reply.result).map_err(|_| "Invalid voice candidate")?;
+            value.validate().map_err(|_| "Invalid voice candidate")?;
+            if value.text != *text || value.description != *description {
+                return Err("Generated voice metadata did not match the request".into());
+            }
+            Ok(VoiceResult::Candidate(Box::new(value)))
+        }
+        VoiceCommand::Select { voice, .. } => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Selected {
+                outcome: String,
+                voice: avesra_contracts::voice::VoiceIdentity,
+            }
+            let value: Selected =
+                serde_json::from_value(reply.result).map_err(|_| "Invalid selection response")?;
+            if value.outcome != "selected" || value.voice != *voice {
+                return Err("Invalid selected voice".into());
+            }
+            Ok(VoiceResult::Changed)
+        }
+        VoiceCommand::Clear { .. } | VoiceCommand::Discard { .. } => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Changed {
+                outcome: String,
+            }
+            let value: Changed = serde_json::from_value(reply.result)
+                .map_err(|_| "Invalid voice change response")?;
+            let expected = if matches!(command, VoiceCommand::Clear { .. }) {
+                "cleared"
+            } else {
+                "discarded"
+            };
+            if value.outcome != expected {
+                return Err("Invalid voice change result".into());
+            }
+            Ok(VoiceResult::Changed)
+        }
+    }
+}
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SpeakerHealth {

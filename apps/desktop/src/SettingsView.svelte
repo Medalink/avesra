@@ -2,6 +2,7 @@
   import Icon from "./Icon.svelte";
   import Pairing from "./Pairing.svelte";
   import SetupLock from "./SetupLock.svelte";
+  import VoiceDesigner from "./VoiceDesigner.svelte";
   import EnrollmentView from "./EnrollmentView.svelte";
   import type { SignalFrame } from "./Signal.svelte";
   import type { Runtime, Settings, AudioDevice } from "./runtime";
@@ -300,55 +301,7 @@
               the overlay and tray controls.
             </p>
           </section>
-          <section class="section">
-            <span class="av-kicker">Avesra's voice</span>
-            <div class="av-card p-3">
-              <div class="row">
-                <div>
-                  <h2>No voice selected</h2>
-                  <p class="av-hint mt-1">
-                    Create and preview a voice when synthesis is ready.
-                  </p>
-                </div>
-                <span class="av-chip text-amber-200 ring-amber-400/30"
-                  >Unavailable</span
-                >
-              </div>
-            </div>
-            <div class="grid grid-cols-2 gap-4">
-              <label class="flex flex-col gap-2"
-                ><span class="av-label"
-                  >Pace <span class="caption text-zinc-400"
-                    >{s?.speech_rate ?? 100}%</span
-                  ></span
-                ><input
-                  aria-label="Speech pace"
-                  type="range"
-                  min="50"
-                  max="200"
-                  value={s?.speech_rate ?? 100}
-                  disabled={!s || saving}
-                  onchange={(e) =>
-                    update({ speech_rate: Number(e.currentTarget.value) })}
-                /></label
-              ><label class="flex flex-col gap-2"
-                ><span class="av-label"
-                  >Voice volume <span class="caption text-zinc-400"
-                    >{s?.speech_volume ?? 80}%</span
-                  ></span
-                ><input
-                  aria-label="Voice volume"
-                  type="range"
-                  min="0"
-                  max="100"
-                  value={s?.speech_volume ?? 80}
-                  disabled={!s || saving}
-                  onchange={(e) =>
-                    update({ speech_volume: Number(e.currentTarget.value) })}
-                /></label
-              >
-            </div>
-          </section>
+          <VoiceDesigner {runtime} {saving} {update} />
           <section class="section">
             <span class="av-kicker">Learning & action chimes</span
             >{#each [["learning_chime", "Learning chime", "After a useful memory is committed."], ["action_chime", "Action chime", "After an action outcome is verified."]] as item}<div

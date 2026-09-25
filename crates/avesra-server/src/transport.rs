@@ -112,7 +112,7 @@ pub fn router(auth: AuthStore, directory: &std::path::Path) -> Result<Router, St
         .route("/voice-preview", get(voice_preview_upgrade))
         .route(
             "/voices",
-            post(voice_operations).layer(DefaultBodyLimit::max(4096)),
+            post(voice_operations).layer(DefaultBodyLimit::max(16384)),
         )
         .layer(DefaultBodyLimit::max(1024))
         .with_state(Arc::new(ServerState {
