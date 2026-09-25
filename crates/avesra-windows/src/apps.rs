@@ -653,11 +653,13 @@ fn focus(
             observation: None,
         });
     }
+    if !crate::principal::same_process_context(process.0)? {
+        return Err(ErrorCode::Stale);
+    }
     authorize()?;
     let mut focused = false;
     if unsafe { WaitForSingleObject(process.0, 0) } == WAIT_TIMEOUT
         && matches_window(window, hint.pid, &record.window_class)
-        && crate::principal::same_process_context(process.0).unwrap_or(false)
     {
         let _ = unsafe { SetForegroundWindow(window) };
         let started = Instant::now();
