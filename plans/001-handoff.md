@@ -1,5 +1,11 @@
 # Plan 001 handoff — 2026-09-25
 
+## Current isolated plan execution — 2026-09-25
+
+The owner resumed `/improve execute 01`, required committing existing work first, and authorized subagents. All eleven existing changed/untracked files were committed on primary `main` as `de2e8c8`. New source commits `3347a48`, `4aa1fa1` and review correction `e986d76` are isolated on `codex/plan-001-completion` in `E:\Dev\Avesra-plan-001-completion`. They implement bounded speech segmentation and browser-read lifecycle ownership, and reconcile directed requests without a mandatory wake word. Voice effects, background music and the shared native renderer are preserved. Nothing was merged, pushed, deployed or launched; the canonical user executable was not replaced.
+
+See [the current execution review](001-execution-2026-09-25.md) for exact checks, reviewed corrections and remaining boundaries. C1 lacks a calibrated native qualification owner and C2 lacks qualified immutable reasoning deployment evidence. Browser reading requires a qualified accepted-task producer and a concrete C5 consumer. OW1-OW3 and release acceptance remain unverified. The no-tests and no-Computer-Use restrictions remain in force; historical runtime evidence below is not evidence for these new source commits.
+
 ## Resumed companion work — 2026-09-25
 
 **Actual saved-voice root cause resolved:** Codex's inherited MSIX AppData virtualization redirected enrollment files into `C:\Users\medal\AppData\Local\Packages\OpenAI.Codex_2p2nqsd0c76g0\LocalCache\Roaming\com.avesra.desktop`, while the user-launch EXE saw the real normal AppData folder empty. GetFinalPathNameByHandle proved it. **Previous hidden/separate-desktop inspections were not equivalent to Explorer's filesystem view. Package identity15700 and desktop-app process attributes alone also did not prove a normal store.** Launching hidden helper PowerShell via the user's EXISTING Explorer folder window's `Document.Application.ShellExecute` reproduced the empty store. Merely instantiating Shell.Application and invoking its own ShellExecute still inherited redirection here.

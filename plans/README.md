@@ -24,7 +24,7 @@ Handoff and next-step boundaries: [Plan 001 handoff](001-handoff.md). The owner 
 
 | Plan | Outcome | Priority | Effort | Dependencies | Status |
 | --- | --- | --- | --- | --- | --- |
-| [001](001-single-spark-assistant.md) | Build and verify Avesra on Spark2 with Local Studio, a Windows companion, optional client GPU acceleration and per-stage metrics | P1 | L, multiple milestones | Current-state reconciliation C0; scoped hardware/app qualification | IN PROGRESS — completion plan refreshed 2026-09-25; source has companion, transport, enrollment and dormant execution foundations. Qualified automatic voice, reasoning activation, browser/workflow integration and full release evidence remain incomplete. |
+| [001](001-single-spark-assistant.md) | Build and verify Avesra on Spark2 with Local Studio, a Windows companion, optional client GPU acceleration and per-stage metrics | P1 | L, multiple milestones | Current-state reconciliation C0; scoped hardware/app qualification | IN PROGRESS / PARTIAL — isolated execution through `e986d76` implements bounded reply segmentation, directed-request contract reconciliation and the owned browser-read lifecycle. C1 qualification and C2 reasoning activation remain blocked on concrete qualification dependencies; C5 consumers and live owner workflows remain incomplete. See the [current execution review](001-execution-2026-09-25.md). |
 | [002](002-voice-atmosphere.md) | Add native voice character, looping atmosphere, stereo mixing and an easy live bypass | P1 | L, staged | Existing Plan 001 preview/output ownership; normal speech retains its qualification gates | IN PROGRESS — Digital sound approved and saved as defaults; adjustable pitch and animated overlay implemented. Human audition/approval remains deferred. |
 
 Plan 002 records the owner's 2026-09-25 sound-design request: Digital as the default preset, Human as the second preset, an easy off toggle and permission to expand the app. It can start with explicit generated-reference preview without waiting for every Plan 001 milestone. It does not mark normal voice readiness complete or change Plan 001's existing execution status.
@@ -33,15 +33,15 @@ Read the entire plan before implementation. Execute the remaining slices in [sec
 
 ## Current completion order — 2026-09-25
 
-The revised plan is ready for execution; this is not a claim that implementation or release acceptance is complete. No source was changed and no build, model request or live workflow was run during this planning refresh.
+The planning refresh was followed by isolated execution from the owner's requested baseline commit `de2e8c8`. Current source is on `codex/plan-001-completion` in `E:\Dev\Avesra-plan-001-completion`; it has not been merged, pushed or deployed. The [execution review](001-execution-2026-09-25.md) separates source/static/build evidence from pending live acceptance and records preservation of the existing voice effects/background music.
 
 | Slice | Required outcome | Dependencies | Current boundary |
 | --- | --- | --- | --- |
-| C0 | Reconcile live source/worktree ownership, normal-user store and verification baseline | — | Required before the next executor edits source |
-| C1 | Qualified owner recognition, continuous endpointing and directed intent without a mandatory wake word | C0 | Existing native producer always abstains |
-| C2 | Qualified local reasoning and one real accepted spoken response | C0; C1 for activation | Server starts with no reasoning capability |
+| C0 | Reconcile live source/worktree ownership, normal-user store and verification baseline | — | Source/worktree ownership and immutable Windows/ARM baseline checks complete; prior normal-user store evidence retained without runtime access |
+| C1 | Qualified owner recognition, continuous endpointing and directed intent without a mandatory wake word | C0 | Request/follow-up contract reconciled; activation BLOCKED on calibrated native qualification owner and measured adapters; native producer still abstains |
+| C2 | Qualified local reasoning and one real accepted spoken response | C0; C1 for activation | Bounded reply segmentation implemented; activation BLOCKED on immutable loaded-artifact/route/context/terminal qualification; startup still has no reasoning capability |
 | C3 | Accepted app/volume actions with observed effects | C1, C2 | Native adapters exist; full qualified ingress pending |
-| C4 | Owned browser publication, content, cleanup and settlement | C0; C1-C3 for live admission | Preparation/settlement foundations exist; dispatch dormant |
+| C4 | Owned browser publication, content, cleanup and settlement | C0; C1-C3 for live admission | Source lifecycle integrated through `e986d76`; qualified task producer and concrete C5 consumer absent, so no live admission/read proof |
 | C5 | Claude/IRIS exact draft, latest ten emails and X ready state | C3, C4 | Required OW1-OW3 proof remains absent |
 | C6 | Sourced learning/history, routines and event-grounded chimes | C3, C4; C5 for supported workflow reuse | Remaining integration and direct proof |
 | C7 | Bounded diagnostics and actual configured VPN | C3, C6 | Exact VPN surface and live proof pending |

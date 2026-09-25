@@ -22,6 +22,7 @@ The owner subsequently instructed: "I am about to game, do not use computer use 
 - Intended Windows checkout: `E:\Dev\Avesra`.
 - Initial deployment: `ssh spark2` with Local Studio and one Windows desktop client; optional client GPU acceleration is in scope.
 - Planning status: completion sequence specified against the existing source; implementation remains **IN PROGRESS**. Historical provisioning and verification records are evidence for their recorded revisions only. This planning revision ran no builds, tests, model requests or live workflows.
+- Execution checkpoint, 2026-09-25: the owner-requested baseline commit is `de2e8c8`; isolated source commits `3347a48`, `4aa1fa1` and review correction `e986d76` implement bounded C2 segmentation, C1 contract reconciliation and C4 lifecycle integration. See [the execution review](001-execution-2026-09-25.md) for verification and exact remaining qualification dependencies. This checkpoint does not complete C1/C2 activation, C5 owner workflows or release acceptance.
 
 Avesra is **A Very Effective Smart Reasoning Assistant**. It continuously listens for an enrolled owner, recognizes clearly assistant-directed requests, acts through the owner's PC, speaks in a customizable voice, and learns useful context and routines. It must remain available while the user games without requiring model inference on the RTX 5090. Swapping a model or moving a lane must not require changing the task engine, UI, or permissions.
 
@@ -158,6 +159,7 @@ flowchart LR
 
 ### Windows companion
 
+- Existing voice effects and background music/atmosphere streaming are implemented baseline functionality, reaffirmed by the owner on 2026-09-25 during this execution. Preserve Plan 002's shared native CPAL renderer, Digital/Human preferences, output cancellation, and actual mixed-channel playback references. Normal assistant speech must reuse this output path; do not replace it with dry-only playback or a second music stream. This preserves the sound feature without claiming qualified owner recognition or completed voice-to-action workflows.
 - Tauri 2 with bundled Svelte/TypeScript/Tailwind assets; no remote web content in the privileged settings webview.
 - Rust owns microphone capture, output playback, local stop/mute controls, Windows app discovery, UI Automation, capture, and action execution. UI animations do not own the audio loop.
 - Use a user-session process, not an interactive Windows service in session zero. Start at sign-in only after setup enables it. Minimizing or closing the overlay hides it to tray; explicit Quit stops capture and the client process.
@@ -594,7 +596,7 @@ For Python audio changes inspect `services/audio/pyproject.toml` and its existin
 
 ### C4 — Complete the owned browser-read lifecycle (M2/M5)
 
-**Scope:** `crates/avesra-core/src/{browser_execution,browser_jobs,browser_reading,execution,ledger}.rs`, browser wire contracts; `crates/avesra-windows/src/{effects,browser_read_channel,browser_receive,browser_pipe}.rs`; `apps/desktop/src-tauri/src/browser{.rs,/reading.rs,/documents.rs}`; `apps/browser-extension/src/{background,browser-job,reading,page-excerpt,protocol,documents,authority}.ts`, `manifest.json`; `docs/browser-read-{channel,execution}.md` and browser-reading/observation specs.
+**Scope:** `crates/avesra-core/src/{browser_execution,browser_jobs,browser_reading,execution,ledger}.rs`, browser wire contracts; `crates/avesra-windows/src/{effects,browser_read_channel,browser_receive,browser_pipe}.rs`; `apps/desktop/src-tauri/src/browser{.rs,/reading.rs,/documents.rs}`; `apps/browser-extension/src/{background,browser-job,reading,read-job,page-excerpt,protocol,documents,authority}.ts`, `manifest.json`; `docs/browser-read-{channel,execution}.md` and browser-reading/observation specs. Execution refinement: `read-job.ts` isolates the specified actual Chrome job/outbox from `reading.ts` wire validation; this adds no new permission or entry point.
 
 This is one coherent integration slice; do not activate individual pieces early. Existing preparation and settlement machinery is retained.
 
