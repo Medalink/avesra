@@ -681,6 +681,9 @@ pub async fn remember_app(
                     if let Some(hint) = &hint {
                         avesra_windows::apps::bind_window_hint(&mut confirmed_record, hint)?;
                     }
+                    if discovered.elapsed() >= Duration::from_secs(120) {
+                        return Err(ErrorCode::Expired);
+                    }
                     authorize()
                 }),
             },
