@@ -361,7 +361,7 @@ pub struct Selection {
     pub label: String,
     pub created_at_ms: u64,
 }
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct Confirmation {
     pub installation: Id,
     pub connection: Id,
@@ -414,7 +414,7 @@ impl Pending {
         self.admission.current(generation)?;
         let digest = ring::digest::digest(
             &ring::digest::SHA256,
-            &serde_json::to_vec(&self.challenge).map_err(|_| ErrorCode::Malformed)?,
+            &browser::comparison_transcript(&self.challenge)?,
         );
         let first: [u8; 4] = digest.as_ref()[..4]
             .try_into()

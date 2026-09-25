@@ -1,4 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+mod browser;
 mod catalog;
 mod connection;
 mod media;
@@ -50,6 +51,7 @@ struct WriteSettings {
     reply: oneshot::Sender<Result<(), String>>,
 }
 struct Runtime {
+    browser: browser::BrowserSetup,
     catalog: catalog::CatalogSetup,
     turns: Mutex<avesra_core::voice::TurnGate>,
     acknowledged_session: Mutex<Option<connection::SessionIdentity>>,
@@ -75,6 +77,7 @@ impl Runtime {
     fn publish(&self, local: &LocalState) {
         if local.locked || !local.connected {
             self.catalog.invalidate();
+            self.browser.invalidate();
         }
         if local.locked
             && let Ok(mut slot) = self.shortcut_recording.lock()
@@ -121,6 +124,7 @@ fn runtime_snapshot(state: tauri::State<'_, Runtime>) -> Result<LocalState, Stri
 }
 fn invalidate_settings(app: &tauri::AppHandle) {
     app.state::<Runtime>().catalog.invalidate();
+    app.state::<Runtime>().browser.invalidate();
     setup::cancel_native(app);
     let _ = app.emit("settings-hidden", ());
 }
@@ -476,6 +480,7 @@ fn main() {
             )?;
             let initial_shortcuts = local.settings.shortcuts.clone();
             app.manage(Runtime {
+                browser: browser::BrowserSetup::default(),
                 catalog: catalog::CatalogSetup::default(),
                 turns: Mutex::new(avesra_core::voice::TurnGate::default()),
                 acknowledged_session: Mutex::new(None),
@@ -615,6 +620,12 @@ fn main() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            browser::begin_browser_pairing,
+            browser::browser_pairing_status,
+            browser::approve_browser_pairing,
+            browser::cancel_browser_pairing,
+            browser::saved_browser_pairings,
+            browser::revoke_browser_pairing,
             hide_window,
             catalog::open_app_catalog,
             catalog::close_app_catalog,

@@ -134,6 +134,36 @@ pub struct Authenticated {
     /// Native ownership generation, never a frontend-granted permission epoch.
     pub generation: u64,
 }
+#[derive(Deserialize, Serialize)]
+#[serde(
+    tag = "type",
+    content = "body",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum Client {
+    Hello(Hello),
+    Authenticate(Authenticate),
+    Poll { session: Id, sequence: u64 },
+    Disconnect { session: Id },
+}
+/// Canonical comparison input, independent of JSON field order/whitespace.
+/// Pairing is excluded because the native-generated pairing is issued only after
+/// the user compares this original pending challenge. The MAC binds it separately.
+pub fn comparison_transcript(challenge: &Challenge) -> Result<Vec<u8>, ErrorCode> {
+    if challenge.version != VERSION {
+        return Err(ErrorCode::Unsupported);
+    }
+    Ok(format!(
+        "AVESRA-BROWSER-COMPARE-2\n{}\n{}\n{}\n{}\n{}\n",
+        challenge.installation.uuid(),
+        challenge.connection.uuid(),
+        challenge.session.uuid(),
+        challenge.challenge.uuid(),
+        challenge.nonce.text()
+    )
+    .into_bytes())
+}
 
 /// Credential-independent canonical transcript. Caller must validate the
 /// challenge against its actual pending native session before using it.
