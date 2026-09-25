@@ -21,7 +21,7 @@
   const reportedActive = $derived(!!status?.attempt && ["preparing", "waiting_for_extension", "awaiting_owner", "saving", "awaiting_persistence_proof", "authenticating", "authenticated_no_scopes", "closing"].includes(status.state));
   const active = $derived(!!ownedAttempt || reportedActive);
   const unavailable = $derived(status?.state === "unavailable_refresh_saved_pairings" || (!status && !!ownedAttempt));
-  const stateLabel = $derived(status?.state === "authenticated_no_scopes" ? status.selection ? "Selected · no scopes" : "Paired · no scopes" : unavailable ? "Unavailable" : reportedActive ? "Pairing session" : "Not connected");
+  const stateLabel = $derived(status?.state === "authenticated_no_scopes" ? status.selection ? "Selected · no scopes" : "Paired · no scopes" : unavailable ? "Unavailable" : reportedActive ? "Pairing session" : !status ? "Not inspected" : "Not connected");
   function invalidate() {
     const attempt = ownedAttempt; ownedAttempt = null;
     generation++; status = null; aliases = null; saved = null; selections = null; phrase = "";
@@ -145,7 +145,7 @@
   </div>
   <div class="flex flex-wrap items-center gap-1.5">
     <span class="av-chip text-zinc-300 ring-white/15">Overlay</span><span class="av-chip text-zinc-300 ring-white/15">Local controls</span>
-    <span class="av-chip {status?.state === 'authenticated_no_scopes' ? 'bg-av-500/10 text-av-300 ring-av-500/40' : reportedActive || unavailable ? 'bg-amber-400/10 text-amber-200 ring-amber-400/25' : 'bg-red-400/10 text-red-300 ring-red-400/25'}">Browser · {stateLabel}</span>
+    <span class="av-chip {status?.state === 'authenticated_no_scopes' ? 'bg-av-500/10 text-av-300 ring-av-500/40' : reportedActive || unavailable || !status ? 'bg-amber-400/10 text-amber-200 ring-amber-400/25' : 'bg-red-400/10 text-red-300 ring-red-400/25'}">Browser · {stateLabel}</span>
   </div>
   <div class="flex items-center gap-2.5"><p class="av-hint flex-1">Client inference is disabled. Browser pairing grants no page or action scope.</p><button class="av-btn av-btn-secondary av-btn-sm" disabled={!enabled || busy} onclick={toggle}>{expanded ? "Close browser setup" : "Manage browser"}</button></div>
   {#if !lifetimeReady && error}<p class="av-hint text-amber-200" role="status">{error}</p>{/if}
