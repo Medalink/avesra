@@ -34,6 +34,8 @@ pub struct AppRecord {
     pub selected_by: Uuid,
     pub name: String,
     pub source: AppSource,
+    #[serde(default)]
+    pub source_identity: Option<String>,
     pub publisher: Option<String>,
     pub window_class: Option<String>,
     pub launch: LaunchIdentity,
@@ -67,6 +69,10 @@ impl AppRecord {
             && !self.revision.is_nil()
             && !self.selected_by.is_nil()
             && text(&self.name, 256, false)
+            && self
+                .source_identity
+                .as_ref()
+                .is_none_or(|v| text(v, 4096, false))
             && self.publisher.as_ref().is_none_or(|v| text(v, 512, false))
             && self
                 .window_class

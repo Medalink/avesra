@@ -138,6 +138,7 @@ pub fn select_executable(
         selected_by: owner,
         name,
         source: AppSource::ExplicitExecutable,
+        source_identity: Some(path.to_string()),
         publisher: None,
         window_class: None,
         launch: LaunchIdentity::Executable(identity(
