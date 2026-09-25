@@ -53,3 +53,6 @@ Only the original same-process lease plus its privately correlated parser comple
 
 
 The metadata and outstanding-job bookkeeping source now compiles without making HTTP requests. Job storage validates exact schema/object count and bounded records, uses a two-second SQLite busy timeout, performs exact-record compare-and-swap for uncertainty, and holds the exclusive OS lock until the connection owner is dropped. The configured existing private Avesra directory is required; no Local Studio file or model is modified. Successful begin persistence can outlive a cancelled caller and intentionally blocks replacement until its exact result is known. Completion requires the same owner lease, private request UUID/model and the parser's correlated complete-stream observation. There is no generic clear/recover command. Actual backend-job ownership, qualified artifact proof and the paired reasoning route are still pending; these source checks do not create or migrate a jobs database.
+
+
+The jobs/lock final-path guards use direct symlink_metadata, explicitly distinguishing NotFound from existing regular files and rejecting symlinks (including dangling links), directories or other non-files before open. This is within the existing private-directory/same-user local-code boundary; it does not claim protection against arbitrary same-user concurrent path replacement.

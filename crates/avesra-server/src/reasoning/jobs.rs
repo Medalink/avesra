@@ -135,6 +135,14 @@ fn encode(value: &Record) -> Result<String, ErrorCode> {
     }
     Ok(body)
 }
+fn regular_or_missing(path: &Path) -> Result<(), ErrorCode> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.is_file() && !meta.file_type().is_symlink() => Ok(()),
+        Ok(_) => Err(ErrorCode::Denied),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err(ErrorCode::Storage),
+    }
+}
 impl Jobs {
     /// The controller's existing private Avesra directory only; no arbitrary
     /// frontend path and no Local Studio files are mutated.
@@ -151,14 +159,7 @@ impl Jobs {
             }
         }
         let lock_path = directory.join("reasoning-owner.lock");
-        if lock_path.try_exists().map_err(|_| ErrorCode::Storage)?
-            && std::fs::symlink_metadata(&lock_path)
-                .map_err(|_| ErrorCode::Storage)?
-                .file_type()
-                .is_symlink()
-        {
-            return Err(ErrorCode::Denied);
-        }
+        regular_or_missing(&lock_path)?;
         let mut options = OpenOptions::new();
         options.read(true).write(true).create(true).truncate(false);
         #[cfg(unix)]
@@ -169,14 +170,7 @@ impl Jobs {
         let lock = options.open(lock_path).map_err(|_| ErrorCode::Storage)?;
         lock.try_lock().map_err(|_| ErrorCode::Unavailable)?;
         let path = directory.join("reasoning-jobs.db");
-        if path.try_exists().map_err(|_| ErrorCode::Storage)?
-            && std::fs::symlink_metadata(&path)
-                .map_err(|_| ErrorCode::Storage)?
-                .file_type()
-                .is_symlink()
-        {
-            return Err(ErrorCode::Denied);
-        }
+        regular_or_missing(&path)?;
         let mut connection = Connection::open(path).map_err(|_| ErrorCode::Storage)?;
         connection
             .busy_timeout(Duration::from_secs(2))
