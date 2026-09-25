@@ -23,6 +23,7 @@ pub struct CandidateSummary {
     pub model_revision: Option<String>,
     pub segments: Option<usize>,
     pub state: &'static str,
+    pub read_error: Option<String>,
 }
 // Native only. Never serialize this return value to the webview.
 pub fn read_candidate(directory: &Path, id: Uuid, revision: Uuid) -> Result<Candidate, String> {
@@ -169,12 +170,42 @@ pub fn clear_selection(
 pub fn list_candidates(directory: &Path) -> Result<Vec<CandidateSummary>, String> {
     let _lock = lock_directory(&directory.join("speaker-candidates"))?;
     let selection = selected(directory);
-    let entries = match std::fs::read_dir(directory.join("speaker-candidates")) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
-        Err(_) => return Err("Candidate directory unavailable".into()),
+    let summarize = |id, revision| {
+        let decoded = read_candidate_locked(directory, id, revision);
+        CandidateSummary {
+            id,
+            revision,
+            model_revision: decoded
+                .as_ref()
+                .ok()
+                .map(|value| value.model_revision.clone()),
+            segments: decoded.as_ref().ok().map(|value| value.segments),
+            state: if selection.is_err() {
+                "selection_unavailable"
+            } else if decoded.is_ok()
+                && selection
+                    .as_ref()
+                    .ok()
+                    .and_then(|value| value.as_ref())
+                    .is_some_and(|selected| selected.id == id && selected.revision == revision)
+            {
+                "selected_quality_unqualified"
+            } else if decoded.is_ok() {
+                "candidate_quality_unqualified"
+            } else {
+                "unreadable_candidate"
+            },
+            read_error: decoded.err(),
+        }
     };
     let mut summaries = vec![];
+    if let Ok(Some(selected)) = &selection {
+        summaries.push(summarize(selected.id, selected.revision));
+    }
+    let entries = match std::fs::read_dir(directory.join("speaker-candidates")) {
+        Ok(entries) => entries,
+        Err(_) => return Err("Candidate directory unavailable".into()),
+    };
     for (index, entry) in entries.enumerate() {
         if index >= 4096 {
             return Err("Candidate directory exceeds limit".into());
@@ -182,9 +213,6 @@ pub fn list_candidates(directory: &Path) -> Result<Vec<CandidateSummary>, String
         let path = entry.map_err(|_| "Candidate entry unavailable")?.path();
         if path.extension().and_then(|v| v.to_str()) != Some("dpapi") {
             continue;
-        }
-        if summaries.len() >= 128 {
-            return Err("Candidate count exceeds limit".into());
         }
         let Some(stem) = path.file_stem().and_then(|value| value.to_str()) else {
             continue;
@@ -199,28 +227,22 @@ pub fn list_candidates(directory: &Path) -> Result<Vec<CandidateSummary>, String
         if id.is_nil() || revision.is_nil() || stem != format!("{id}-{revision}") {
             continue;
         }
-        let decoded = read_candidate_locked(directory, id, revision).ok();
-        summaries.push(CandidateSummary {
-            id,
-            revision,
-            model_revision: decoded.as_ref().map(|value| value.model_revision.clone()),
-            segments: decoded.as_ref().map(|value| value.segments),
-            state: if selection.is_err() {
-                "selection_unavailable"
-            } else if decoded.is_some()
-                && selection
-                    .as_ref()
-                    .ok()
-                    .and_then(|value| value.as_ref())
-                    .is_some_and(|selected| selected.id == id && selected.revision == revision)
-            {
-                "selected_quality_unqualified"
-            } else if decoded.is_some() {
-                "candidate_quality_unqualified"
-            } else {
-                "unreadable_candidate"
-            },
-        });
+        if summaries
+            .iter()
+            .any(|value| value.id == id && value.revision == revision)
+        {
+            continue;
+        }
+        if summaries.len() >= 128 {
+            return Err("Candidate count exceeds limit".into());
+        }
+        summaries.push(summarize(id, revision));
+    }
+    if selection.is_err() && summaries.iter().all(|value| value.segments.is_none()) {
+        return Err(
+            "Saved voice selection could not be read. Your saved files have not been changed."
+                .into(),
+        );
     }
     Ok(summaries)
 }

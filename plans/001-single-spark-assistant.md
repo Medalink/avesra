@@ -1,8 +1,8 @@
 # Plan 001: Build Avesra on one Spark with a persistent Windows companion
 
-> **Executor instructions:** This is a greenfield implementation contract. Read it in full, including the execution overrides below. Implement specs and code without automated tests, fixtures or acceptance harnesses, execute reachable milestones in order, and record actual build/static/direct-inspection results. Never replace live-device evidence with mocks. Report missing hardware, model incompatibility, inaccessible application surfaces, and unmet latency/recognition targets explicitly. Do not silently weaken the product requirements.
+> **Executor instructions:** This is the first-release completion contract for an existing implementation. Read it in full, including the execution overrides and the remaining-work sequence in section 15. Preserve completed foundations and concurrent work. Implement specs and code without automated tests, fixtures or acceptance harnesses, and record actual build/static/direct-inspection results. Never replace live-device evidence with mocks. Report missing hardware, model incompatibility, inaccessible application surfaces, and unmet latency/recognition targets explicitly. Do not silently weaken the product requirements.
 >
-> **Drift check:** The planning baseline is remote `main` at `eb0189ff64b276b4f1e2d850ab3cff6979189ad9`. Run `git status --short`, `git rev-parse HEAD`, and `git diff --stat eb0189ff64b276b4f1e2d850ab3cff6979189ad9..HEAD`. At the baseline only `LICENSE` exists; the owner subsequently authorized publishing these plans. Inspect any newer source, instructions, or plans before proceeding; reconcile overlapping work instead of overwriting it.
+> **Drift check:** The original planning baseline was `eb0189ff64b276b4f1e2d850ab3cff6979189ad9`. This completion revision inspected `e894025` and then observed concurrent advancement to `c82fed21ea259c7fd1dc6902bf2a5a07b10e231f` on 2026-09-25, with additional dirty companion/enrollment work. Before execution run `git status --short`, `git rev-parse HEAD`, `git worktree list`, `git diff --stat c82fed21ea259c7fd1dc6902bf2a5a07b10e231f..HEAD -- crates apps services scripts docs plans`, and `git diff --stat -- crates apps services scripts docs plans`. Inspect untracked paths separately. Compare section 2 against actual source; resolve ownership of overlapping work before editing. A clean worktree from HEAD does not contain the user's uncommitted changes.
 
 ## 1. Status and purpose
 
@@ -21,7 +21,7 @@ The owner subsequently instructed: "I am about to game, do not use computer use 
 - Repository: https://github.com/Medalink/avesra.
 - Intended Windows checkout: `E:\Dev\Avesra`.
 - Initial deployment: `ssh spark2` with Local Studio and one Windows desktop client; optional client GPU acceleration is in scope.
-- Planning status: decisions captured; application implementation has not started. Six model packages are provisioned through Local Studio and hash checked; both reasoning recipes passed initial synthetic inference probes. See `spark2-model-setup.md` for measured results and remaining M0 gaps.
+- Planning status: completion sequence specified against the existing source; implementation remains **IN PROGRESS**. Historical provisioning and verification records are evidence for their recorded revisions only. This planning revision ran no builds, tests, model requests or live workflows.
 
 Avesra is **A Very Effective Smart Reasoning Assistant**. It continuously listens for an enrolled owner, recognizes clearly assistant-directed requests, acts through the owner's PC, speaks in a customizable voice, and learns useful context and routines. It must remain available while the user games without requiring model inference on the RTX 5090. Swapping a model or moving a lane must not require changing the task engine, UI, or permissions.
 
@@ -31,9 +31,39 @@ This plan covers the whole first release and its foundations. M3/M4 are the firs
 
 ## 2. Current state and evidence
 
-The remote root was inspected using GitHub CLI. It contains an MIT `LICENSE` and no source, package manifests, instructions, build scripts, tests, or design files. Consequently there are no existing source excerpts or verification commands to copy. Commands later in this document are **proposed contracts for M1 to implement**, not commands that already exist or have passed.
+The original repository contained only `LICENSE`; that is historical context, not today's starting point. On 2026-09-25 the checkout contains a Rust 2024 workspace (`avesra-contracts`, `avesra-core`, `avesra-server`, `avesra-windows`, and the Tauri desktop), Svelte/Tailwind UI, an MV3 extension, Python audio services, operational specifications and build/static wrappers. Root `package.json` provides `pnpm -r check` and `pnpm -r build`; `scripts/verify.ps1` accepts only `Static` and `Build`. Section 15 lists the actual commands.
 
-The local `E:\Dev\Avesra` path was created for these planning documents, then initialized as a checkout of the existing `Medalink/avesra` repository when the owner requested publication. Its initial tracked content was the original `LICENSE`; the scoped addition is `plans/`. No application source has been implemented. Inspect the current checkout before starting implementation and preserve any later work.
+The inspected checkout is `E:\Dev\Avesra` on `main`; `git worktree list` initially showed only this checkout. Earlier named executor branches/worktrees in the index are historical. Source and HEAD changed concurrently during this planning pass. Preserve all existing modifications, including `plans/001-handoff.md`; do not reset, stage, stash, commit or copy them into an executor checkout without establishing their ownership.
+
+### Current source anchors and conventions
+
+These excerpts were read directly during this revision. Line numbers are navigation hints; compare the symbols and surrounding code after drift.
+
+| Boundary | Existing source and remaining gap |
+| --- | --- |
+| Qualified owner | `crates/avesra-core/src/voice.rs:68` defines `QualifiedProfile` with private fields and no constructor. A saved six-segment candidate is not a qualified identity. |
+| Voice producer | `apps/desktop/src-tauri/src/voice.rs:269` calls `analyze(&context,None,observation,None)`, then discards the observation. `spawn` allows one fixed capture attempt per epoch, not continuous qualified endpointing. |
+| Reasoning activation | `crates/avesra-server/src/transport.rs:175` initializes `reasoning: None`. The existing HTTP adapter's deployment token still requires loaded-artifact, exact-routing, terminal and context-capacity proof. |
+| Effects | `crates/avesra-windows/src/effects.rs:223` implements `EffectAdapter::execute` for `LaunchApp` and `SetVolume`; other payloads return `Outcome::Unsupported`. Existing catalog and permission code must be reused. |
+| Browser read | `crates/avesra-windows/src/browser_read_channel.rs` has the private `WorkerOwner` / `Offer` / `WorkerPreparation` handshake. `apps/desktop/src-tauri/src/browser/reading.rs` consumes preparation only. `apps/browser-extension/src/background.ts` has no active excerpt-owner integration; `manifest.json` has no scripting permission. |
+| Storage/UI | `crates/avesra-core/src/store.rs` owns transactional state; `apps/desktop/src-tauri/src/main.rs` owns runtime projection and typed IPC; `apps/desktop/src/SettingsView.svelte` and `Overlay.svelte` consume it. Existing startup/voice-store fixes are concurrent work, not a new scaffold task. |
+
+Match the existing capability pattern instead of introducing a second action path:
+
+```rust
+// crates/avesra-core/src/voice.rs:264
+let Some(profile) = profile else {
+    return reject(Abstention::Unqualified);
+};
+// crates/avesra-windows/src/effects.rs:223
+impl EffectAdapter for NativeAdapter {
+    // execute receives a borrowed DispatchPermit and a fresh authorize callback.
+}
+```
+
+Use typed `ErrorCode`/`Outcome`, private one-use native handles, bounded queues, original monotonic budgets, and the existing actual ledger worker. Frontend state, model output and saved history cannot create authority. Keep source text/biometrics out of telemetry. UI work must preserve the approved Ruby/Geist/square-corner design and the existing Interface size setting.
+
+The latest handoff reports recovery of the existing protected enrollment candidate from Codex's virtualized AppData into the normal user store. Treat that as recorded evidence requiring revision/path matching, not a fresh observation made here. Never request six replacement recordings merely because a process sees the wrong store. Prove the canonical physical directory first. Saved voice, microphone check, generated voice preview and startup greeting each remain distinct from automatic owner recognition.
 
 The surrounding assistant session was in `E:\Dev\Laravel\iris`, which has unrelated work. Avesra is a separate product. Do not edit Iris, copy its Laravel stack, or import its repository-specific policies as Avesra architecture.
 
@@ -92,9 +122,9 @@ Run these through real microphone input, owner recognition, local planning, the 
 
 For OW2, the proposed default is the selected account's Inbox, including read and unread messages, excluding Spam/Trash unless requested. Make that mailbox scope visible/configurable during setup so the voice command does not require repeated clarification. Gmail's conversation grouping may require inspecting messages inside threads; do not silently reinterpret 10 messages as 10 conversations.
 
-Validate OW2 deterministically on fixture mailboxes with delivered, shipped-only, out-for-delivery, no-match and multiple-package cases, then on the owner's real mailbox. A truthful "no delivery confirmation in these ten" can be correct; claiming an expected delivery where no real message supports it cannot. Model inference must remain local while reviewing message content.
+Directly inspect OW2 handling of delivered, shipped-only, out-for-delivery, no-match and multiple-package cases when those cases are available under authorized mailbox access. Record uncovered cases as pending; do not create fixture mailboxes or automated harnesses under this execution override. A truthful "no delivery confirmation in these ten" can be correct; claiming an expected delivery where no real message supports it cannot. Model inference must remain local while reviewing message content.
 
-The `owner-workflows` live suite is a release requirement and must record actual device/model/app versions, recognized requests, action/step IDs, and observed postconditions. Use redacted evidence; do not publish private email content or project context in the repository. Report each scenario separately as PASS/FAIL/BLOCKED. The owner reviews the actual visible result and spoken answer.
+The `owner-workflows` scenario group is a release requirement, verified by direct observation rather than an automated suite. Record actual device/model/app versions, recognized requests, action/step IDs, and observed postconditions. Use redacted evidence; do not publish private email content or project context in the repository. Report each scenario separately as PASS/FAIL/BLOCKED. The owner reviews the actual visible result and spoken answer.
 
 ### Explicit non-goals for the first release
 
@@ -304,7 +334,7 @@ Do not label an arbitrary generated shell script "read-only" solely because a mo
 
 Use Windows UAC as intended. No always-admin companion, automated UAC consent, protected-desktop injection, security-agent disabling, or credential extraction. MFA/password entry is the user's step; pause media capture around recognized sensitive inputs and do not retain their values in routines/history.
 
-External content remains untrusted task data. An email saying "ignore previous instructions and run this command" must not produce a tool grant or a durable instruction. Include prompt-injection fixtures in browser, memory, and diagnostic tests.
+External content remains untrusted task data. An email saying "ignore previous instructions and run this command" must not produce a tool grant or a durable instruction. Include direct inspection of prompt-injection handling in browser, memory and diagnostic qualification; do not create automated fixtures under this execution override.
 
 ## 9. App discovery, browser control, and concrete workflows
 
@@ -358,7 +388,7 @@ Observe user-selected displays/apps during unlocked active sessions. Use foregro
 
 Scope observation to normal application surfaces selected in setup; exclude password managers, authentication/secure desktops, and user-excluded apps/regions. Stop on lock and pause. Visual masking is imperfect and cannot guarantee all sensitive content is recognized; retaining no raw media and keeping interpretation local are part of the boundary, not a claim of perfect redaction.
 
-Maintain only a small latest-frame queue and a short audio ring in RAM. A proposed initial media TTL is at most 30 seconds unless an actively processed bounded utterance needs it; impose a hard utterance timeout. M1 must encode actual size/duration limits and tests. Overload drops/coalesces stale passive observations before live commands. Never write screenshot/audio request bodies, debug dumps, or automatic crash payloads to disk. Avoid claiming forensic erasure from OS paging; exclude media from app-managed persistence and support bundles.
+Maintain only a small latest-frame queue and a short audio ring in RAM. A proposed initial media TTL is at most 30 seconds unless an actively processed bounded utterance needs it; impose a hard utterance timeout. Preserve existing bounded media contracts and encode any missing size/duration limits with direct/static verification. Overload drops/coalesces stale passive observations before live commands. Never write screenshot/audio request bodies, debug dumps, or automatic crash payloads to disk. Avoid claiming forensic erasure from OS paging; exclude media from app-managed persistence and support bundles.
 
 Do not continuously transcribe every visible page into permanent memory. Extract compact relevant observations, candidate app mappings, or routine structure. The user asked for useful learning and indefinite accepted interaction history, not a complete permanent textual reconstruction of everything on screen.
 
@@ -452,9 +482,9 @@ Jev timeout/outage has a tested local fallback or an explicit needs-input/degrad
 
 Opening a website and typing a user-requested prompt into Claude/Codex necessarily interacts with those applications and their services. This is the explicit requested browser/app operation, not permission for Avesra to send ongoing screen/memory context or call their model APIs. Ordinary Gmail/X/VPN network traffic is distinct from assistant-side inference traffic; do not claim the whole PC works without Internet.
 
-## 14. Proposed project layout and engineering conventions
+## 14. Project layout and engineering conventions
 
-These are the intended source paths for the implementation, **not files created by this planning task**:
+Use the existing workspace below. `config/` and `deploy/` are proposed packaging locations only if C8 needs them; do not relocate existing working configuration just to match this tree. This planning task creates no source files.
 
 ```text
 Cargo.toml / Cargo.lock / rust-toolchain.toml
@@ -476,11 +506,8 @@ deploy/
   spark/                 # Compose/service manifests, health and resource settings
   windows/               # Installer/native host registration and user startup
 scripts/
-  verify.ps1             # Windows gates, after M1 creates it
-  verify.sh              # Spark/core/service gates, after M1 creates it
-tests/
-  fixtures/              # Synthetic app/web/voice/event fixtures with license notes
-  acceptance/            # Scenario runner + schemas for real-device evidence
+  verify.ps1             # Existing Windows Static/Build gates
+  verify.sh              # Existing Spark Rust static/build gates
 docs/
   product.md / architecture.md / protocol.md / drivers.md
   security.md / verification.md / operations.md / learning.md
@@ -493,168 +520,160 @@ Prefer concrete modules within these crates over a crate per conceptual lane. Th
 
 Use Rust `Result`/typed errors, explicit cancellation and deadlines, bounded queues, and small responsibilities. No blocking network/model work on the UI/audio callback threads. Use a single owner for each mutable device/desktop/task resource. Use SQLite schema migrations and transactions rather than writing state to scattered ad hoc JSON files.
 
-Pin toolchains/dependencies and commit lockfiles once established. Use `cargo fmt`, `cargo clippy`, focused Rust tests, TypeScript/Svelte checks, frontend tests, and service tests. Proposed tools include Tokio, serde, an HTTP/WebSocket server/client, SQLite, CPAL/Windows bindings, and Tauri; validate exact versions and licenses in M0/M1. The final implementation should not need a second generic agent framework alongside the Rust controller merely to provide memory or orchestration.
+Preserve pinned toolchains/dependencies and update lockfiles only for a required scoped dependency change. Use formatting, clippy, TypeScript/Svelte checks and builds as specified in section 15, without adding automated tests. Reuse the existing Tokio, serde, HTTP/WebSocket, SQLite, CPAL/Windows and Tauri integration; validate changed versions and licenses before replacement. Do not introduce a second generic agent framework merely to provide memory or orchestration.
 
-Git branch prefix: `codex/`, for example `codex/avesra-foundation` when implementation is authorized. Preserve the existing LICENSE and unrelated work. Stage only scoped files. The owner authorized committing/pushing these planning documents to the existing repository; that publication does not authorize application implementation, releases, or unrelated remote account changes. Do not create GitHub workflows as a substitute for running local/live gates; CI policy can be decided separately for this greenfield repo.
+Git branch prefix: `codex/`. Preserve the existing LICENSE and unrelated work; stage only scoped files when publication is requested. Earlier publication/execution events are historical, not a request to commit or deploy this planning refresh. Do not create GitHub workflows as a substitute for running local/live gates.
 
-## 15. Implementation milestones and verification commands
+## 15. Completion sequence and verification commands
 
-### Verification contract
+### Execution scope and current gates
 
-There is no test/build baseline yet. M1 must implement the following commands before later milestones cite them as evidence. They must fail when an expected component or prerequisite is missing; skipped hardware tests must report `BLOCKED`, never `PASS`.
+This section replaces the original greenfield M0-M9 implementation instructions. M0-M9 remain product milestone identifiers in the index; C0-C9 below are the ordered remaining implementation slices. Completing one slice does not mark the corresponding whole milestone DONE. The planning revision changes only this plan and `plans/README.md`; source paths below are scope for a later executor.
 
-| Environment | Command to establish | Expected result |
+Use an isolated `codex/` worktree for execution when concurrent work overlaps. Select its starting commit deliberately after reading the current dirty diff; do not drop the enrollment/UI changes merely because they are not in HEAD. Do not merge, publish, change Spark services or perform account actions solely because this planning document exists. Existing Computer Use restrictions remain in force. Hidden native inspection must follow the existing handoff's permitted method and physical-store checks; do not interpret it as permission to operate the user's desktop or microphone.
+
+The commands below exist in the inspected source. They were read, not run, during this planning revision. Run them in the executor checkout after changes. Install dependencies only if missing in that checkout, using the committed lockfiles. No automated tests, fixtures, acceptance runner or report-verifier implementation is in scope.
+
+| Gate | Exact command | Required result and limits |
 | --- | --- | --- |
-| Windows | `pwsh -NoProfile -File scripts/verify.ps1 -Suite Static` | Formatting, lint, type checks pass; exit 0 |
-| Windows | `pwsh -NoProfile -File scripts/verify.ps1 -Suite Unit` | Rust, desktop, extension, and host-side contract tests pass; exit 0 |
-| Windows | `pwsh -NoProfile -File scripts/verify.ps1 -Suite Build` | Release desktop/native-host build and frontend/extension bundles succeed; exit 0 |
-| Spark | `bash scripts/verify.sh static` | Core/server and applicable service static checks pass; exit 0 |
-| Spark | `bash scripts/verify.sh unit` | Core/server/audio service tests pass; exit 0 |
-| Spark | `bash scripts/verify.sh build` | Release core/server and pinned model service images build/resolve; exit 0 |
-| Either, synthetic tests | `uv run --project tests/acceptance python -m avesra_acceptance run --suite contracts --target fixtures --output artifacts/acceptance/contracts.json` | All contract scenarios pass with `mode: fixture`; exit 0 |
-| Windows with actual PC/Spark | `uv run --project tests/acceptance python -m avesra_acceptance run --suite owner-workflows --target paired --output artifacts/acceptance/owner-workflows.json` | OW1, OW2 and OW3 pass through actual spoken requests and Avesra execution; no substituted runner actions; exit 0 |
-| Windows controlling real PC/Spark | `uv run --project tests/acceptance python -m avesra_acceptance run --suite <name> --target paired --output artifacts/acceptance/<name>.json` | Every required scenario passes with actual device/model IDs and `mode: live`; exit 0 |
-| Either | `uv run --project tests/acceptance python -m avesra_acceptance verify artifacts/acceptance/release.json --require-live` | All release gates and required evidence present and fresh; exit 0 |
+| W-static | `pwsh -NoProfile -File scripts/verify.ps1 -Suite Static` | Exit 0: `cargo fmt --all -- --check`, locked workspace clippy with warnings denied, recursive frontend checks. Does not prove runtime behavior. |
+| W-build | `pwsh -NoProfile -File scripts/verify.ps1 -Suite Build` | Exit 0: recursive frontend build, then locked workspace release with `avesra-desktop/custom-protocol`. Not installation/signing. |
+| S-static | `bash scripts/verify.sh static` | Exit 0 on the actual Spark ARM64 build environment; formats workspace and checks contracts/core/server. No Windows or Python/audio qualification. |
+| S-build | `bash scripts/verify.sh build` | Exit 0 in that same environment; locked release of contracts/core/server. No model image or inference qualification. |
+| Scope | `git diff --check` and `git status --short` | No whitespace errors; every changed/untracked path has an owning slice. Preserve the recorded pre-existing dirty set. |
+| Source drift | Commands in the opening drift check | Record HEAD/worktrees/dirty paths and resolve excerpt mismatches before edits. |
 
-Replace `<name>` with the exact suite names below. M1 defines the runner CLI/schema and scenario IDs; each owning milestone implements its scenarios before its product behavior. Reports contain baseline/source SHA, config/model revisions, OS/app versions, timestamps, test counts, observed metrics, per-scenario outcomes, and explicit missing evidence. Keep `artifacts/` ignored; commit only redacted summaries or synthetic fixtures.
+Run W-static for every changed slice, W-build when frontend assets/native packaging change, and S-static/S-build whenever shared contracts/core/server changes. For a frontend-only slice use W-static and W-build; do not rebuild unchanged Spark code. Record exact command, source commit plus dirty scope, environment and exit status. A failed gate requires a focused fix; a second failed attempt becomes an explicit blocker, not an expanded rewrite.
 
-The scripts wrap ordinary tools instead of replacing their meaning: `cargo fmt --all -- --check`, target-appropriate `cargo clippy ... -- -D warnings`, `cargo test ... --locked`, `pnpm --dir apps/desktop check`, `pnpm --dir apps/desktop test`, `pnpm --dir apps/browser-extension test`, and `uv run --project services/audio pytest`. M1 supplies those package scripts and target-specific package lists. Do not run Windows-only crates in the Linux gate or declare Linux-only success a desktop pass.
+For Python audio changes inspect `services/audio/pyproject.toml` and its existing serving entry points, then record import/startup validation under the actual pinned serving environment when available. Rust checks cannot establish Python/audio compatibility. Do not invent a nonexistent audio verification wrapper or mark an unavailable environment PASS.
 
-For changed behavior, write contract tests first, observe the expected failing case, implement, then run focused tests and the owning milestone gate. Do not add tests that merely grep for class names or disabled code. A fake driver proves protocol behavior; it cannot prove model ability, a real microphone, UI access, or device performance.
+### C0 — Reconcile the actual baseline and protect working data (M0/M1)
 
-### M0 — Resolve setup facts and prove feasibility
+**Scope:** read-only source/worktree inventory; updates to `docs/verification.md`, `docs/operations.md`, `docs/evidence/m0-preflight.md`, `plans/001-handoff.md` and this index during execution. Do not alter concurrent enrollment code as part of reconnaissance.
 
-**In scope:** `docs/verification.md`, `docs/operations.md`, redacted `docs/evidence/m0-preflight.md`, and temporary ignored measurements once implementation is authorized. The owner separately authorized model setup through Local Studio on Spark2; this does not authorize application implementation or unrelated account mutations.
+1. Record the opening drift commands, current dirty/untracked paths, and current actor owning overlapping changes. Read the latest handoff first; its former `codex/companion-onboarding`/executor-worktree labels are not current branch facts.
+2. Confirm the real normal-user data directory using the existing canonical-path diagnostics. Preserve selected endpoint IDs, the recovered protected enrollment candidate and registration. A missing candidate in a redirected process is not a reason to overwrite or recollect it.
+3. Refresh only facts needed for the next slice: exact Spark2 service/model revisions and lifecycle owners, installed app/browser surfaces and selected device identity. Do not stop unrelated Local Studio, ComfyUI or other model jobs. Record inaccessible runtime facts as pending.
+4. Capture a current static/build baseline using the gates above, with unrelated failures attributed separately. Carry completed code forward; do not restart M1.
 
-1. Establish the actual checkout at the named GitHub baseline, preserving these plans. Inspect newly present instructions/work before creating an implementation branch.
-2. Use the owner-confirmed `ssh spark2` target; verify host identity and current services before changes. Do not probe other machines or assume the second Spark is available.
-3. Read OS/architecture, driver/CUDA, memory/disk, Docker/container toolkit availability, existing containers/services, and current GPU use. Record version facts, not secrets. Do not stop/repoint existing services as a setup shortcut.
-4. Inspect Windows version, architecture, WebView2, Rust/MSVC build prerequisites, microphone/speakers, displays/DPI, Chrome/Brave versions, extension-install policy, and app identities. Read-only discovery observed Rust/Cargo 1.97.0, pnpm 11.1.3, Git 2.54.0.windows.1 and an installed PowerShell 7 executable on 2026-09-24; recheck before pinning. These facts do not prove a Tauri build works.
-5. Resolve the exact Claude/Codex app windows and prompt/project selection controls. Resolve the VPN client/version/MFA flow. Record supported automation surfaces and known inaccessible controls. Do not assume a terminal workaround unless the owner selected it.
-6. Spike the Chrome/Brave extension/native-host bridge in a fixture profile first. Then demonstrate access to the user-selected real browser context through approved setup. Record any managed-browser restrictions.
-7. Provision the selected speech/identity/voice models and the two bounded reasoning/vision comparison candidates through Local Studio. Benchmark a viable main model plus streaming ASR, speaker matching, and TTS on the same Spark. Test concurrently, not only individually. Observe time-to-first-response, audio underruns, recognition quality, and memory pressure. Choose the smallest working combination meeting the gates. Downloaded weights or registered recipes alone are not proof of a working lane; do not download optional specialists without an observed need.
-8. Choose/pin deployment artifacts and record licenses/authentication prerequisites. Keep model-download egress distinct from runtime AI egress. Record unresolved setup items as blockers with exact next steps.
+**Verify:** Scope plus applicable Windows/Spark gates; a dated baseline record distinguishes committed source, dirty work, historical evidence and newly observed facts. Missing live access blocks live qualification, not independent source/spec work.
 
-**Read-only discovery commands:** `git status --short`; `git rev-parse HEAD`; `Get-Command cargo,rustc,pnpm,pwsh`; `ssh <confirmed-alias> 'uname -m; cat /etc/os-release; nvidia-smi; free -h; df -h /; docker version'`. Do not paste environment dumps or container secrets into evidence.
+### C1 — Qualify and activate owner-aware continuous voice (M2/M3/M4)
 
-**Verify:** all setup facts recorded with a source/date; actual Spark model/audio concurrency benchmark attached; automation feasibility demonstrated on both selected browsers and the chosen application surfaces. If connectivity is absent, M0 is `BLOCKED`; documentation can progress, deployment cannot be claimed.
+**Scope:** `crates/avesra-core/src/{voice,enrollment,state}.rs`, voice/media/enrollment contracts under `crates/avesra-contracts/src/`, `crates/avesra-server/src/{voice_stream,voice_setup,audio_stream,transport}.rs`, `services/audio/avesra_audio/{service,drivers,streaming_asr}.py` and their pinned audio manifests, `apps/desktop/src-tauri/src/{voice,voice_check,microphone_check,phrase_capture,profiles,media,setup,connection}.rs`, minimal runtime/People UI wiring, and `docs/{turn-gating,enrollment,owner-identity,streaming-asr}.md`. Preserve concurrent edits in these files; resolve ownership before implementation.
 
-### M1 — Establish source layout, contracts, and executable gates
+1. Specify a native qualification record bound to candidate, registered actor/grant, selected endpoint, model/adapter revisions and calibrated signal/speaker operating point. Actual explicit calibration/review evidence creates the private `QualifiedProfile`; persisted candidate selection, a UI boolean or a model-reported confidence cannot construct it. Invalidation on endpoint/profile/grant/model change must be immediate.
+2. Replace the fixed one-attempt-per-epoch transport with bounded continuous VAD/endpointing and explicit utterance lifecycle. Supply measured signal, overlap, echo and directed-intent evidence. Unknown evidence continues to abstain. Preserve transient handling for ambient/unknown speech and no raw-media archive.
+3. Reconcile the current lexical name-prefix guard (`voice.rs` around `addressed`) with section 3's **no mandatory wake word** contract. A measured directed-intent path must accept clearly addressed requests without a prefix while rejecting teammate conversation. Do not simply delete the guard and treat every recognized owner sentence as a command. Bind short follow-ups to the existing one-use invitation and expiry.
+4. Replace `analyze(..., None, ..., None)` only after current native qualification exists. Derive actor/grant/session/epochs from authoritative native state; keep setup recording, speaker checks, greeting and generated preview separate. Opening Settings or reading saved enrollment must not start recording or activate listening.
+5. Persist only accepted conversations through existing `conversations.rs` / `conversation_tasks.rs` boundaries (extend those files only for required admission integration). Unaccepted transcripts must not reach UI, history, planner or learning. Expose native readiness/abstention reasons without optimistic completion.
 
-**In scope:** root manifests/toolchains/lockfiles/ignore rules, `crates/avesra-contracts/`, minimal compiling crate/app shells from section 14, `scripts/verify.*`, `tests/acceptance/`, synthetic fixtures, `docs/product.md`, `docs/architecture.md`, `docs/protocol.md`, `docs/drivers.md`, `docs/security.md`, `docs/verification.md`.
+**Verify:** W-static/W-build and S-static/S-build. During authorized direct qualification record A02-A07 outcomes, including owner requests without a wake word, owner speech to teammates, non-owner/recorded speech, overlap, assistant playback, device removal, revocation and local mute with Spark unavailable. Until the required positive/negative evidence exists, keep automatic voice unavailable and mark C1 live qualification pending. Do not create an automated evaluation runner or request another six-segment enrollment solely to repair UI state.
 
-1. Create the Rust workspace, Tauri/Svelte/Tailwind desktop shell, MV3 extension package, and isolated Python service/acceptance environments. Pin dependencies/toolchains validated in M0; no business functionality hidden in setup scripts.
-2. Encode the confirmed decisions as normative product/protocol documents. Define lane trait interfaces, action/result enums, authenticated wire envelopes, media/queue limits, capability manifests, data-locality declarations, and stable typed errors.
-3. Establish scenario IDs and the acceptance report schema. Fixture reports must carry `mode: fixture`; a release verifier must reject fixture-only, skipped, stale, or incomplete live evidence.
-4. Add protocol tests covering invalid fields, oversized payloads, unknown capability/version, expired/stale actions, cancellation IDs, and malformed driver responses. Use an in-process fake inference service, not an external model in unit tests.
-5. Implement the verification commands above and document exact prerequisites/expected exit codes. The initially incomplete live scenario suite returns `BLOCKED`, not fake success.
-6. Define the trace/event and aggregate metric schemas from section 16, local retention/redaction, model/profile revision labels, monotonic duration rules, and benchmark comparison reports. Add the `telemetry` and `optimization` suites; instrument each subsequent milestone as its behavior is introduced.
+### C2 — Activate reasoning and connect one accepted spoken response (M0/M2/M3)
 
-**Verify:** Static/Unit/Build gates on Windows and Spark; `contracts` fixture suite; deliberate invalid-report tests prove the release verifier rejects missing live evidence. This is a build baseline, not a functioning assistant.
+**Scope:** `crates/avesra-server/src/reasoning{.rs,/http.rs,/deployment.rs,/jobs.rs,/stream.rs}`, `planner_ingress.rs`, `transport.rs`, `normal_speech.rs`; `crates/avesra-core/src/{conversation_planner,conversation_tasks,conversations}.rs`; `apps/desktop/src-tauri/src/{planner,voice,speech,output}.rs`; existing planner/TTS contracts and `docs/{reasoning-adapter,planner-driver,planner-ingress,native-planner,normal-speech,streaming-tts}.md`.
 
-### M2 — Implement pairing, task state, policy, and recovery
+1. Define the concrete qualification procedure for loaded model artifact, immutable request routing to the actual incarnation, context capacity and terminal/drain semantics. Inspect the installed Local Studio interface before choosing the binding. Its dynamic proxy model label and before/after metadata are insufficient to rule out replacement during a request. If the interface cannot supply the required binding, scope an explicit adapter change; do not create a `qualified: true` configuration shortcut.
+2. Implement qualification/revocation using actual bounded runtime observations. Only then provide `QualifiedDeployment` to server startup in place of `reasoning: None`. Missing or stale qualification retains unavailable status. Preserve the single actual job owner, durable uncertainty and non-retried original-budget request.
+3. Connect C1's opaque accepted conversation to the same-worker durable `PlannerClaim`, existing `planner::answer`, `StoredReply`/publication and normal-speech output ownership. Commit accepted state before presenting acceptance. Never add a frontend arbitrary-transcript admission command.
+4. Finish long-response segmentation, bounded TTS scheduling and cancellation under the same original reply/output authority. Playback drain, transport completion and observed speech remain different states; no task success from a generic acknowledgment.
+5. Instrument acceptance, queue, reasoning, TTS and actual playback using host-local monotonic spans before extending tool execution. Preserve failed/cancelled samples and content redaction.
 
-**In scope:** contracts/core/server, desktop Rust connection/local controls, SQLite migrations, fixtures and tests `protocol.rs`, `policy.rs`, `task_lifecycle.rs`, `recovery.rs`.
+**Verify:** applicable four gates. Authorized direct operation must produce one genuine spoken answer through the shipped path, then demonstrate Stop, caller loss, disconnect and model-incarnation change without stale speech, duplicate inference or clearing uncertain jobs. This is a conversation checkpoint, not OW1-OW3 completion. C2 source work can proceed while C1 qualification is pending; activation requires both.
 
-1. Implement authenticated pairing, device credentials/revocation, handshake/version/capability exchange, and encrypted PC/Spark control/media connections.
-2. Create the task/step ledger and state transitions: proposed, awaiting approval, queued/running, waiting for user, suspended, succeeded, failed, cancelled, and unknown effect. Use transactions and one controller write owner.
-3. Implement policy checks on both controller and local executor. Bind approvals to user/task/action/target/revision/expiry. External content and model output have no approval authority.
-4. Implement local epochs, bounded queues, backpressure, cancellation and input leases. Wire the stop/mute controls before real media or mouse control.
-5. Test disconnect before/after an effect, lost acknowledgments, duplicate requests, restart, expired approval, revoked user/device, corrupted configuration, and clock/expiry boundaries. Use a monotonic clock for in-process deadlines and an explicit restart policy for persisted expirations.
-6. Propagate correlation IDs and record queue, transport, policy, execution, verification and cancellation spans without private content. Prove trace continuity and redaction before adding real mailbox/screen data.
+### C3 — Connect the existing first useful actions (M2/M4)
 
-**Verify:** Static/Unit plus `transport-policy` live suite. Unpaired devices are rejected; local mute works with the server stalled; stale commands do not execute after reconnect; uncertain mutation is not replayed. No real application writes beyond the dedicated acceptance fixture app in this milestone.
+**Scope:** `crates/avesra-core/src/{execution,ledger,policy,conversation_tasks,apps}.rs`, action/planner contracts, `crates/avesra-windows/src/{effects,apps,volume}.rs`, native planner/catalog/runtime projection and minimal task UI, `docs/{native-actions,conversation-admission,app-catalog}.md`.
 
-### M3 — Deliver owner-aware local voice
+1. Feed exact typed app-launch and volume proposals from accepted C2 planning into the existing task/step ledger, grants and `DispatchPermit`. Models select supported actions; they do not select arbitrary executables, command lines, approval values or success outcomes.
+2. Resolve aliases to immutable actual catalog records and clarify ambiguity. Revalidate current action/session/actor/target immediately before effect. Reuse installed/package app handling and observed volume result instead of a new shell/IPC bypass.
+3. Show durable task status and exact cancellation in the existing UI. Map verified effect, unsupported target, needs-input and unknown-effect separately. Mic mute after acceptance must not silently delete an accepted task; Stop must withdraw action/output ownership.
 
-**In scope:** `services/audio/`, model adapters/config, audio Windows modules, speaker/session controller, identity migrations, tests `identity.rs`, `voice_state.rs`, service tests and voice fixtures.
+**Verify:** W-static/W-build and shared-code Spark gates. Directly ask Avesra to open a configured app and adjust volume; observe actual app identity/final level and correlated history. Repeat cancellation/reconnect at effect boundaries and verify no uncertain replay. A launch-only result still fails OW1.
 
-1. Serve ASR/speaker/TTS components on the Spark using M0-pinned artifacts. Implement the adapter protocols and actual capability probes, including whether cancellation is interruptible or merely discards output.
-2. Implement Windows capture/playback with bounded buffers, format conversion, actual-level events, and the Spark-only baseline first. Keep callbacks free of blocking I/O/allocation-heavy work. Optional client inference uses the same lane contracts and is enabled only after M8 placement/transition verification.
-3. Implement owner enrollment/held-out validation, unknown/overlap handling, explicit user enrollment/revocation, and isolated per-user session context.
-4. Implement accepted-turn gating: speaker verification + directed intent + permissions + current epoch. Partial ASR/model speculation cannot execute tools.
-5. Implement speaking interruption, playback-reference echo handling, explicit mute/deafen/pause behavior, and model-service failure states.
-6. Build/tune a recognition/intent evaluation set from deliberate test sessions, including app names, project names, gaming conversation, television/recorded voices, noisy/far-field audio, short replies, overlapping speech, and the assistant's own output. Do not keep ambient unknown-person recordings as a product feature; tests need explicit fixture consent/licensing and local handling.
+### C4 — Complete the owned browser-read lifecycle (M2/M5)
 
-**Verify:** Static/Unit; `voice-identity` live suite on the real microphone and Spark. Passing synthetic audio only is insufficient. Failed speaker/intent quality blocks unrestricted voice actions; do not hide it by silently switching the product to mandatory wake-word mode.
+**Scope:** `crates/avesra-core/src/{browser_execution,browser_jobs,browser_reading,execution,ledger}.rs`, browser wire contracts; `crates/avesra-windows/src/{effects,browser_read_channel,browser_receive,browser_pipe}.rs`; `apps/desktop/src-tauri/src/browser{.rs,/reading.rs,/documents.rs}`; `apps/browser-extension/src/{background,browser-job,reading,page-excerpt,protocol,documents,authority}.ts`, `manifest.json`; `docs/browser-read-{channel,execution}.md` and browser-reading/observation specs.
 
-### M4 — Deliver onboarding, overlay, and first useful action slice
+This is one coherent integration slice; do not activate individual pieces early. Existing preparation and settlement machinery is retained.
 
-**In scope:** desktop UI/Tauri capabilities, Windows app registry and audio controls, controller launch/volume tools, UI tests, `desktop_controls.rs`.
+1. Extend private `Offer`/`Prepared` with paired publication/content endpoints bound to the original Shared/Withdrawal. The actual ledger worker retains its endpoint and borrowed Store/ReadExecution; the native coordinator retains its matching endpoint. No public sender accepting arbitrary Context/Reply.
+2. Define held, possibly-published and terminal states. Publish at most once under the original deadline. Remove `status.read` before acknowledging settlement without prematurely cancelling valid already-sent content. A failed or lost publication after possible send leaves durable uncertainty.
+3. Implement the active loop on the original worker. Service content and settlement there without enqueuing work behind that same blocked worker. Keep one actual pipe receive owner through partial frames; do not cancel `ReceiveOwner.receive` merely to poll another channel.
+4. Consume the borrowed opaque `ReadReply` while the actual resource reservation and `State.active` withdrawal registration remain held. This is the default lifetime design. If the consumer must outlive that borrow, specify a concrete registered successor/checker before changing lifetimes; disarming Drop or adding a completed flag is insufficient. Scope, task, actor, registration, permission and action changes continue to withdraw through consumption.
+5. Build the extension actual-job owner using shared `acquireBrowserJob`. Hold it through all Chrome promises and exact-document cleanup even after timeout/disposal. Retain one metadata-only settlement outbox until matching native acknowledgment. Seen IDs are bounded with no eviction/reinjection. A new service worker or navigation cannot claim settlement for abandoned work.
+6. Correct `beginPageExcerpt`'s `started:false` meaning: an existing same-request guard/tombstone does not prove no owned guard. Distinguish proven never-started absence from unknown cleanup; a rejected/lost injection or finish remains uncertain. Recheck exact document/origin/permission/observation after every await; inject only bundled isolated-world code into the selected exact document.
+7. Only after steps 1-6 integrate `ReadPage` dispatch, extension imports and the minimum scripting permission. Setup metadata still grants no reading authority. Accept content only after actual settlement and matching current Excerpt/Empty; durable evidence stores bounded provenance/digests, not page bodies. Generic excerpts cannot prove mailbox latest-N completeness.
 
-1. Implement the compact/expanded overlay and settings/onboarding from section 7. Show observed runtime state; every disabled/unavailable service has an explanation.
-   - Owner-required visual fidelity: read `design/README.md`, `design/tailwind/input.css`, `design/mockups/Overlay.dc.html`, `design/mockups/OverlayStates.dc.html`, `design/mockups/Main.dc.html`, and `design/mockups/Settings*.dc.html` before UI implementation. Port the approved component geometry, typography, spacing, controls, colors, and signal styles rather than substituting a new dashboard. At 100% interface size, the reference settings window is 880 x 640 with a 200-pixel sidebar and 44-pixel title bar; the compact overlay reference is 440 x 124. Other interface sizes scale these uniformly. Adapt for accessibility and DPI without changing the visual direction. Bundle fonts locally. Prototype simulations and its missing Design Component runtime are not application dependencies. Compare rendered application screenshots against the references for every overlay state, expanded panel, and all six settings sections; record differences and corrections in redacted verification evidence. Static class-name checks do not establish visual parity, and fixture-rendered states do not establish live runtime behavior.
-2. Make tray/hotkeys and local safety controls available while minimized or disconnected. Test focus, mixed DPI, window dragging, multiple monitors, and closing/reopening settings.
-3. Implement app discovery/alias selection and native volume read/set. Resolve and remember a named app and verify its window. Bound numeric/relative volume changes to the valid device range.
-4. Complete the first real sequence: recognize owner -> accept "open [app]" -> launch/verify -> speak result; then adjust volume and restore its prior value.
-5. Persist enrollment/settings/aliases and reconnect after app/server restart without automatically unmuting a deliberate mute.
+**Verify:** W-static/W-build and S-static/S-build. Review the complete lifetime/diff before activation. Authorized direct reads must cover actual Chrome and Brave, navigation/permission loss, caller drop, duplicate request/receipt, lost acknowledgment and browser restart. Success requires exact observed content plus settled resources; uncertain jobs block replacement. C4 source can be completed before C1, but no setup or debug path may manufacture its accepted producer.
 
-**Verify:** Static/Unit/Build; `desktop-controls` live suite; five repeated owner voice-to-app/volume cycles succeed without PC GPU inference. This milestone is an early demo, not release completion.
+### C5 — Deliver the three concrete owner workflows (M5)
 
-### M5 — Implement browser and application prompt control
+**Scope:** existing app/browser action contracts, policy/ledger/planner integration, catalog and browser modules from C3/C4; new narrowly scoped `crates/avesra-windows/src/prompt.rs`, `crates/avesra-core/src/workflows.rs`, and `apps/browser-extension/src/mailbox.ts` if no equivalent exists after drift check; associated module registration, required UIA dependency entries, setup/task UI and `docs/owner-workflows.md` (new). Do not build a general script interpreter.
 
-**In scope:** browser extension/native host, Windows UIA/visual action drivers, app/project alias memory, typed browser/prompt tools, tests `browser_contract.rs`, `desktop_execution.rs`, extension/UI tests, synthetic Gmail/X/prompt pages.
+1. Specify typed operation/precondition/postcondition contracts before wiring new effect types. Reuse exact actor, approval, target, source and action revisions. Identify actual supported Claude/Codex windows and browser profile/account surfaces through permitted preflight; do not guess selectors or silently substitute a CLI.
+2. Implement OW1: select actual Claude and the configured IRIS project, create a fresh chat, verify the input surface and draft policy, type exactly `123`, read back its exact text and leave unsubmitted. Preserve existing unsent drafts or ask for a decision. Focus loss, wrong project, modal, inaccessible input and app version drift yield needs-input/unsupported; never type into a shell by accident. Add submission only behind a separately explicit start/run request and its exact approval rules.
+3. Implement mailbox-specific enumeration/read evidence for OW2 over C4's owned browser operations. Bind selected account and visible configured Inbox scope, enumerate message identities newest-first across threads/pagination, deduplicate and prove ten messages or the true smaller count. A partial DOM excerpt or ten thread rows is insufficient. Distinguish delivered/shipped/out-for-delivery, cite message source/date and retain no raw content in telemetry. Ambiguous packages/account or inaccessible bodies produce an honest incomplete result.
+4. Implement OW3 navigation/focus to the intended X site/profile/account and verify ready state. Handle login/CAPTCHA as user input. No draft generation, send or publish from this request. Preserve exact-origin grants during redirects/navigation.
+5. Complete initial browser current-topic/source summaries and explicitly selected Codex/terminal prompt surfaces under section 9. Keep unsupported surfaces visible; core owner workflows are mandatory even if an additional surface is unavailable.
 
-1. Implement browser connection, tab/frame snapshots and typed actions, exact profile/tab selection, native-message validation, permissions, and fixture pages.
-2. Implement native semantic target finding, optional local vision grounding, freshness checks, coordinate transforms, focus/input leases, and postcondition verification. No generic model-supplied JavaScript/shell escape hatch.
-3. Implement Gmail latest-N messages, package-status interpretation and X AI-topic/site navigation with account/view/source/time handling. Include the exact latest-10 package question and open-X-to-post scenario. Exercise real authenticated pages only after the user completes login; no retained cookie or credential export.
-4. Implement prompt draft insertion and explicit submission in the chosen Claude/Codex app/project. Implement the exact Claude + IRIS + new chat + literal `123` scenario, without submission. Test an existing unsent draft, wrong project, wrong window, missing app, modal dialog, app update, failed submission, and acknowledgment loss.
-5. Implement explicitly requested terminal prompt targeting as a distinct tool/surface. Prove it will not type AI prompt text into a shell by mistake.
+**Verify:** applicable four gates. Record each OW1-OW3 result independently through real spoken input, local inference, Avesra drivers and observed postconditions. Redact email/project details. Both supported browsers require direct workflow coverage. Manual agent clicking/typing or a fixture result is not an Avesra pass. If account/app access is unavailable, finish independent source and report the specific pending live gate.
 
-**Verify:** Static/Unit/Build; `browser-workflows` on both Chrome and Brave; `app-prompts` live suite on the actual selected apps. A UIA-only mock does not establish that a real app exposes a usable prompt field. A failed real surface must remain `unsupported`/`needs_input` with a scoped follow-up, not a fabricated completed workflow.
+### C6 — Finish learning, history and explainable notifications (M6)
 
-### M6 — Implement continuous learning, demonstrations, and explainable chimes
+**Scope:** core storage/apps/conversation modules; new `crates/avesra-core/src/{memory,routines,notifications}.rs` and module registration if absent; scoped native/browser observation integration, existing Memory/Apps settings views and `docs/{memory,learning,notifications}.md` (new).
 
-**In scope:** observation scheduler, core memory/routines, SQLite migrations, desktop teach mode/event UI, tests `memory.rs`, `learning.rs`, `notifications.rs`, local search.
+1. Add versioned migrations for sourced facts, routine candidates, validation state, corrections and committed event batches using the existing single writer. Do not recreate existing task/conversation storage. Define deletion of dependent retrieval/index copies and private per-actor access before adding retrieval.
+2. Connect explicit demonstrations and permitted change-aware observation. Unknown speech, excluded apps, locked screens and credential fields provide no retained learning content. Bound background work and prioritize accepted conversation/actions.
+3. Execute validated routines only by proposing ordinary policy-checked steps. Changed targets, source drift or grants suspend/clarify instead of granting more authority. Keep candidates visibly distinct from validated routines.
+4. Tie learning/completion chimes to committed useful events/verified effects; persist the exact announced batch for follow-up answers. Coalesce/rate-limit and suppress duplicate backlog chimes after reconnect. Keep deafen/pause authoritative.
 
-1. Implement scoped change-aware observations and transient media lifecycle; log only redacted metadata. Enforce exclusions/lock/pause modes before capture.
-2. Implement explicit watch-and-learn demonstrations and passive candidate extraction. Store selectors/parameters/preconditions/postconditions with provenance and validation state.
-3. Implement indefinite accepted history, useful fact/app/routine storage, supersession/corrections, per-user retrieval boundaries, deletion and index cleanup. Add deterministic retrieval tests before considering an embedding backend.
-4. Implement routine invocation through the ordinary action engine. Test drift, partial success, changed permissions, injected source text, invalid parameters, and user intervention.
-5. Implement committed learning/action events, rate-limited/grouped chimes, event cards, and follow-ups grounded in the last actually announced batch. Respect deafen/pause, prevent duplicate/replayed chimes, and distinguish candidates from verified actions.
+**Verify:** applicable four gates. Direct demonstration -> recall after restart -> invocation -> correction -> deletion, with per-user isolation and privacy inspection. Ask about an announced batch after newer silent events; answer must cite that batch. These checks require genuine application behavior, no fixture harness.
 
-**Verify:** Static/Unit; `learning-memory` live suite including a demonstrated app/VPN-like fixture workflow, restart/recall, corrected alias, deleted memory, and a chime followed by "what did you learn?" while later silent events occur. The answer must identify the announced batch, not invent or confuse it with newer activity.
+### C7 — Implement bounded diagnostics and the configured VPN (M7)
 
-### M7 — Implement diagnostics and the existing work VPN workflow
+**Scope:** new `crates/avesra-windows/src/diagnostics.rs` and `vpn.rs` if needed, typed action/result contracts, core policy/routine integration, exact-proposal approval/task UI and `docs/diagnostics-vpn.md` (new).
 
-**In scope:** Windows diagnostic catalog, script-proposal/approval UI, VPN routine integration, tests `diagnostics.rs`, `approvals.rs`, relevant docs/fixtures.
+1. Implement a fixed reviewed read-only diagnostic catalog with bounded output/duration and owned process cancellation. Capture unavailable counters explicitly; model labels cannot convert generated scripts to read-only catalog operations.
+2. Ground slow-download explanations in actual throughput/settings/network/disk evidence. Present concrete configuration-changing proposals with exact target/parameters and fresh approval. Arbitrary scripts remain a separate review boundary.
+3. Identify the installed VPN client/version and approved control surface, then implement a normal verified routine. Leave MFA to the owner; observe connected state and Spark reachability. Do not modify corporate policy, bypass security or persist credentials.
 
-1. Implement the bounded reviewed diagnostic catalog and typed observations from section 12. Capture raw secrets nowhere; limit command duration/output and cancel owned process trees.
-2. Implement evidence-based diagnosis and concrete proposed fixes. Ensure every configuration-changing action requires approval even when generated during a larger accepted "fix it" task.
-3. Add a script-review path for diagnostics beyond the catalog. Prove unknown/generated scripts cannot enter automatic read-only execution through model labels or learned routine replay.
-4. Implement the existing VPN client connection as a learned/verified routine. Pause for MFA and verify connected state. Test both successful LAN access and Spark disconnection caused by VPN routing.
-5. Validate slow-download reasoning against controlled fixtures: app cap, competing traffic, active VPN, DNS/reachability failure, disk bottleneck, unavailable counters, and ambiguous remote-server limitation. Use a harmless reversible setting in live fix testing; do not manufacture failures on the work VPN.
+**Verify:** applicable four gates plus authorized direct read-only diagnosis and VPN observation. Demonstrate revoked/changed/expired approvals prevent writes and routing loss does not replay actions. Perform a reversible fix only with its exact approval. Unknown VPN product/surface blocks its adapter, not unrelated diagnostics.
 
-**Verify:** Static/Unit; `diagnostics-vpn` live suite plus all fixture fault cases. No network/system write occurs before approval. VPN success requires observed state; an MFA challenge or unavailable server produces needs-input/failure, not success.
+### C8 — Complete deployment profiles, packaging and instrumentation (M1/M8)
 
-### M8 — Prove driver swaps, optional Jev, installation, and operational recovery
+**Scope:** current driver/server configuration, audio service manifests, profile/runtime settings, new focused telemetry/routing modules as required within existing crates, `deploy/{spark,windows}/` and `config/` when needed for packaging, native-host installation scripts, Tauri bundle configuration and `docs/{drivers,operations,verification}.md`; no unrelated host service changes.
 
-**In scope:** routing/profile UI including optional client acceleration and Gaming override, Local Studio adapter, optional Jev adapter, deployment/installer artifacts, native host registration, backup/restore, operations docs, tests `routing.rs`, `egress.rs`, `configuration.rs`.
+1. Finish per-stage tracing/rollups and the local Performance view specified in section 16. Thread correlation through every slice; retain failures, queue delays and clock uncertainty. Provide bounded redacted export and same-scenario baseline/candidate comparison without a test runner.
+2. Qualify compatible model replacement before switching; retain/drain actual jobs, preserve tasks/history and reject incompatible replacement. Single-Spark/Gaming must not retain client model allocations. Opt-in Accelerated requires measured benefit, supported capacity and safe transition under actual game load; an unavailable UI option does not satisfy A27.
+3. Keep optional Jev disabled without explicit configuration. If enabled, implement only section 13's schema, explicit egress consent/redaction and local fallback. Missing optional credentials do not block local completion; required local behavior never depends on Jev.
+4. Package the actual Windows app/native host/selected extension setup and owned Spark services, with pinned artifacts, readiness timeouts, startup order and logs. Preserve normal-user storage and existing protected identity during updates. Document install, upgrade, rollback, revocation, backup/restore and uninstall; memory deletion remains a separate decision.
+5. Verify restart/sleep/resume, unplugged devices, browser/service restart, disk-full and lost-effect acknowledgment through existing reconciliation. No generic clear-uncertainty switch or automatic GUI replay.
 
-1. Expose actual lane assignments, connection tests, capabilities, resource limits, and service status. Validate a replacement before switching; drain at turn/utterance boundaries and preserve current tasks/history.
-2. Prove that a second compatible local model/deployment can replace the first without changing controller logic or losing memory. Also test incompatible capability rejection, failed loading, and low-memory behavior. Future multi-machine profiles remain unconfigured until hardware is actually enrolled.
-3. Implement Jev with the narrow data schema in section 13 and local fallback. Test blocked cloud endpoints, malformed results, latency, outage, and redaction. Ordinary website traffic is not confused with model egress.
-4. Package the Windows user-session app/native host/extension setup and Spark services with pinned images/configuration. Provide health checks, restart policy, bounded logs, dependency startup order, and a measured readiness timeout. Account for slow cold model loading.
-5. Validate updates, configuration rollback, credential revocation, backup/restore, disk-full behavior, Windows sleep/resume, Spark reboot, microphone removal, and browser restart. Never replay a pending GUI mutation merely because the service restarted.
-6. Provide an explicit uninstall that stops capture and unregisters owned startup/native-host entries; ask separately whether to remove retained user memory. Do not touch unrelated applications/services.
+**Verify:** W-static/W-build and S-static/S-build, actual artifact identity, and authorized direct install/update/recovery observations. Record cold/warm model loads, replacement, Spark-only operation, Accelerated/Gaming transitions, egress and Performance-view results. Build success is not deployment or runtime qualification.
 
-**Verify:** Static/Unit/Build on both hosts; `routing-recovery` live suite; `egress` live suite with Jev disabled and optional enabled tests when credentials are supplied. Core acceptance must pass without Jev. Unavailable optional Jev credentials do not justify a false enabled-service claim.
+### C9 — Complete live release evidence and close the plan (M9)
 
-### M9 — Run release acceptance and report the real boundary
+**Scope:** redacted `docs/evidence/release.md`, current operations/verification docs, plan status/handoff; implementation fixes only through the owning slice above.
 
-**In scope:** acceptance scenarios, fixes strictly needed for contract compliance, redacted `docs/evidence/release.md`, operations guide and index status.
+1. At the release source/artifact/config revision, perform every required A01-A29 case in section 16 by direct observation. Keep the scenario IDs and quantitative targets; no automated runner/verifier is required or authorized. Record PASS/FAIL/BLOCKED per case, actual environment/model/app versions, timestamps, sample counts, observations, measured values and missing evidence.
+2. Include the real OW1-OW3 spoken workflows, positive and negative identity/directness corpus, latency under contention, local-control response, gaming impact, privacy/storage inspection and eight-hour soak. Purposeful live recordings/screenshots require the applicable explicit capture permission and local retention controls; no implicit ambient corpus collection.
+3. Re-run only scenarios affected by later source/config/device changes, and clearly link any retained earlier evidence to unchanged prerequisites. A failed required gate remains failed; do not discard failures from latency/accuracy totals or substitute a manually completed action.
+4. Manually review evidence completeness against every section 19 checkbox. Missing OW1-OW3 or positive-owner acceptance prevents DONE, regardless of build success. Optional disabled Jev is explicitly not applicable; deferred lights are out of scope. Other requirements require evidence or an explicit owner scope revision.
+5. Update the index and handoff with implemented slices, remaining blockers and exact evidence references. Use IN PROGRESS/PARTIAL until all required gates pass; use BLOCKED only for a specified dependency that prevents further relevant work. Planning completion and source completion are separate from release completion.
 
-1. Run the `owner-workflows` suite against the actual selected Spark and Windows client: OW1 Claude/IRIS/new chat/literal `123`; OW2 latest-10 email package evidence; OW3 X ready for owner posting. Then run the supporting required suites below, with model/app versions recorded. A fake or manual replacement for Avesra's steps cannot satisfy these scenarios.
-2. Run the latency/resource benchmarks under concurrent speech, observation, and a real desktop task; then with a game occupying the 5090. Do not infer assistant overhead from idle measurements alone.
-3. Run an eight-hour supervised soak with microphone/device events, browser use, learning, a long task, service restart, and network interruption. Track memory, backlog age, errors, duplicate effects, and spurious requests.
-4. Audit app-managed storage/logs/export for media/credential retention using synthetic canaries. Check known sensitive fields and privacy states, including excluded apps and lock/unlock.
-5. Collect the release report and run the strict verifier. Any unresolved required live test or failed target leaves the milestone partial/blocked with evidence. Do not replace a failed real test with a fixture report.
+**Verify:** final applicable build/static gates for the actual release revision; every required acceptance row has fresh matching direct evidence; eight-hour duration and numerical targets are recorded; the owner sees the actual workflow results. No report-verifier command is invented.
 
-**Verify:** all required live reports pass; `release` suite assembles them; `verify ... --require-live` exits 0. Update the plan index only after these results exist.
+### Dependencies and stopping boundaries
+
+Execute C0 first. The main useful-product path is C1 -> C2 -> C3 -> C5, with C4 required for C5's browser operations. C2/C4 source can progress while C1 live qualification is unavailable; keep their activation gated. C6 follows accepted conversations and useful action/browser evidence; C7 uses C3/C6 policy and routines. Instrument each slice as it lands; C8 completes deployment/telemetry and C9 closes live release evidence. UI polish and Plan 002 sound design cannot replace these dependencies.
+
+Stop the affected slice if actual source conflicts with an excerpt/contract, concurrent ownership is unresolved, the plan would require a new authority bypass, or the proposed change needs paths outside its scope. Revise the specification before broadening architecture. Do not stop independent source work solely because a human audition, account challenge or long live qualification session is pending. Do not mark a dormant implementation live-ready to avoid a blocker.
 
 ## 16. Acceptance matrix and quantitative targets
 
-These are proposed first-release acceptance targets, not measured capabilities. The operator may explicitly revise a target after seeing M0 evidence; the executor must not lower it silently. Small finite test sets establish a release gate, not a universal false-accept guarantee.
+These are required first-release acceptance targets, not measured capabilities. The operator may explicitly revise a target after seeing M0 evidence; the executor must not lower it silently. Under the specs/code override, the suite labels below identify groups of directly observed scenarios, not automated commands. Small finite evaluation sets establish a release gate, not a universal false-accept guarantee.
 
 | ID / owning suite | Scenario and mandatory outcome |
 | --- | --- |
@@ -728,11 +747,11 @@ Automatic optimization may adjust bounded scheduling, batching, observation rate
 
 ### Release-report rules
 
-Reports identify synthetic versus live inputs and include test counts, environment/config revisions, source commit, scenario IDs, measured values, and evidence timestamps. The verifier rejects missing, skipped, stale, fixture-only, or mismatched-configuration results for required live scenarios. It also rejects an all-reject speaker/intent implementation that passes negative tests but fails the positive owner-request target.
+Reports identify the actual live inputs and include observation counts, environment/config revisions, source commit and dirty scope, scenario IDs, measured values, and evidence timestamps. Review completeness directly; do not implement an automated verifier. Missing, skipped, stale, synthetic-only or mismatched-configuration evidence cannot satisfy required live scenarios. An all-reject speaker/intent implementation fails the positive owner-request target even when no unauthorized effects occur.
 
-The release verifier must specifically reject absent/failed/blocked OW1–OW3 evidence even when all unit tests and other suites pass. Acceptance instrumentation observes and checks Avesra's steps; it must not secretly perform the requested workflow itself.
+The release review must specifically reject absent/failed/blocked OW1–OW3 evidence even when build/static checks and other scenarios pass. Product instrumentation observes Avesra's steps; it must not secretly perform the requested workflow itself.
 
-Test evidence may include temporary explicit test recordings/screenshots when the operator intentionally enables a test fixture collection; this must be separate from product capture, clearly labeled, locally protected, excluded from commits/support bundles, and deleted when the test session ends unless the operator deliberately retains it. Product operation remains transient-media-only.
+Direct qualification evidence may include temporary recordings/screenshots only when the operator explicitly enables that collection; keep it separate from product capture, clearly labeled, locally protected, excluded from commits/support bundles, and deleted when the qualification session ends unless the operator deliberately retains it. Do not create an automated fixture collection. Product operation remains transient-media-only.
 
 ## 17. Primary references and verified limits
 
@@ -764,7 +783,7 @@ These do not justify guessing success. M0 resolves them or blocks only the affec
 
 ### STOP and report if
 
-- New repository guidance/source conflicts with this greenfield plan or another actor is implementing overlapping files.
+- Current source conflicts with the completion plan or another actor owns overlapping files; reconcile the affected slice before editing, preserving independent progress.
 - Only an unsupported/private app interface or UAC/security bypass would make an action work.
 - The implementation needs to retain raw media, send additional private data to Jev, call another cloud AI API, or use the PC GPU outside an enabled accelerated profile.
 - A learned routine would expand permissions, persist credentials, or replay an uncertain consequential effect.
@@ -775,7 +794,7 @@ These do not justify guessing success. M0 resolves them or blocks only the affec
 
 ### Maintenance obligations
 
-Version wire contracts, adapters, model artifacts, speaker profiles, routine schemas and SQLite migrations deliberately. Compatibility changes must include migration/re-enrollment/revalidation behavior and tests. Keep operational logs bounded and redacted; keep useful user memory durable. Re-run targeted live app tests after browser, VPN, or coding-app UI changes. Re-run voice/latency tests after changing speech/identity models or microphones.
+Version wire contracts, adapters, model artifacts, speaker profiles, routine schemas and SQLite migrations deliberately. Compatibility changes must specify migration/re-enrollment/revalidation behavior and receive applicable static/build and direct validation. Keep operational logs bounded and redacted; keep useful user memory durable. Repeat affected direct app scenarios after browser, VPN, or coding-app UI changes. Repeat affected voice/latency qualification after changing speech/identity models or microphones.
 
 Keep the task ledger and permission checks outside the models. Keep learned knowledge inspectable and reversible. Keep notification explanations tied to real events. New machines and drivers must reuse existing contracts rather than adding a second action path that bypasses them.
 
@@ -785,18 +804,18 @@ Keep the task ledger and permission checks outside the models. Keep learned know
 - [ ] **OW2:** The owner can ask about the latest 10 emails and package delivery; Avesra inspects the actual messages and gives a source-grounded answer.
 - [ ] **OW3:** The owner can ask to open X to post about a new app; Avesra gets the intended browser/account ready without publishing.
 - [ ] M0 environment and feasibility evidence recorded; unresolved items explicitly scoped.
-- [ ] Windows and Spark static/unit/build commands exist and pass.
+- [ ] Existing Windows and Spark static/build commands pass for the release revision; no automated tests are required or claimed under the owner override.
 - [ ] Single-Spark inference works without 5090 model use or undeclared cloud AI.
 - [ ] Optional client acceleration is capability-checked and measured; Gaming releases client inference and preserves safe task continuity.
 - [ ] Owner enrollment, continuous listening, directed intent, additional-user grants and local controls pass live gates.
 - [ ] Requested app/volume/browser/prompt/diagnostic/VPN workflows have real proof, not only simulated dispatch.
 - [ ] Teaching and passive learning persist sourced routines/mappings without gaining authority.
-- [ ] Indefinite accepted history, local privacy boundaries, deletion and user isolation pass tests.
-- [ ] Learning/action chimes and follow-up explanations pass event-correlation tests.
+- [ ] Indefinite accepted history, local privacy boundaries, deletion and user isolation pass direct inspection scenarios.
+- [ ] Learning/action chimes and follow-up explanations pass direct event-correlation scenarios.
 - [ ] Driver/profile replacement, restart, network loss, input-focus loss and unknown-effect recovery pass.
 - [ ] Latency/resource targets and eight-hour soak pass with measured evidence.
 - [ ] Per-stage metrics, redacted traces, local Performance view, and baseline/candidate accuracy-plus-latency comparison work across supported deployments.
-- [ ] Release verifier rejects incomplete evidence and accepts the actual complete release report.
+- [ ] Direct release review confirms complete revision-matched A01-A29 and OW1-OW3 evidence, with optional disabled Jev explicitly not applicable; no automated report verifier is required.
 - [ ] Operations/setup/recovery instructions reflect the tested configuration.
 - [ ] `plans/README.md` status updated with evidence; no unrelated files or services changed.
 

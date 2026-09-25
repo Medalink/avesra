@@ -490,7 +490,7 @@
             </div>
           </section>
         {:else if section === "people"}
-          <EnrollmentView {runtime} {navigate} />
+          <EnrollmentView {runtime} {navigate} {control} />
           <OwnerName {runtime} />
           <section class="section">
             <span class="av-kicker">Other people</span>

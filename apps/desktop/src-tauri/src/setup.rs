@@ -619,15 +619,29 @@ pub async fn finish_enrollment(
 pub async fn speaker_candidates(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
-) -> Result<Vec<crate::profiles::CandidateSummary>, String> {
+) -> Result<SpeakerCandidates, String> {
     settings_only(&window)?;
     let directory = app
         .path()
         .app_data_dir()
         .map_err(|_| "Profile directory unavailable")?;
-    tauri::async_runtime::spawn_blocking(move || crate::profiles::list_candidates(&directory))
-        .await
-        .map_err(|_| "Profile reader stopped")?
+    tauri::async_runtime::spawn_blocking(move || {
+        Ok(SpeakerCandidates {
+            candidates: crate::profiles::list_candidates(&directory)?,
+            storage_directory: std::fs::canonicalize(directory.join("speaker-candidates"))
+                .map_err(|_| "Saved voice folder could not be resolved")?
+                .display()
+                .to_string(),
+        })
+    })
+    .await
+    .map_err(|_| "Profile reader stopped")?
+}
+
+#[derive(Serialize)]
+pub struct SpeakerCandidates {
+    candidates: Vec<crate::profiles::CandidateSummary>,
+    storage_directory: String,
 }
 #[tauri::command]
 pub async fn delete_speaker_candidate(
