@@ -1,3 +1,4 @@
+pub mod actor_intents;
 pub mod conversations;
 pub mod enrollment;
 pub mod execution;
