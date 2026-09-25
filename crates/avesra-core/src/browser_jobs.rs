@@ -238,6 +238,112 @@ pub struct Retirement {
     pub context: Context,
 }
 
+pub(crate) fn retired(
+    db: &Connection,
+    expected: &Context,
+) -> Result<Option<Retirement>, ErrorCode> {
+    expected.validate()?;
+    let mut query = sql(db.prepare("SELECT substr(CAST(dispatch AS BLOB),1,37),substr(CAST(request AS BLOB),1,37),substr(CAST(revision AS BLOB),1,37),substr(CAST(action_revision AS BLOB),1,37),substr(CAST(context AS BLOB),1,4097) FROM browser_read_retirements WHERE dispatch=?1 LIMIT 2"))?;
+    let mut rows = sql(query.query([expected.dispatch.uuid().to_string()]))?;
+    let Some(row) = sql(rows.next())? else {
+        return Ok(None);
+    };
+    let text = |index| -> Result<String, ErrorCode> {
+        String::from_utf8(sql::<Vec<u8>>(row.get(index))?).map_err(|_| ErrorCode::Malformed)
+    };
+    let dispatch = id(&text(0)?)?;
+    let request = id(&text(1)?)?;
+    let revision = id(&text(2)?)?;
+    let action_revision = id(&text(3)?)?;
+    let body: Vec<u8> = sql(row.get(4))?;
+    if body.is_empty() || body.len() > MAX_CONTEXT || sql(rows.next())?.is_some() {
+        return Err(ErrorCode::Malformed);
+    }
+    let context: Context = serde_json::from_slice(&body).map_err(|_| ErrorCode::Malformed)?;
+    validate_context(db, &context)?;
+    if context.dispatch.uuid() != dispatch
+        || context.request.uuid() != request
+        || context.action_revision.uuid() != action_revision
+    {
+        return Err(ErrorCode::Malformed);
+    }
+    if &context != expected {
+        return Err(ErrorCode::Stale);
+    }
+    Ok(Some(Retirement { revision, context }))
+}
+
+/// Withdrawal-only borrowed ownership read from the actual uncertain slot.
+/// No caller-context constructor, publication permit or content authority.
+pub struct Recovery<'a> {
+    store: &'a mut Store,
+    owned: Ownership,
+}
+impl Recovery<'_> {
+    pub fn context(&self) -> &Context {
+        &self.owned.context
+    }
+    pub fn revision(&self) -> Uuid {
+        self.owned.revision
+    }
+    /// The native worker must first match its received opaque Settlement.
+    pub fn retire(self) -> Result<Retirement, ErrorCode> {
+        retire(
+            &mut self.store.connection,
+            self.owned.revision,
+            &self.owned.context,
+            true,
+        )
+    }
+}
+
+// Only concrete borrowed live/recovery leases can call this mutation helper.
+pub(crate) fn retire(
+    db: &mut Connection,
+    revision: Uuid,
+    context: &Context,
+    uncertain: bool,
+) -> Result<Retirement, ErrorCode> {
+    let tx = sql(db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate))?;
+    let owned = current(&tx)?.ok_or(ErrorCode::Stale)?;
+    if retired(&tx, context)?.is_some() {
+        return Err(ErrorCode::Malformed);
+    }
+    if owned.revision != revision || owned.context != *context {
+        return Err(ErrorCode::Stale);
+    }
+    if uncertain && !matches!(owned.state, State::Uncertain) {
+        return Err(ErrorCode::InvalidTransition);
+    }
+    let body = serde_json::to_vec(context).map_err(|_| ErrorCode::Malformed)?;
+    if body.is_empty() || body.len() > MAX_CONTEXT {
+        return Err(ErrorCode::TooLarge);
+    }
+    let body = String::from_utf8(body).map_err(|_| ErrorCode::Malformed)?;
+    sql(tx.execute("INSERT INTO browser_read_retirements(dispatch,request,revision,action_revision,context) VALUES(?1,?2,?3,?4,?5)", rusqlite::params![context.dispatch.uuid().to_string(),context.request.uuid().to_string(),revision.to_string(),context.action_revision.uuid().to_string(),body]))?;
+    let receipt = retired(&tx, context)?.ok_or(ErrorCode::Malformed)?;
+    if receipt.revision != revision {
+        return Err(ErrorCode::Malformed);
+    }
+    if sql(tx.execute(
+        "DELETE FROM browser_read_owner WHERE id=1 AND revision=?1 AND dispatch=?2",
+        [revision.to_string(), context.dispatch.uuid().to_string()],
+    ))? != 1
+    {
+        return Err(ErrorCode::Stale);
+    }
+    if current(&tx)?.is_some() {
+        return Err(ErrorCode::Malformed);
+    }
+    sql(tx.commit())?;
+    let receipt = retired(db, context)?.ok_or(ErrorCode::Malformed)?;
+    if receipt.revision != revision
+        || current(db)?.is_some_and(|v| v.context.dispatch == context.dispatch)
+    {
+        return Err(ErrorCode::Malformed);
+    }
+    Ok(receipt)
+}
 impl Store {
     /// Authenticated native recovery must separately validate actual pairing.
     /// This bounded metadata lookup mints no lease or transport capability.
@@ -245,35 +351,26 @@ impl Store {
         &self,
         expected: &Context,
     ) -> Result<Option<Retirement>, ErrorCode> {
-        expected.validate()?;
-        let mut query = sql(self.connection.prepare("SELECT substr(CAST(dispatch AS BLOB),1,37),substr(CAST(request AS BLOB),1,37),substr(CAST(revision AS BLOB),1,37),substr(CAST(action_revision AS BLOB),1,37),substr(CAST(context AS BLOB),1,4097) FROM browser_read_retirements WHERE dispatch=?1 LIMIT 2"))?;
-        let mut rows = sql(query.query([expected.dispatch.uuid().to_string()]))?;
-        let Some(row) = sql(rows.next())? else {
-            return Ok(None);
-        };
-        let text = |index| -> Result<String, ErrorCode> {
-            String::from_utf8(sql::<Vec<u8>>(row.get(index))?).map_err(|_| ErrorCode::Malformed)
-        };
-        let dispatch = id(&text(0)?)?;
-        let request = id(&text(1)?)?;
-        let revision = id(&text(2)?)?;
-        let action_revision = id(&text(3)?)?;
-        let body: Vec<u8> = sql(row.get(4))?;
-        if body.is_empty() || body.len() > MAX_CONTEXT || sql(rows.next())?.is_some() {
-            return Err(ErrorCode::Malformed);
-        }
-        let context: Context = serde_json::from_slice(&body).map_err(|_| ErrorCode::Malformed)?;
-        validate_context(&self.connection, &context)?;
-        if context.dispatch.uuid() != dispatch
-            || context.request.uuid() != request
-            || context.action_revision.uuid() != action_revision
+        let receipt = retired(&self.connection, expected)?;
+        if receipt.is_some()
+            && current(&self.connection)?.is_some_and(|v| v.context.dispatch == expected.dispatch)
         {
             return Err(ErrorCode::Malformed);
         }
-        if &context != expected {
-            return Err(ErrorCode::Stale);
+        Ok(receipt)
+    }
+    /// Reborrows this actual owner; never reconstructs a running read/permit.
+    pub fn recover_browser_read(&mut self) -> Result<Option<Recovery<'_>>, ErrorCode> {
+        let Some(owned) = current(&self.connection)? else {
+            return Ok(None);
+        };
+        if retired(&self.connection, &owned.context)?.is_some() {
+            return Err(ErrorCode::Malformed);
         }
-        Ok(Some(Retirement { revision, context }))
+        if !matches!(owned.state, State::Uncertain) {
+            return Err(ErrorCode::InvalidTransition);
+        }
+        Ok(Some(Recovery { store: self, owned }))
     }
     /// Same-worker metadata only; neither absence nor this value grants effects.
     pub fn browser_read_ownership(&self) -> Result<Option<Ownership>, ErrorCode> {

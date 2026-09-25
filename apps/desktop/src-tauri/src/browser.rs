@@ -776,6 +776,11 @@ async fn run(
     .await?;
     let mut sequence = 0u64;
     let mut authenticated = false;
+    let mut settlement: Option<(
+        browser::reading::Context,
+        std::sync::mpsc::Receiver<Result<avesra_core::browser_jobs::Retirement, ErrorCode>>,
+    )> = None;
+    let mut read_ack: Option<browser::reading::Context> = None;
     let mut job: Option<tokio::task::JoinHandle<Result<Issuance, ErrorCode>>> = None;
     let result = async {
         loop {
@@ -798,10 +803,19 @@ async fn run(
                     session,
                     sequence,
                     observation_revision,
-                    proof: _,
+                    proof,
                 } => {
-                    // No native read channel is admitted yet. Consume the valid
-                    // envelope without claiming retirement or minting an ack.
+                    if let Some((context, _)) = &settlement {
+                        if context != proof.context() {
+                            return Err(ErrorCode::Unavailable);
+                        }
+                        // Exact in-flight duplicate: retain the first actual job.
+                    } else {
+                        let context = proof.context().clone();
+                        let receive = app.state::<Runtime>().effects.settle_browser_read(proof)?;
+                        settlement = Some((context, receive));
+                        read_ack = None;
+                    }
                     Client::Poll {
                         session,
                         sequence,
@@ -1021,11 +1035,29 @@ async fn run(
                             }));
                         }
                     }
+                    // Poll only after a complete frame: selecting against a
+                    // receive future would poison its partially consumed pipe.
+                    if let Some((expected, receiver)) = &settlement {
+                        match receiver.try_recv() {
+                            Ok(result) => {
+                                let receipt = result?;
+                                if receipt.context != *expected {
+                                    return Err(ErrorCode::Malformed);
+                                }
+                                read_ack = Some(receipt.context);
+                                settlement = None;
+                            }
+                            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                                return Err(ErrorCode::Unavailable);
+                            }
+                        }
+                    }
                     let status = with_attempt(app, id, generation, |state, local, attempt| {
                         let value = browser::StatusReply {
                             version: browser::VERSION,
                             read: None,
-                            read_ack: None,
+                            read_ack: read_ack.clone(),
                             session: challenge.session,
                             generation,
                             sequence,

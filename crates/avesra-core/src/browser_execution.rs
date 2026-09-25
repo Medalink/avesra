@@ -24,6 +24,7 @@ const NO_PERMIT: u8 = 0;
 const HELD: u8 = 1;
 const POSSIBLY_PUBLISHED: u8 = 2;
 const RETURNED: u8 = 3;
+const SETTLED: u8 = 4;
 
 /// Actual worker retains this lease. No reconstruction from wire/history.
 pub struct MarkerLease {
@@ -259,8 +260,30 @@ impl<'a> ReadExecution<'a> {
             },
         ))
     }
-    /// Current slice retires ONLY never-issued/returned publication. Exact
-    /// authenticated settlement retirement is added with the native capability.
+    /// Resource retirement only. The native worker must match its opaque
+    /// received Settlement to this exact lease before consuming it here.
+    /// Expired/cancelled content authority does not prevent withdrawal.
+    pub fn retire_published(
+        &mut self,
+        lease: MarkerLease,
+    ) -> Result<browser_jobs::Retirement, ErrorCode> {
+        if !Arc::ptr_eq(&lease.phase, &self.phase)
+            || self.phase.load(Ordering::SeqCst) != POSSIBLY_PUBLISHED
+            || self.marker.as_ref() != Some(&(lease.revision, lease.context.clone()))
+        {
+            return Err(ErrorCode::Stale);
+        }
+        let receipt = browser_jobs::retire(
+            &mut self.store.connection,
+            lease.revision,
+            &lease.context,
+            false,
+        )?;
+        self.marker = None;
+        self.phase.store(SETTLED, Ordering::SeqCst);
+        Ok(receipt)
+    }
+    /// Proven never-issued/returned publication creates no settlement receipt.
     pub fn finish_unpublished(
         mut self,
         lease: Option<MarkerLease>,
@@ -336,7 +359,11 @@ impl Drop for ReadExecution<'_> {
             // Resource ownership stays in the slot even if outcome persistence
             // fails. Startup recovery cannot turn it into a new effect permit.
             if let Ok(now) = now_ms() {
-                let outcome = if self.marker.is_some() {
+                let outcome = if self.marker.is_some()
+                    || matches!(
+                        self.phase.load(Ordering::SeqCst),
+                        POSSIBLY_PUBLISHED | SETTLED
+                    ) {
                     Outcome::UnknownEffect
                 } else {
                     Outcome::Cancelled

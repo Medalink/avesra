@@ -16,6 +16,7 @@ struct Pending {
     started: Instant,
     request: Id,
     observation_revision: u64,
+    resource_generation: u64,
     mode: wire::Mode,
     phase: Phase,
     _work: tokio::sync::OwnedMutexGuard<()>,
@@ -50,7 +51,11 @@ impl Pending {
         local: &avesra_core::state::LocalState,
         inner: &Inner,
     ) -> bool {
-        self.started.elapsed() < Duration::from_millis(wire::LIFETIME_MS)
+        state
+            .effects
+            .browser_work_generation()
+            .is_ok_and(|v| v == self.resource_generation)
+            && self.started.elapsed() < Duration::from_millis(wire::LIFETIME_MS)
             && self.context.matches(state, local, inner)
             && inner
                 .attempt
@@ -106,7 +111,11 @@ impl Coordinator {
     ) -> Result<Option<wire::Request>, ErrorCode> {
         let mut slot = self.pending.lock().map_err(|_| ErrorCode::Unavailable)?;
         if slot.as_ref().is_some_and(|p| {
-            p.context.transport != generation
+            !state
+                .effects
+                .browser_work_generation()
+                .is_ok_and(|v| v == p.resource_generation)
+                || p.context.transport != generation
                 || p.context.attempt != attempt.id
                 || p.observation_revision != attempt.observation_revision
                 || !attempt.current_time()
@@ -129,6 +138,9 @@ fn admitted(
     inner: &Inner,
     generation: u64,
 ) -> Result<Context, String> {
+    if state.effects.browser_work_blocked() {
+        return Err("Browser work ownership is unresolved".into());
+    }
     let attempt = inner
         .attempt
         .as_ref()
@@ -158,7 +170,7 @@ pub async fn inspect_browser_documents(
     let generation = visible(&window)?;
     let started = Instant::now();
     let state = app.state::<Runtime>();
-    let (work, context, proof, pairing, observation_revision) = {
+    let (work, context, proof, pairing, observation_revision, resource_generation) = {
         let local = state.local.lock().map_err(|_| "Local state unavailable")?;
         let inner = state
             .browser
@@ -188,7 +200,18 @@ pub async fn inspect_browser_documents(
         if observation_revision == 0 {
             return Err("Await browser status acknowledgement".into());
         }
-        (work, context, proof, pairing, observation_revision)
+        let resource_generation = state
+            .effects
+            .browser_work_generation()
+            .map_err(|_| "Browser work ownership is unresolved")?;
+        (
+            work,
+            context,
+            proof,
+            pairing,
+            observation_revision,
+            resource_generation,
+        )
     };
     let directory = app
         .path()
@@ -235,7 +258,11 @@ pub async fn inspect_browser_documents(
                     .inner
                     .lock()
                     .map_err(|_| ErrorCode::Unavailable)?;
-                if !context.matches(&state, &local, &inner)
+                if !state
+                    .effects
+                    .browser_work_generation()
+                    .is_ok_and(|v| v == resource_generation)
+                    || !context.matches(&state, &local, &inner)
                     || !inner
                         .attempt
                         .as_ref()
@@ -260,7 +287,11 @@ pub async fn inspect_browser_documents(
         .inner
         .lock()
         .map_err(|_| "Browser state unavailable")?;
-    if !context.matches(&state, &local, &inner)
+    if !state
+        .effects
+        .browser_work_generation()
+        .is_ok_and(|v| v == resource_generation)
+        || !context.matches(&state, &local, &inner)
         || !inner
             .attempt
             .as_ref()
@@ -283,6 +314,7 @@ pub async fn inspect_browser_documents(
         started,
         request,
         observation_revision,
+        resource_generation,
         mode: wire::Mode::Discover,
         phase: Phase::Waiting,
         _work: work,

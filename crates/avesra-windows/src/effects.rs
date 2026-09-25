@@ -23,7 +23,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Receiver, SyncSender},
     },
 };
@@ -69,6 +69,7 @@ impl Management {
     }
 }
 enum Command {
+    BrowserCompletionWake,
     RetirePlanner {
         retirement: PlannerRetirement,
         reply: SyncSender<Result<(), ErrorCode>>,
@@ -331,10 +332,55 @@ struct Active {
     cancellation: Cancellation,
     conversation: Option<CancellationTarget>,
 }
+struct BrowserCompletion {
+    proof: crate::browser_receive::Settlement,
+    reply: SyncSender<Result<avesra_core::browser_jobs::Retirement, ErrorCode>>,
+}
+// Low bit is blocked; upper bits retire metadata observations across even a
+// complete blocked->clear transition between polls. Exhaustion stays closed.
+fn browser_resource(state: &AtomicU64, blocked: bool) {
+    let mut old = state.load(Ordering::SeqCst);
+    loop {
+        if old == u64::MAX || (old & 1 != 0) == blocked {
+            return;
+        }
+        let next = old
+            .checked_add(2)
+            .map(|v| (v & !1) | u64::from(blocked))
+            .unwrap_or(u64::MAX);
+        match state.compare_exchange(old, next, Ordering::SeqCst, Ordering::SeqCst) {
+            Ok(_) => return,
+            Err(current) => old = current,
+        }
+    }
+}
+struct BrowserWorkerLifetime(Arc<AtomicU64>);
+impl Drop for BrowserWorkerLifetime {
+    fn drop(&mut self) {
+        browser_resource(&self.0, true);
+    }
+}
+fn settle_browser(
+    store: &mut Store,
+    proof: crate::browser_receive::Settlement,
+) -> Result<avesra_core::browser_jobs::Retirement, ErrorCode> {
+    // Receipt lookup also rejects an impossible same-dispatch live marker. It
+    // never clears a different active dispatch or constructs an execution.
+    if let Some(receipt) = store.browser_read_retirement(proof.context())? {
+        return Ok(receipt);
+    }
+    let recovery = store.recover_browser_read()?.ok_or(ErrorCode::Stale)?;
+    if recovery.context() != proof.context() {
+        return Err(ErrorCode::Stale);
+    }
+    recovery.retire()
+}
 /// Thread lifetime owns admission, including after receiver timeout/drop. Target
 /// records are immutable for its lifetime; replacement requires a new worker.
 pub struct NativeEffects {
     send: SyncSender<Command>,
+    browser_completion: SyncSender<BrowserCompletion>,
+    browser_blocked: Arc<AtomicU64>,
     state: Arc<Mutex<State>>,
 }
 impl NativeEffects {
@@ -350,6 +396,9 @@ impl NativeEffects {
         }
         let ownership = WorkerOwnership::acquire(&path)?;
         let (send, receive) = mpsc::sync_channel::<Command>(16);
+        let (browser_completion, browser_receive) = mpsc::sync_channel::<BrowserCompletion>(1);
+        let browser_blocked = Arc::new(AtomicU64::new(1));
+        let owned_browser = browser_blocked.clone();
         let state = Arc::new(Mutex::new(State {
             action_epoch: 0,
             allowed: false,
@@ -363,6 +412,7 @@ impl NativeEffects {
             .name("avesra-effects".into())
             .spawn(move || {
                 let _ownership = ownership;
+                let _browser_lifetime = BrowserWorkerLifetime(owned_browser.clone());
                 let Ok(store) = Store::open(&path) else {
                     return;
                 };
@@ -370,13 +420,40 @@ impl NativeEffects {
                 else {
                     return;
                 };
+                browser_resource(
+                    &owned_browser,
+                    store
+                        .browser_read_ownership()
+                        .map(|v| v.is_some())
+                        .unwrap_or(true),
+                );
                 let mut controller = ExecutionController::new(store);
                 let mut adapter = NativeAdapter {
                     targets: registry,
                     apps,
                 };
                 while let Ok(command) = receive.recv() {
+                    // This dedicated mailbox is also the completion input for
+                    // the future active ReadExecution loop. Never queue its
+                    // settlement behind a worker waiting for that same browser.
+                    if let Ok(completion) = browser_receive.try_recv() {
+                        let mut result = settle_browser(controller.management(), completion.proof);
+                        match controller.management().browser_read_ownership() {
+                            Ok(Some(_)) => browser_resource(&owned_browser, true),
+                            Ok(None) if result.is_ok() => browser_resource(&owned_browser, false),
+                            // Failed retirement never clears retained uncertainty.
+                            // An unsolicited invalid proof also cannot close an
+                            // otherwise clear resource without ownership evidence.
+                            Ok(None) => {}
+                            Err(error) => {
+                                browser_resource(&owned_browser, true);
+                                result = Err(error);
+                            }
+                        }
+                        let _ = completion.reply.try_send(result);
+                    }
                     let job = match command {
+                        Command::BrowserCompletionWake => continue,
                         Command::RetirePlanner { retirement, reply } => {
                             let target = retirement.target();
                             let result = controller.management().retire_planner(retirement);
@@ -583,7 +660,42 @@ impl NativeEffects {
                 }
             })
             .map_err(|_| ErrorCode::Unavailable)?;
-        Ok(Self { send, state })
+        Ok(Self {
+            send,
+            state,
+            browser_completion,
+            browser_blocked,
+        })
+    }
+    /// A resource-exclusion snapshot only, closed through initialization/exit.
+    /// It never grants metadata or accepted page access.
+    pub fn browser_work_blocked(&self) -> bool {
+        self.browser_blocked.load(Ordering::SeqCst) & 1 != 0
+    }
+    /// Same atomic word as blocked; unavailable/overflow never grants metadata.
+    pub fn browser_work_generation(&self) -> Result<u64, ErrorCode> {
+        let value = self.browser_blocked.load(Ordering::SeqCst);
+        if value & 1 != 0 {
+            Err(ErrorCode::Unavailable)
+        } else {
+            Ok(value >> 1)
+        }
+    }
+    /// Only an actual authenticated pipe owner can supply this non-clonable
+    /// proof. Dropping the receiver cannot withdraw or duplicate the SQL job.
+    pub fn settle_browser_read(
+        &self,
+        proof: crate::browser_receive::Settlement,
+    ) -> Result<Receiver<Result<avesra_core::browser_jobs::Retirement, ErrorCode>>, ErrorCode> {
+        let (reply, receive) = mpsc::sync_channel(1);
+        self.browser_completion
+            .try_send(BrowserCompletion { proof, reply })
+            .map_err(|_| ErrorCode::Unavailable)?;
+        // Full means the worker already has a command that will drain this
+        // mailbox. Disconnected means the owned receiver will close; neither
+        // case makes an already-admitted retirement safe to reissue blindly.
+        let _ = self.send.try_send(Command::BrowserCompletionWake);
+        Ok(receive)
     }
     /// Accepted work retains its frozen capture provenance. Only current action
     /// authority is observed here; input/output listening controls are independent.
