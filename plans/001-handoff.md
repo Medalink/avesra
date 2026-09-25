@@ -126,3 +126,7 @@ The last recorded Spark2 environment is historical session evidence, not refresh
 The recorded running controller was the older `50dd7e2` control-v1 enrollment preflight service, with voice unavailable/actions disabled. Current source uses control-v2 and was not deployed. Speaker/ASR candidates remained unqualified; TTS had been stopped. Existing Local Studio/Comfy/Qwen work and a dirty Local Studio `active-model.ts` must be preserved. Recheck actual service/git state before any future authorized deployment; do not infer that main publication updated Spark.
 
 See `plans/spark2-model-setup.md`, `docs/evidence/m0-preflight.md`, and the execution review for prior setup evidence. Do not reproduce credentials or replace unrelated services.
+
+## Publication alert
+
+GitHub reported 13 dependency alerts (8 high, 5 moderate) during the handoff push. These were not triaged or fixed in this stopped session. Review the repository Dependabot alerts before claiming release readiness; this notice is not an independent vulnerability assessment.
