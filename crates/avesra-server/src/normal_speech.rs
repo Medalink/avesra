@@ -190,37 +190,56 @@ async fn produce<F, Fut>(
     lane: Arc<AudioClient>,
     request: &speech::Request,
     tx: mpsc::Sender<Piece>,
-    authorize: F,
+    mut authorize: F,
 ) -> Result<(), ErrorCode>
 where
-    F: FnOnce() -> Fut,
+    F: FnMut() -> Fut,
     Fut: std::future::Future<Output = Result<(), ErrorCode>>,
 {
-    // Private request/session/epoch stays independent from the paired context.
-    // synthesize/next validate private deployment, exact voice and every reply.
-    let mut source = lane
-        .synthesize(
-            1,
-            request.request,
-            &request.voice,
-            request.source.response.text(),
-            authorize,
-        )
-        .await?;
-    loop {
-        let piece = match source.next().await? {
-            SpeechEvent::Audio { samples, .. } => Piece::Audio(samples),
-            SpeechEvent::End {
-                samples, outcome, ..
-            } => {
-                tx.send(Piece::End { samples, outcome })
-                    .await
-                    .map_err(|_| ErrorCode::Stale)?;
-                return Ok(());
+    let segments = speech::text_segments(request.source.response.text())?;
+    let mut total = 0usize;
+    for (index, text) in segments.iter().enumerate() {
+        // Fresh private identity per actual job; the single public source and
+        // output reservation remain owned by start/stream across every segment.
+        let mut source = lane
+            .synthesize(1, Uuid::new_v4(), &request.voice, text, &mut authorize)
+            .await?;
+        let mut segment_samples = 0usize;
+        loop {
+            match source.next().await? {
+                SpeechEvent::Audio { samples, .. } => {
+                    total += samples.len();
+                    segment_samples += samples.len();
+                    if total > speech::MAX_SAMPLES as usize {
+                        return Err(ErrorCode::TooLarge);
+                    }
+                    tx.send(Piece::Audio(samples))
+                        .await
+                        .map_err(|_| ErrorCode::Stale)?;
+                }
+                SpeechEvent::End {
+                    samples, outcome, ..
+                } => {
+                    if samples != segment_samples {
+                        return Err(ErrorCode::Malformed);
+                    }
+                    if outcome == Completion::Truncated || index + 1 == segments.len() {
+                        tx.send(Piece::End {
+                            samples: total,
+                            outcome,
+                        })
+                        .await
+                        .map_err(|_| ErrorCode::Stale)?;
+                        return Ok(());
+                    }
+                    // Only actual Complete permits a successor. Intermediate
+                    // terminals never finalize the public utterance/renderer.
+                    break;
+                }
             }
-        };
-        tx.send(piece).await.map_err(|_| ErrorCode::Stale)?;
+        }
     }
+    Err(ErrorCode::Malformed)
 }
 async fn stream(
     socket: &mut WebSocket,

@@ -2,10 +2,59 @@
 use crate::{ErrorCode, browser::MAX_SAFE_COUNTER, planner, voice::VoiceIdentity};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-pub const VERSION: u16 = 1;
-pub const MAX_TEXT_BYTES: usize = 512;
+pub const VERSION: u16 = 2;
+pub const MAX_TEXT_BYTES: usize = 8192;
+pub const MAX_SEGMENT_BYTES: usize = 512;
+pub const MAX_SEGMENTS: usize = 64;
 pub const FRAME_SAMPLES: u64 = 480;
 pub const MAX_SAMPLES: u64 = 720_000;
+/// Exact borrowed partition of accepted text, never a summary or replay handle.
+/// Validate the entire partition before starting any private synthesis job.
+pub fn text_segments(mut text: &str) -> Result<Vec<&str>, ErrorCode> {
+    if !planner::valid_text(text) || text.len() > MAX_TEXT_BYTES {
+        return Err(ErrorCode::Malformed);
+    }
+    let mut segments = Vec::new();
+    while !text.is_empty() {
+        if segments.len() == MAX_SEGMENTS || text.trim().is_empty() {
+            return Err(ErrorCode::Unsupported);
+        }
+        let end = if text.len() <= MAX_SEGMENT_BYTES {
+            text.len()
+        } else {
+            let mut whitespace = None;
+            let mut sentence = None;
+            for (index, ch) in text
+                .char_indices()
+                .take_while(|(i, _)| *i <= MAX_SEGMENT_BYTES)
+            {
+                if !ch.is_whitespace() {
+                    continue;
+                }
+                let after = index + ch.len_utf8();
+                let end = if after <= MAX_SEGMENT_BYTES {
+                    after
+                } else {
+                    index
+                };
+                whitespace = Some(end);
+                if end >= MAX_SEGMENT_BYTES / 2
+                    && text[..index].ends_with(['.', '!', '?', '\u{3002}', '\u{ff01}', '\u{ff1f}'])
+                {
+                    sentence = Some(end);
+                }
+            }
+            sentence.or(whitespace).ok_or(ErrorCode::Unsupported)?
+        };
+        let (segment, remaining) = text.split_at(end);
+        if segment.trim().is_empty() {
+            return Err(ErrorCode::Unsupported);
+        }
+        segments.push(segment);
+        text = remaining;
+    }
+    Ok(segments)
+}
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Source {
@@ -19,9 +68,7 @@ impl Source {
         if self.reply_revision.is_nil() || !planner::valid_text(self.response.text()) {
             return Err(ErrorCode::Malformed);
         }
-        if self.response.text().len() > MAX_TEXT_BYTES {
-            return Err(ErrorCode::Unsupported);
-        }
+        text_segments(self.response.text())?;
         Ok(())
     }
 }
