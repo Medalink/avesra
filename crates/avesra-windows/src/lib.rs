@@ -1,5 +1,6 @@
 use avesra_contracts::ErrorCode;
 use serde::Serialize;
+pub mod credentials;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AudioDevice {

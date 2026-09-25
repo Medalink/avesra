@@ -1,4 +1,4 @@
-use avesra_contracts::{Action, ErrorCode, Operation};
+use avesra_contracts::{Action, ActionPayload, ErrorCode, Operation};
 use uuid::Uuid;
 
 pub struct Grant {
@@ -14,7 +14,9 @@ pub struct Approval {
     pub task_id: Uuid,
     pub step_id: Uuid,
     pub target_id: Uuid,
-    pub operation: Operation,
+    pub action_revision: Uuid,
+    pub intent_revision: Uuid,
+    pub payload: ActionPayload,
     pub expires_at_ms: u64,
     pub authenticated_local: bool,
 }
@@ -23,6 +25,10 @@ pub struct Approval {
 pub struct PolicyContext<'a> {
     pub actor_id: Uuid,
     pub accepted_task_id: Uuid,
+    pub intent_revision: Uuid,
+    /// Exact arguments resolved from the accepted owner request, never copied
+    /// into authority from an untrusted model proposal.
+    pub permitted_payloads: &'a [ActionPayload],
     pub now_ms: u64,
     pub grant: &'a Grant,
     pub approval: Option<&'a Approval>,
@@ -31,6 +37,7 @@ pub struct PolicyContext<'a> {
 }
 impl PolicyContext<'_> {
     pub fn authorize(&self, action: &Action) -> Result<(), ErrorCode> {
+        action.validate(self.now_ms)?;
         if !self.session_active || self.actor_id.is_nil() || self.accepted_task_id.is_nil() {
             return Err(ErrorCode::Unauthenticated);
         }
@@ -47,14 +54,17 @@ impl PolicyContext<'_> {
             || self.grant.id != action.grant_id
             || self.grant.actor_id != action.actor_id
             || self.grant.target_id != action.target_id
-            || !self.grant.operations.contains(&action.operation)
+            || self.intent_revision.is_nil()
+            || self.intent_revision != action.intent_revision
+            || !self.permitted_payloads.contains(&action.payload)
+            || !self.grant.operations.contains(&action.payload.operation())
         {
             return Err(ErrorCode::Denied);
         }
-        if action.operation == Operation::SubmitPrompt && !self.explicit_submit {
+        if action.payload.operation() == Operation::SubmitPrompt && !self.explicit_submit {
             return Err(ErrorCode::Denied);
         }
-        if action.operation.needs_approval() {
+        if action.payload.operation().needs_approval() {
             let approval = self.approval.ok_or(ErrorCode::ApprovalRequired)?;
             if !approval.authenticated_local
                 || action.approval_id != Some(approval.id)
@@ -62,7 +72,10 @@ impl PolicyContext<'_> {
                 || approval.task_id != action.task_id
                 || approval.step_id != action.step_id
                 || approval.target_id != action.target_id
-                || approval.operation != action.operation
+                || approval.id.is_nil()
+                || approval.action_revision != action.revision
+                || approval.intent_revision != action.intent_revision
+                || approval.payload != action.payload
                 || self.now_ms >= approval.expires_at_ms
             {
                 return Err(ErrorCode::ApprovalRequired);

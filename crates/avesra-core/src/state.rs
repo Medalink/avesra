@@ -63,6 +63,7 @@ impl Settings {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct LocalState {
+    pub revision: u64,
     pub settings: Settings,
     pub capture_epoch: u64,
     pub action_epoch: u64,
@@ -91,6 +92,7 @@ pub enum LocalControl {
 impl LocalState {
     pub fn new(settings: Settings) -> Self {
         let mut value = Self {
+            revision: 1,
             settings,
             capture_epoch: 1,
             action_epoch: 1,
@@ -152,6 +154,7 @@ impl LocalState {
         self.refresh();
     }
     pub fn refresh(&mut self) {
+        self.revision = self.revision.saturating_add(1);
         let (status, reason) = if self.settings.paused {
             ("paused", "Listening and new actions are paused.")
         } else if self.settings.deafened {

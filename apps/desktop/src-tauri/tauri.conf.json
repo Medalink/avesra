@@ -1,7 +1,46 @@
 {
- "$schema":"https://schema.tauri.app/config/2",
- "productName":"Avesra","version":"0.1.0","identifier":"com.avesra.desktop",
- "build":{"beforeDevCommand":"pnpm dev","devUrl":"http://127.0.0.1:1420","beforeBuildCommand":"pnpm build","frontendDist":"../dist"},
- "app":{"windows":[{"label":"overlay","title":"Avesra","url":"index.html","width":440,"height":124,"resizable":false,"decorations":false,"transparent":true,"shadow":false,"alwaysOnTop":true,"skipTaskbar":true,"visible":true},{"label":"settings","title":"Avesra settings","url":"index.html?window=settings","width":880,"height":640,"minWidth":880,"minHeight":640,"decorations":false,"visible":true}],"security":{"csp":"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src ipc: http://ipc.localhost","capabilities":["desktop"]}},
- "bundle":{"active":false}
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Avesra",
+  "version": "0.1.0",
+  "identifier": "com.avesra.desktop",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "overlay",
+        "title": "Avesra",
+        "url": "index.html",
+        "width": 440,
+        "height": 124,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": true
+      },
+      {
+        "label": "settings",
+        "title": "Avesra settings",
+        "url": "index.html?window=settings",
+        "width": 880,
+        "height": 640,
+        "minWidth": 880,
+        "minHeight": 640,
+        "decorations": false,
+        "visible": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src ipc: http://ipc.localhost",
+      "capabilities": ["desktop"]
+    }
+  },
+  "bundle": { "active": false }
 }

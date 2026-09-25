@@ -1,1 +1,12 @@
-{"manifest_version":3,"name":"Avesra companion","version":"0.1.0","description":"Connect a selected Chrome or Brave profile to the local Avesra companion.","permissions":["nativeMessaging"],"background":{"service_worker":"background.js","type":"module"},"action":{"default_popup":"popup.html"},"content_security_policy":{"extension_pages":"script-src 'self'; object-src 'none'"}}
+{
+  "manifest_version": 3,
+  "name": "Avesra companion",
+  "version": "0.1.0",
+  "description": "Connect a selected Chrome or Brave profile to the local Avesra companion.",
+  "permissions": ["nativeMessaging"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "action": { "default_popup": "popup.html" },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'"
+  }
+}

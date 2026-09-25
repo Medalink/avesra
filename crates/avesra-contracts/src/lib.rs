@@ -10,6 +10,29 @@ pub const MAX_AUDIO_QUEUE: usize = 64;
 pub const MAX_IMAGE_BYTES: usize = 4 * 1024 * 1024;
 pub const MEDIA_TTL_MS: u64 = 30_000;
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ServerStatus {
+    pub version: u16,
+    pub device_id: Uuid,
+    pub session_id: Uuid,
+    pub sequence: u64,
+    pub request_id: Uuid,
+    pub request_sequence: u64,
+    pub capture_epoch: u64,
+    pub action_epoch: u64,
+    pub status: ConnectionStatus,
+    pub muted: bool,
+    pub deafened: bool,
+    pub paused: bool,
+}
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectionStatus {
+    ConnectedOwnerSetupRequired,
+    RejectedOwnerSetupRequired,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, thiserror::Error)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCode {
@@ -124,7 +147,115 @@ impl Operation {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Effect arguments are bounded data, never executable shell or JavaScript.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ActionPayload {
+    LaunchApp {
+        app_id: Uuid,
+    },
+    SetVolume {
+        percent: u8,
+    },
+    Navigate {
+        url: String,
+    },
+    ReadPage {
+        origin: String,
+        message_limit: u16,
+    },
+    FillPrompt {
+        app_id: Uuid,
+        project_id: Uuid,
+        text: String,
+    },
+    SubmitPrompt {
+        app_id: Uuid,
+        project_id: Uuid,
+        expected_text: String,
+    },
+    Diagnostic {
+        catalog_entry: Uuid,
+    },
+    ConnectVpn {
+        profile_id: Uuid,
+    },
+    /// References an immutable, owner-visible proposal in the ledger. Its full
+    /// concrete payload must match this digest before any executor may use it.
+    ApprovedProposal {
+        operation: Operation,
+        proposal_id: Uuid,
+        revision: Uuid,
+        sha256: [u8; 32],
+    },
+}
+impl ActionPayload {
+    pub fn operation(&self) -> Operation {
+        match self {
+            Self::LaunchApp { .. } => Operation::LaunchApp,
+            Self::SetVolume { .. } => Operation::SetVolume,
+            Self::Navigate { .. } => Operation::Navigate,
+            Self::ReadPage { .. } => Operation::ReadPage,
+            Self::FillPrompt { .. } => Operation::FillPrompt,
+            Self::SubmitPrompt { .. } => Operation::SubmitPrompt,
+            Self::Diagnostic { .. } => Operation::Diagnostic,
+            Self::ConnectVpn { .. } => Operation::ConnectVpn,
+            Self::ApprovedProposal { operation, .. } => *operation,
+        }
+    }
+    pub fn validate(&self) -> Result<(), ErrorCode> {
+        let valid = match self {
+            Self::LaunchApp { app_id } => !app_id.is_nil(),
+            Self::SetVolume { percent } => *percent <= 100,
+            Self::Navigate { url } => url.starts_with("https://") && url.len() <= 2048,
+            Self::ReadPage {
+                origin,
+                message_limit,
+            } => {
+                origin.starts_with("https://")
+                    && origin.len() <= 2048
+                    && (1..=100).contains(message_limit)
+            }
+            Self::FillPrompt {
+                app_id,
+                project_id,
+                text,
+            } => {
+                !app_id.is_nil() && !project_id.is_nil() && !text.is_empty() && text.len() <= 16_384
+            }
+            Self::SubmitPrompt {
+                app_id,
+                project_id,
+                expected_text,
+            } => {
+                !app_id.is_nil()
+                    && !project_id.is_nil()
+                    && !expected_text.is_empty()
+                    && expected_text.len() <= 16_384
+            }
+            Self::Diagnostic { catalog_entry } => !catalog_entry.is_nil(),
+            Self::ConnectVpn { profile_id } => !profile_id.is_nil(),
+            Self::ApprovedProposal {
+                operation,
+                proposal_id,
+                revision,
+                sha256,
+            } => {
+                operation.needs_approval()
+                    && !proposal_id.is_nil()
+                    && !revision.is_nil()
+                    && sha256.iter().any(|b| *b != 0)
+            }
+        };
+        if valid {
+            Ok(())
+        } else {
+            Err(ErrorCode::Malformed)
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Action {
     pub task_id: Uuid,
@@ -132,10 +263,39 @@ pub struct Action {
     pub actor_id: Uuid,
     pub target_id: Uuid,
     pub grant_id: Uuid,
-    pub operation: Operation,
+    pub revision: Uuid,
+    pub intent_revision: Uuid,
+    pub payload: ActionPayload,
     pub approval_id: Option<Uuid>,
     pub issued_at_ms: u64,
     pub expires_at_ms: u64,
+}
+
+impl Action {
+    pub fn validate(&self, now_ms: u64) -> Result<(), ErrorCode> {
+        if [
+            self.task_id,
+            self.step_id,
+            self.actor_id,
+            self.target_id,
+            self.grant_id,
+            self.revision,
+            self.intent_revision,
+        ]
+        .iter()
+        .any(Uuid::is_nil)
+            || self.approval_id.is_some_and(|id| id.is_nil())
+        {
+            return Err(ErrorCode::Malformed);
+        }
+        if self.issued_at_ms > now_ms
+            || now_ms >= self.expires_at_ms
+            || self.expires_at_ms.saturating_sub(self.issued_at_ms) > MAX_ACTION_AGE_MS
+        {
+            return Err(ErrorCode::Expired);
+        }
+        self.payload.validate()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -214,24 +374,7 @@ impl Envelope {
             return Err(ErrorCode::Stale);
         }
         if let ControlMessage::Action(action) = &self.message {
-            if [
-                action.task_id,
-                action.step_id,
-                action.actor_id,
-                action.target_id,
-                action.grant_id,
-            ]
-            .iter()
-            .any(Uuid::is_nil)
-            {
-                return Err(ErrorCode::Malformed);
-            }
-            if action.issued_at_ms > now_ms
-                || now_ms >= action.expires_at_ms
-                || action.expires_at_ms.saturating_sub(action.issued_at_ms) > MAX_ACTION_AGE_MS
-            {
-                return Err(ErrorCode::Expired);
-            }
+            action.validate(now_ms)?;
         }
         Ok(())
     }

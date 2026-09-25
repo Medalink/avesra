@@ -24,3 +24,13 @@ Trace records contain opaque correlation IDs, stage, host, deployment/config rev
 | MV3 native bridge | Explicit user connection; rejects web-page-originated requests |
 
 No automated contract tests are created under the owner's instruction. This inventory documents enforcement responsibilities and implementation boundaries.
+
+## Pairing and control transport implementation
+
+The server's opt-in `init <directory> <dns-name>` creates a private installation directory, a self-signed TLS certificate for the selected DNS name, and the authentication database. `pair-code <directory>` writes a one-time random 256-bit pairing code to an owner-only local file, valid for five minutes and at most five incorrect attempts. Codes are read by the owner over the authenticated server administration channel; they are not advertised by a LAN endpoint. The certificate SHA-256 fingerprint is public and must be checked on the local PC setup screen before pairing. No TLS verification bypass is permitted.
+
+`serve <directory>` binds TLS port 9474. `/pair` exchanges a valid one-time code for a fresh device UUID and bearer credential. The durable server database stores only the credential hash. `/control` requires that credential in the Authorization header before WebSocket upgrade, and a new server-selected session UUID on each connection. The first message must be Hello; its current local epochs become that connection's baseline. Later sequence/epoch checks apply. Local mode changes may only advance epochs, never reduce them. Action messages are rejected until owner enrollment and execution are implemented. Pairing alone never creates owner privileges or enables microphone capture.
+
+Revocation is available through the authenticated local server CLI, takes effect on each control message, and closes idle sockets on the next bounded heartbeat interval. Socket frame/message caps are 65,536 bytes, handshake deadline ten seconds, and idle deadline thirty seconds. A new connection cannot resume or replay old queued actions. Authentication/pairing errors contain no supplied secret, and no request bodies enter logs.
+
+Typed action arguments and action/accepted-intent revisions are immutable authorization inputs. Exact argument membership in a controller-derived accepted intent is required. An approval additionally binds the full typed payload and action revision; a changed prompt, amount, proposal digest, target or configuration cannot reuse it. Consequential operations reference an immutable owner-visible proposal plus revision and SHA-256 digest; an executor must resolve and verify that proposal before using it. These primitives remain disconnected from actual desktop effects.

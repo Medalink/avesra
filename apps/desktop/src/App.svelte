@@ -1,84 +1,137 @@
 <script lang="ts">
- import {onMount} from 'svelte';
- import {listen} from '@tauri-apps/api/event';
- import {getCurrentWindow,Window,LogicalSize} from '@tauri-apps/api/window';
- import Icon from './Icon.svelte';
- import Signal, {type SignalFrame} from './Signal.svelte';
- let signal= $state<SignalFrame|null>(null);
- import {command,native,type Runtime,type AudioDevice,type Settings} from './runtime';
- let runtime= $state<Runtime|null>(null);let devices=$state<AudioDevice[]>([]);let error=$state('');let notice=$state('');let saving=$state(false);let section=$state('audio');let expanded=$state(false);let tab=$state('Memory');
- const settingsWindow=new URLSearchParams(location.search).get('window')==='settings';
- const sections=[['audio','Audio & Voice','Devices, how Avesra listens, shortcuts, its voice, and the small chimes it uses.'],['models','Models & Drivers','What runs each part of Avesra and where. Everything is local unless marked Cloud — Jev.'],['profiles','Profiles & Machines','Where each lane runs, resource budgets, and the machines Avesra is paired with.'],['people','People & Voice ID','Who Avesra recognizes and what each person may ask it to do.'],['awareness','Observation & Actions','What Avesra may see, what it has learned, and what always needs your OK.'],['memory','Memory & Diagnostics','What Avesra remembers, your request history, and how its machines and models are doing.']];
- const lanes=[['Speech recognition','Transcribes speech into words.','Streaming ASR service is not configured.'],['Voice identity','Matches enrolled voices before accepting a request.','Owner enrollment and speaker service are required.'],['Conversation & planning','Plans accepted requests and responds.','Pair Spark and probe a reasoning deployment.'],['Screen understanding','Interprets selected, fresh screen observations.','Pair Spark and probe a vision deployment.'],['Voice synthesis','Speaks with your chosen generated voice.','Select a voice after the speech service is ready.'],['Decision evaluation','Chooses between typed, permitted options.','Local decision driver is not connected.'],['Memory processing','Proposes sourced facts and routines.','Background memory driver is not connected.']];
- const meta=$derived(sections.find(s=>s[0]===section)!);
- const s=$derived(runtime?.settings);
- const status=$derived(runtime?.status??'disconnected');
- const statusLabel=$derived(({muted:'Muted',deafened:'Deafened',paused:'Paused',disconnected:'Disconnected',unavailable:'Setup needed',working:'Working'} as Record<string,string>)[status]??'');
- async function control(value:string){error='';try{runtime=await command<Runtime>('local_control',{control:value});}catch(e){error=String(e);}}
- async function update(patch:Partial<Settings>){if(!s||saving)return;saving=true;error='';notice='';try{runtime=await command<Runtime>('save_settings',{settings:{...s,...patch}});notice='Preferences saved on this PC.';}catch(e){error=String(e);}finally{saving=false;}}
- async function hide(){if(native)await getCurrentWindow().hide();}
- async function showSettings(){if(native){const w=await Window.getByLabel('settings');await w?.show();await w?.setFocus();}}
- async function expand(){expanded=!expanded;if(native)await getCurrentWindow().setSize(new LogicalSize(440,expanded?370:124));}
- async function drag(event:PointerEvent){if(native&&event.button===0)await getCurrentWindow().startDragging();}
- onMount(()=>{let dispose=()=>{};let gone=false;(async()=>{try{if(!native){error='Browser preview — native connection unavailable.';return;}runtime=await command<Runtime>('runtime_snapshot');const stop=await listen<Runtime>('runtime-state',e=>{runtime=e.payload;});if(gone){stop();return;}dispose=stop;devices=await command<AudioDevice[]>('audio_devices');}catch(e){error=String(e);}})();return()=>{gone=true;dispose();};});
+  import { onMount } from "svelte";
+  import { listen } from "@tauri-apps/api/event";
+  import {
+    getCurrentWindow,
+    Window,
+    LogicalSize,
+  } from "@tauri-apps/api/window";
+  import SettingsView from "./SettingsView.svelte";
+  import Overlay from "./Overlay.svelte";
+  import { type SignalFrame } from "./Signal.svelte";
+  let signal = $state<SignalFrame | null>(null);
+  import {
+    command,
+    native,
+    type Runtime,
+    type AudioDevice,
+    type Settings,
+  } from "./runtime";
+  let runtime = $state<Runtime | null>(null);
+  let devices = $state<AudioDevice[]>([]);
+  let error = $state("");
+  let notice = $state("");
+  let saving = $state(false);
+
+  let expanded = $state(false);
+
+  const settingsWindow =
+    new URLSearchParams(location.search).get("window") === "settings";
+  const s = $derived(runtime?.settings);
+  async function control(value: string) {
+    error = "";
+    try {
+      acceptSnapshot(
+        await command<Runtime>("local_control", { control: value }),
+      );
+    } catch (e) {
+      error = String(e);
+    }
+  }
+  async function update(patch: Partial<Settings>) {
+    if (!s || saving) return;
+    saving = true;
+    error = "";
+    notice = "";
+    try {
+      acceptSnapshot(
+        await command<Runtime>("save_settings", {
+          settings: { ...s, ...patch },
+        }),
+      );
+      notice = "Preferences saved on this PC.";
+    } catch (e) {
+      error = String(e);
+    } finally {
+      saving = false;
+    }
+  }
+  async function hide() {
+    if (native) await getCurrentWindow().hide();
+  }
+  async function showSettings() {
+    if (native) {
+      const w = await Window.getByLabel("settings");
+      await w?.show();
+      await w?.setFocus();
+    }
+  }
+  async function expand() {
+    expanded = !expanded;
+    if (native)
+      await getCurrentWindow().setSize(
+        new LogicalSize(440, expanded ? 370 : 124),
+      );
+  }
+  async function drag(event: PointerEvent) {
+    if (native && event.button === 0) await getCurrentWindow().startDragging();
+  }
+  function acceptSnapshot(next: Runtime) {
+    if (!runtime || next.revision >= runtime.revision) runtime = next;
+  }
+  onMount(() => {
+    let dispose = () => {};
+    let gone = false;
+    (async () => {
+      try {
+        if (!native) {
+          error = "Browser preview — native connection unavailable.";
+          return;
+        }
+        const stop = await listen<Runtime>("runtime-state", (e) =>
+          acceptSnapshot(e.payload),
+        );
+        const stopErrors = await listen<string>("runtime-error", (e) => {
+          error = e.payload;
+        });
+        if (gone) {
+          stop();
+          stopErrors();
+          return;
+        }
+        dispose = () => {
+          stop();
+          stopErrors();
+        };
+        acceptSnapshot(await command<Runtime>("runtime_snapshot"));
+        devices = await command<AudioDevice[]>("audio_devices");
+      } catch (e) {
+        error = String(e);
+      }
+    })();
+    return () => {
+      gone = true;
+      dispose();
+    };
+  });
 </script>
 
-{#if settingsWindow}
-<div class="flex h-full flex-col overflow-hidden bg-[#1f1f23] ring-1 ring-white/10">
- <header class="flex h-11 shrink-0 items-center gap-2.5 border-b border-white/[0.06] pr-2 pl-4">
-  <span class="text-av-400"><Icon name="audio"/></span><button class="flex-1 self-stretch text-left text-[13px] font-medium" onpointerdown={drag} aria-label="Drag settings window">Avesra Settings</button>
-  <span class="av-chip bg-amber-400/10 text-amber-200 ring-amber-400/25">Spark · not paired</span><span class="av-chip bg-white/[0.04] text-zinc-300 ring-white/10">Profile · {s?.profile==='gaming'?'Gaming':'Single Spark'}</span>
-  <button class="av-iconbtn size-7" onclick={hide} aria-label="Close settings"><Icon name="close" size={14}/></button>
- </header>
- <div class="flex min-h-0 flex-1">
-  <nav class="flex w-[200px] shrink-0 flex-col gap-0.5 border-r border-white/[0.06] bg-black/20 p-2.5" aria-label="Settings sections">
-   {#each sections as item}<button class="av-nav-btn" aria-current={section===item[0]?'page':undefined} onclick={()=>{section=item[0];notice='';}}><span class="grid size-5 place-items-center"><Icon name={item[0]}/></span><span class="flex-1">{item[1]}</span></button>{/each}
-   <span class="flex-1"></span><div class="flex flex-col gap-0.5 px-2.5 pb-1"><span class="caption text-zinc-400">Avesra 0.1 · development</span><span class="text-[10.5px] leading-[14px] text-zinc-400">Setup is incomplete.</span></div>
-  </nav>
-  <main class="av-scroll min-w-0 flex-1 overflow-y-auto">
-   <div class="flex flex-col gap-6 px-6 pt-5 pb-8">
-    <div class="flex flex-col gap-1"><h1 class="text-[17px] font-semibold tracking-[-0.01em] text-zinc-50">{meta[1]}</h1><p class="text-[12.5px] leading-[18px] text-zinc-400">{meta[2]}</p></div>
-    {#if error}<div class="border border-red-400/30 bg-red-500/5 p-3 text-[12px] text-red-300" role="alert">{error}</div>{/if}
-    {#if notice}<div class="text-[11.5px] text-zinc-400" role="status">{notice}</div>{/if}
-    {#if section==='audio'}
-     <section class="section"><span class="av-kicker">Devices</span><div class="grid grid-cols-2 gap-4">
-      <div class="flex flex-col gap-1.5"><label class="av-label" for="microphone">Microphone</label><select id="microphone" class="av-input" value={s?.microphone??''} disabled={!s||saving} onchange={e=>update({microphone:e.currentTarget.value||null})}><option value="">Select microphone</option>{#each devices.filter(d=>d.direction==='input') as device}<option value={device.name}>{device.name}{device.is_default?' · default':''}</option>{/each}</select><div class="flex items-center gap-2"><div class="flex flex-1 gap-0.5" aria-label="Input level unavailable">{#each Array(24) as _}<span class="h-2 flex-1 bg-white/10"></span>{/each}</div><span class="caption text-zinc-500">off</span></div></div>
-      <div class="flex flex-col gap-1.5"><label class="av-label" for="speaker">Speakers</label><select id="speaker" class="av-input" value={s?.speaker??''} disabled={!s||saving} onchange={e=>update({speaker:e.currentTarget.value||null})}><option value="">Select output</option>{#each devices.filter(d=>d.direction==='output') as device}<option value={device.name}>{device.name}{device.is_default?' · default':''}</option>{/each}</select><span class="av-hint">Playback is unavailable until voice setup.</span></div>
-     </div></section>
-     <section class="section"><span class="av-kicker">How Avesra listens</span><div class="grid grid-cols-3 gap-2">{#each [['Continuous','No wake word after enrollment'],['Wake phrase','Optional listening mode'],['Push to talk','Hold a keyboard shortcut']] as mode,i}<div class="flex flex-col gap-1 p-3 ring-1 ring-inset {i===0?'bg-white/[0.06] ring-av-500 shadow-[inset_0_-2px_0_var(--color-av-500)]':'bg-white/[0.02] ring-white/10'}"><span class="text-[12.5px] font-medium">{mode[0]}</span><span class="av-hint">{mode[1]}</span></div>{/each}</div><div class="warning">Listening is off. Pair Spark, prepare the speech services and enroll your voice to begin.</div><div class="row"><div><h2>Microphone mute</h2><p class="av-hint">Local control stays available when Spark is disconnected.</p></div><button class="av-btn av-btn-secondary" disabled={!runtime} onclick={()=>control(s?.explicit_mute?'unmute':'mute')}>{s?.explicit_mute?'Unmute':'Mute'}</button></div></section>
-     <section class="section"><span class="av-kicker">Avesra's voice</span><div class="av-card p-3"><div class="row"><div><h2>No voice selected</h2><p class="av-hint mt-1">Create and preview a voice when synthesis is ready.</p></div><span class="av-chip text-amber-200 ring-amber-400/30">Unavailable</span></div></div><div class="grid grid-cols-2 gap-4"><label class="flex flex-col gap-2"><span class="av-label">Pace <span class="caption text-zinc-400">{s?.speech_rate??100}%</span></span><input aria-label="Speech pace" type="range" min="50" max="200" value={s?.speech_rate??100} disabled={!s||saving} onchange={e=>update({speech_rate:Number(e.currentTarget.value)})}/></label><label class="flex flex-col gap-2"><span class="av-label">Voice volume <span class="caption text-zinc-400">{s?.speech_volume??80}%</span></span><input aria-label="Voice volume" type="range" min="0" max="100" value={s?.speech_volume??80} disabled={!s||saving} onchange={e=>update({speech_volume:Number(e.currentTarget.value)})}/></label></div></section>
-     <section class="section"><span class="av-kicker">Learning & action chimes</span>{#each [['learning_chime','Learning chime','After a useful memory is committed.'],['action_chime','Action chime','After an action outcome is verified.']] as item}<div class="row"><div><h2>{item[1]}</h2><p class="av-hint">{item[2]}</p></div><button role="switch" aria-label={item[1]} aria-checked={!!s?.[item[0] as 'learning_chime'|'action_chime']} class="av-switch" disabled={!s||saving} onclick={()=>update({[item[0]]:!s?.[item[0] as 'learning_chime'|'action_chime']})}><span class="av-knob" style:transform={s?.[item[0] as 'learning_chime'|'action_chime']?'translateX(19px)':'translateX(3px)'}></span></button></div>{/each}<p class="av-hint">Preferences are saved; chime playback is not yet available.</p></section>
-    {:else if section==='models'}
-     <div class="warning">No inference deployment is paired. Model downloads alone do not establish readiness.</div><div class="flex flex-col gap-2">{#each lanes as lane}<div class="av-card p-3"><div class="flex items-start gap-3"><div class="flex-1"><h2>{lane[0]}</h2><p class="av-hint mt-0.5">{lane[1]}</p></div><span class="av-chip bg-amber-400/10 text-amber-200 ring-amber-400/25">Unavailable</span></div><div class="mt-3 grid grid-cols-3 gap-3 text-[12px]"><div><span class="av-hint">Driver</span><p>Not connected</p></div><div><span class="av-hint">Model</span><p>Not configured</p></div><div><span class="av-hint">Machine</span><p>Single Spark</p></div></div><p class="mt-2 text-[11px] text-zinc-500">{lane[2]}</p></div>{/each}</div>
-    {:else if section==='profiles'}
-     <section class="section"><span class="av-kicker">Profiles</span><div class="grid grid-cols-3 gap-2">{#each [['single-spark','Single Spark','All inference on Spark.'],['accelerated','Accelerated','Qualified client lanes.'],['gaming','Gaming','No client inference.']] as profile}<button class="flex flex-col gap-2 p-3 text-left ring-1 ring-inset disabled:opacity-45 {s?.profile===profile[0]?'bg-white/[0.06] ring-av-500 shadow-[inset_0_-2px_0_var(--color-av-500)]':'bg-white/[0.02] ring-white/10'}" disabled={!s||saving||profile[0]==='accelerated'} aria-pressed={s?.profile===profile[0]} onclick={()=>update({profile:profile[0] as Settings['profile']})}><strong class="text-[12.5px] font-medium">{profile[1]}</strong><span class="av-hint">{profile[2]}</span></button>{/each}</div><p class="av-hint">Accelerated is unavailable until client capability and performance are verified.</p></section>
-     <section class="section"><span class="av-kicker">Machines</span><div class="av-card p-4"><div class="row"><div><h2>Single Spark</h2><p class="av-hint mt-1">Encrypted pairing has not been set up.</p></div><span class="av-chip text-amber-200 ring-amber-400/30">Not paired</span></div><p class="av-hint mt-3">Pairing will require a one-time code and server fingerprint verification. No connection is active.</p></div><div class="av-card p-4"><div class="row"><div><h2>This PC</h2><p class="av-hint mt-1">Audio, local controls and desktop tools</p></div><span class="av-chip text-zinc-300 ring-white/15">Local</span></div><p class="av-hint mt-3">Client inference is disabled.</p></div></section>
-     <section class="section"><span class="av-kicker">Overlay</span><div class="row"><div><h2>Always on top</h2><p class="av-hint">Keep the compact overlay above other windows.</p></div><button role="switch" aria-label="Always on top" aria-checked={!!s?.always_on_top} class="av-switch" disabled={!s||saving} onclick={()=>update({always_on_top:!s?.always_on_top})}><span class="av-knob" style:transform={s?.always_on_top?'translateX(19px)':'translateX(3px)'}></span></button></div></section>
-    {:else if section==='people'}
-     <section class="section"><span class="av-kicker">Owner</span><div class="empty"><div class="row"><h2>No owner enrolled</h2><span class="av-chip text-amber-200 ring-amber-400/30">Setup required</span></div><p class="av-hint">Pair Spark and prepare the speaker identity service before enrolling. Enrollment uses prompted and held-out speech.</p><button class="av-btn av-btn-primary self-start" disabled>Enroll owner</button><p class="av-hint">Enrollment is unavailable until identity and local authentication are ready.</p></div></section><section class="section"><span class="av-kicker">Other people</span><p class="av-hint">No additional people are enrolled. Only the authenticated owner can add people or change permissions.</p></section><div class="warning">A voice match alone cannot change ownership or approve high-impact actions.</div>
-    {:else if section==='awareness'}
-     <section class="section"><span class="av-kicker">Observation scope</span><div class="row"><div><h2>Screen awareness</h2><p class="av-hint">No displays or applications are being captured.</p></div><span class="av-chip text-amber-200 ring-amber-400/30">Off</span></div><div class="empty"><h2>Choose what Avesra may see</h2><p class="av-hint">Observation becomes available after authenticated setup. Passwords, secure desktops and excluded apps stay outside the selected scope.</p></div></section><section class="section"><span class="av-kicker">Actions</span><div class="row"><div><h2>Pause assistant</h2><p class="av-hint">Stop listening, observation and new actions.</p></div><button class="av-btn av-btn-secondary" disabled={!runtime} onclick={()=>control(s?.paused?'resume':'pause')}>{s?.paused?'Resume':'Pause'}</button></div><div class="line"></div><h2>Always ask first</h2><p class="av-hint">Send, publish, delete, spend, change permissions or change system/network settings.</p></section><section class="section"><span class="av-kicker">Learned aliases & routines</span><p class="av-hint">No aliases or routines have been learned.</p></section>
-    {:else if section==='memory'}
-     <div class="av-seg self-start" role="tablist" aria-label="Memory and diagnostics">{#each ['Memory','History','Performance','Health'] as t}<button class="av-seg-btn" role="tab" aria-selected={tab===t} data-selected={tab===t} onclick={()=>tab=t}>{t}</button>{/each}</div>
-     {#if tab==='Memory'}<div class="empty"><h2>No memories yet</h2><p class="av-hint">Useful facts and routines will appear with their source and date. Accepted history is retained until you delete it; raw audio and screenshots are transient.</p></div>{:else if tab==='History'}<div class="empty"><h2>No accepted requests</h2><p class="av-hint">History begins after owner setup. Unknown voices are not saved as conversations.</p></div>{:else if tab==='Performance'}<div class="grid grid-cols-3 gap-3">{#each ['Median','p95','p99'] as metric}<div class="av-card p-4"><span class="av-kicker">{metric}</span><p class="mt-2 font-mono text-xl text-zinc-400">—</p><p class="av-hint mt-1">No measured requests</p></div>{/each}</div><div class="empty"><h2>Measurements unavailable</h2><p class="av-hint">Per-stage latency, queue time, errors and sample counts will appear after the pipeline is connected. No performance result is simulated.</p></div>{:else}<div class="av-card p-4"><div class="row"><h2>Local companion</h2><span class="av-chip text-zinc-300 ring-white/15">{runtime?'Running':'Unavailable'}</span></div><div class="line my-3"></div><div class="row"><span>Spark transport</span><span class="text-amber-200">Not paired</span></div><div class="line my-3"></div><div class="row"><span>Voice pipeline</span><span class="text-amber-200">Unavailable</span></div></div><p class="av-hint">This view reports connected runtime state. Model provisioning is not assistant readiness.</p>{/if}
-    {/if}
-   </div>
-  </main>
- </div>
-</div>
-{:else}
-<div class="overlay flex h-full flex-col overflow-hidden" class:bg-[#18181c]={expanded}>
- <button class="flex h-24 w-full shrink-0 items-center px-2 focus-visible:outline-1 focus-visible:outline-av-400" aria-expanded={expanded} aria-label={`${statusLabel||status}. ${runtime?.reason??'Native connection unavailable'}. Expand Avesra`} onclick={expand}>
-  {#if ['passive','recognizing','accepted','thinking','speaking'].includes(status)}<span class="relative flex h-[88px] w-full items-center"><Signal frame={signal}/>{#if !signal}<span class="h-px w-full bg-white/15"></span>{/if}</span>{:else}<span class="flex w-full items-center gap-3 {status==='disconnected'?'text-red-500':status==='paused'?'text-zinc-300':'text-amber-400'}"><span class="h-px flex-1 {status==='disconnected'?'bg-red-500/70':'border-t border-dashed border-current opacity-60'}"></span><Icon name={status==='disconnected'?'close':status==='paused'?'pause':status==='deafened'?'deafen_off':'mic_off'} size={17}/><span class="h-px flex-1 {status==='disconnected'?'bg-red-500/70':'border-t border-dashed border-current opacity-60'}"></span></span>{/if}
- </button>
- <div class="flex h-7 shrink-0 items-center gap-1.5 pr-1 pl-2.5"><button class="reveal text-zinc-500" onpointerdown={drag} aria-label="Drag overlay">⠿</button><span class="text-[11.5px] {status==='disconnected'?'text-red-400':'text-amber-200'}">{statusLabel}</span><span class="flex-1"></span>
-  {#if runtime?.active_task}<button class="av-iconbtn size-6 text-red-400" onclick={()=>control('stop')} aria-label="Stop task"><Icon name="stop" size={12}/></button>{/if}
-  <button class="av-iconbtn size-6 {s?.explicit_mute?'av-iconbtn-on':'reveal'}" aria-label={s?.explicit_mute?'Unmute microphone':'Mute microphone'} aria-pressed={!!s?.explicit_mute} disabled={!runtime} onclick={()=>control(s?.explicit_mute?'unmute':'mute')}><Icon name={s?.explicit_mute?"mic_off":"mic"} size={13}/></button>
-  <button class="av-iconbtn size-6 {s?.deafened?'av-iconbtn-on':'reveal'}" aria-label={s?.deafened?'Restore assistant sound':'Deafen assistant'} aria-pressed={!!s?.deafened} disabled={!runtime} onclick={()=>control(s?.deafened?'undeafen':'deafen')}><Icon name={s?.deafened?"deafen_off":"deafen"} size={13}/></button>
-  <button class="av-iconbtn reveal size-6" aria-label="Open settings" onclick={showSettings}><Icon name="settings" size={13}/></button><button class="av-iconbtn reveal size-6" aria-label="Hide to tray" onclick={hide}><Icon name="minimize" size={13}/></button>
- </div>
- {#if expanded}<div class="flex flex-1 flex-col gap-4 border-t border-white/[0.07] px-4 pt-3.5 pb-3.5"><div><span class="av-kicker">Avesra</span><p class="mt-1 text-[13px] text-zinc-300">{runtime?.reason??'The local companion is unavailable.'}</p></div><div class="warning">Setup is incomplete. No microphone or screen is being captured.</div>{#if error}<p class="text-xs text-red-300" role="alert">{error}</p>{/if}<button class="av-btn av-btn-secondary self-start" onclick={showSettings}>Open settings <Icon name="arrow" size={12}/></button><span class="av-hint">No accepted task or recent learning event.</span></div>{/if}
-</div>
-{/if}
-
-
+{#if settingsWindow}<SettingsView
+    {runtime}
+    {devices}
+    {error}
+    {notice}
+    {saving}
+    {control}
+    {update}
+    {hide}
+    {drag}
+  />{:else}<Overlay
+    {runtime}
+    {error}
+    {signal}
+    {control}
+    {hide}
+    {drag}
+    {showSettings}
+  />{/if}

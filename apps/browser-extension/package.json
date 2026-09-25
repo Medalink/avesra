@@ -1,1 +1,14 @@
-{"name":"@avesra/browser-extension","version":"0.1.0","private":true,"type":"module","scripts":{"check":"tsc --noEmit","build":"tsc && node build.mjs"},"devDependencies":{"@types/chrome":"0.1.24","typescript":"6.0.3"}}
+{
+  "name": "@avesra/browser-extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit",
+    "build": "tsc && node build.mjs"
+  },
+  "devDependencies": {
+    "@types/chrome": "0.1.24",
+    "typescript": "6.0.3"
+  }
+}
