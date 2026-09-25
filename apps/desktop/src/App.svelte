@@ -10,6 +10,9 @@
   import Overlay from "./Overlay.svelte";
   import { type SignalFrame } from "./Signal.svelte";
   let signal = $state<SignalFrame | null>(null);
+  import { PlaybackSignal } from "./playback-signal";
+  const playback = new PlaybackSignal();
+  let outputSignal = $state<SignalFrame | null>(null);
   let signalSequence = 0;
   let signalReceivedAt = 0;
   import {
@@ -87,6 +90,11 @@
       signalSequence = 0;
     }
     runtime = next;
+    playback.context(next.playback_epoch, next.connected && !next.locked &&
+      !next.settings.deafened && !next.settings.paused && next.settings.speaker !== null,
+      next.enrolled && next.voice_ready);
+    playback.expire(performance.now());
+    outputSignal = playback.frame;
     if (!captureAllowed()) signal = null;
   }
   function captureAllowed() {
@@ -109,9 +117,36 @@
   onMount(() => {
     let dispose = () => {};
     let gone = false;
+    let syncing = false;
+    let clockGeneration = 0;
+    async function syncClock() {
+      if (gone || syncing || document.hidden || !native) return;
+      syncing = true;
+      const generation = clockGeneration;
+      const start = performance.now();
+      try {
+        const value = await command<unknown>("playback_signal_clock");
+        if (!gone && !document.hidden && generation === clockGeneration) playback.calibrate(value, start, performance.now());
+      } catch {
+        if (!gone && generation === clockGeneration) playback.uncalibrated();
+      } finally {
+        syncing = false;
+        if (!gone) { playback.expire(performance.now()); outputSignal = playback.frame; }
+      }
+    }
+    function visibility() {
+      clockGeneration++;
+      playback.uncalibrated();
+      outputSignal = null;
+      if (!document.hidden) void syncClock();
+    }
+    document.addEventListener("visibilitychange", visibility);
+    const calibration = setInterval(() => { void syncClock(); }, 10_000);
     const expiry = setInterval(() => {
+      playback.expire(performance.now());
+      outputSignal = playback.frame;
       if (signal && performance.now() - signalReceivedAt > 500) signal = null;
-    }, 100);
+    }, 50);
     (async () => {
       try {
         if (!native) {
@@ -125,18 +160,26 @@
           error = e.payload;
         });
         const stopSignal = await listen<SignalFrame | null>("signal-frame", e => acceptSignal(e.payload));
+        const stopOutput = await listen<unknown>("playback-signal", e => {
+          playback.accept(e.payload, performance.now(), !document.hidden);
+          playback.expire(performance.now());
+          outputSignal = playback.frame;
+        });
         if (gone) {
+          stopOutput();
           stop();
           stopErrors();
           stopSignal();
           return;
         }
         dispose = () => {
+          stopOutput();
           stop();
           stopErrors();
           stopSignal();
         };
         acceptSnapshot(await command<Runtime>("runtime_snapshot"));
+        await syncClock();
         devices = await command<AudioDevice[]>("audio_devices");
       } catch (e) {
         error = String(e);
@@ -144,6 +187,10 @@
     })();
     return () => {
       gone = true;
+      clockGeneration++;
+      playback.uncalibrated();
+      clearInterval(calibration);
+      document.removeEventListener("visibilitychange", visibility);
       clearInterval(expiry);
       dispose();
     };
@@ -164,7 +211,7 @@
   />{:else}<Overlay
     {runtime}
     {error}
-    {signal}
+    signal={outputSignal ?? signal}
     {control}
     {hide}
     {drag}

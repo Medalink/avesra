@@ -88,6 +88,7 @@ struct MediaHealth {
     epoch: u64,
 }
 pub struct MediaWorker {
+    telemetry: Arc<crate::playback_signal::Telemetry>,
     configuration: Arc<Mutex<Configuration>>,
     capture_gate: Arc<MediaGate>,
     playback_gate: Arc<MediaGate>,
@@ -160,6 +161,19 @@ impl MediaWorker {
             action_epoch,
             caller,
         });
+        self.telemetry.open(
+            local.playback_epoch,
+            id,
+            if config
+                .output_lease
+                .as_ref()
+                .is_some_and(|v| v.source.is_some())
+            {
+                crate::playback_signal::Purpose::Reply
+            } else {
+                crate::playback_signal::Purpose::Preview
+            },
+        );
         config.playback = true;
         config.revision = config.revision.saturating_add(1);
         self.playback_gate.publish(true, local.playback_epoch);
@@ -283,7 +297,11 @@ impl MediaWorker {
         }
         Ok(value)
     }
+    pub fn signal_clock(&self) -> f64 {
+        self.telemetry.clock()
+    }
     pub fn spawn(app: tauri::AppHandle) -> std::io::Result<Self> {
+        let telemetry = Arc::new(crate::playback_signal::Telemetry::new(app.clone()));
         let configuration = Arc::new(Mutex::new(Configuration::default()));
         let capture_gate = Arc::new(MediaGate::default());
         let playback_gate = Arc::new(MediaGate::default());
@@ -293,6 +311,7 @@ impl MediaWorker {
         let output_status = Arc::new(Mutex::new(OutputStatus::default()));
         let applied_revision = Arc::new(AtomicU64::new(0));
         let value = Self {
+            telemetry: telemetry.clone(),
             applied_revision: applied_revision.clone(),
             output_status: output_status.clone(),
             configuration: configuration.clone(),
@@ -334,6 +353,9 @@ impl MediaWorker {
                             let _ = app.emit("signal-frame", Option::<SignalFrame>::None);
                         }
                         if playback_changed {
+                            if previous.playback_epoch != config.playback_epoch {
+                                telemetry.retire(previous.playback_epoch);
+                            }
                             playback = None;
                             if let Ok(mut queue) = inbound.lock() {
                                 queue.clear();
@@ -501,6 +523,7 @@ impl MediaWorker {
                             .is_some_and(|v| Instant::now() >= v.deadline);
                         let failed = stream.gate.failed() || expired;
                         if failed || !stream.gate.current(config.playback_epoch) {
+                            telemetry.retire(config.playback_epoch);
                             if failed {
                                 device_failed(&app, config.playback_epoch, true);
                             }
@@ -537,12 +560,27 @@ impl MediaWorker {
                                 }
                             }
                         }
-                        // Echo cancellation is not qualified: references are drained,
-                        // never retained or interpreted as owner speech.
+                        // Display uses submitted samples only; echo/identity remain unqualified.
                         for _ in 0..64 {
                             let Ok(reference) = stream.reference.try_recv() else {
                                 break;
                             };
+                            if let Ok(current) = configuration.lock()
+                                && current.playback
+                                && current.playback_epoch == reference.epoch
+                                && current.output_lease.as_ref().is_some_and(|lease| {
+                                    lease.id == reference.utterance
+                                        && Instant::now() < lease.deadline
+                                        && !lease.caller.load(Ordering::SeqCst)
+                                        && lease
+                                            .source
+                                            .as_ref()
+                                            .is_none_or(|source| !source.cancelled())
+                                })
+                                && stream.gate.current(reference.epoch)
+                            {
+                                telemetry.sample(&reference);
+                            }
                             if reference.final_submitted
                                 && stream.gate.current(reference.epoch)
                                 && let Ok(mut status) = output_status.lock()
@@ -560,6 +598,7 @@ impl MediaWorker {
                                 .is_some_and(|v| Instant::now() >= v.deadline)
                         {
                             device_failed(&app, config.playback_epoch, true);
+                            telemetry.retire(config.playback_epoch);
                             playback = None;
                             if let Ok(mut status) = output_status.lock()
                                 && status.epoch == config.playback_epoch
@@ -629,6 +668,7 @@ impl MediaWorker {
                 self.capture_gate.publish(capture, local.capture_epoch);
             }
             if clear_playback {
+                self.telemetry.retire(config.playback_epoch);
                 self.playback_gate.publish(playback, local.playback_epoch);
             }
             let capture_deadline = if voice_window {
@@ -666,6 +706,9 @@ impl MediaWorker {
 }
 impl Drop for MediaWorker {
     fn drop(&mut self) {
+        if let Ok(config) = self.configuration.lock() {
+            self.telemetry.retire(config.playback_epoch);
+        }
         self.capture_gate.publish(false, u64::MAX);
         self.playback_gate.publish(false, u64::MAX);
         self.shutdown.store(true, Ordering::SeqCst);

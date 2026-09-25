@@ -7,6 +7,7 @@ mod media;
 mod output;
 mod owner;
 pub mod planner;
+mod playback_signal;
 mod preview;
 mod profiles;
 mod setup;
@@ -681,6 +682,7 @@ fn main() {
             setup::clear_speaker_selection,
             setup::record_enrollment,
             runtime_snapshot,
+            playback_signal::playback_signal_clock,
             audio_devices,
             speaker_health,
             local_control,

@@ -31,6 +31,9 @@
       );
   }
   const status = $derived(runtime?.status ?? "disconnected");
+  const speaking = $derived(signal?.kind === "speaking" && runtime?.connected && !runtime.locked && !s?.deafened && !s?.paused);
+  const preview = $derived(speaking && signal?.purpose === "preview");
+  const activityLabel = $derived(speaking ? (preview ? "Voice preview" : "Replying") : runtime?.reason ?? "Native connection unavailable");
   const statusLabel = $derived(
     (
       {
@@ -53,10 +56,10 @@
   <button
     class="flex h-24 w-full shrink-0 items-center px-2 focus-visible:outline-1 focus-visible:outline-av-400"
     aria-expanded={expanded}
-    aria-label={`${statusLabel || status}. ${runtime?.reason ?? "Native connection unavailable"}. Expand Avesra`}
+    aria-label={`${statusLabel || status}. ${activityLabel}. Expand Avesra`}
     onclick={expand}
   >
-    {#if ["passive", "recognizing", "accepted", "thinking", "speaking", "enrolling"].includes(status)}<span
+    {#if speaking || ["passive", "recognizing", "accepted", "thinking", "speaking", "enrolling"].includes(status)}<span
         class="relative flex h-[88px] w-full items-center"
         ><Signal frame={signal} />{#if !signal}<span
             class="h-px w-full bg-white/15"
@@ -95,12 +98,12 @@
     ><span
       class="text-[11.5px] {status === 'disconnected'
         ? 'text-red-400'
-        : 'text-amber-200'}">{statusLabel}</span
+        : 'text-amber-200'}">{speaking ? (s?.explicit_mute ? "Muted" : "") : statusLabel}</span
     ><span class="flex-1"></span>
-    {#if runtime?.active_task}<button
+    {#if runtime?.active_task || speaking}<button
         class="av-iconbtn size-6 text-red-400"
         onclick={() => control("stop")}
-        aria-label="Stop task"><Icon name="stop" size={12} /></button
+        aria-label={speaking ? "Stop output and task" : "Stop task"}><Icon name="stop" size={12} /></button
       >{/if}
     <button
       class="av-iconbtn size-6 {s?.explicit_mute ? 'av-iconbtn-on' : 'reveal'}"
@@ -134,7 +137,7 @@
       <div>
         <span class="av-kicker">Avesra</span>
         <p class="mt-1 text-[13px] text-zinc-300">
-          {runtime?.reason ?? "The local companion is unavailable."}
+          {speaking ? (preview ? (s?.explicit_mute ? "Previewing a voice candidate. Microphone muted." : "Previewing a voice candidate.") : s?.explicit_mute ? "Still replying · unmute to talk" : "Replying.") : runtime?.reason ?? "The local companion is unavailable."}
         </p>
       </div>
       <div class="warning">
@@ -146,6 +149,6 @@
         class="av-btn av-btn-secondary self-start"
         onclick={showSettings}
         >Open settings <Icon name="arrow" size={12} /></button
-      ><span class="av-hint">No accepted task or recent learning event.</span>
+      >{#if !speaking}<span class="av-hint">Task and learning history is unavailable in this panel.</span>{/if}
     </div>{/if}
 </div>

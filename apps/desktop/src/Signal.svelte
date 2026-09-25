@@ -7,7 +7,10 @@
     samples: number[];
     sequence: number;
     capturedAt: number;
-    captureEpoch: number;
+    captureEpoch?: number;
+    playbackEpoch?: number;
+    outputId?: string;
+    purpose?: "preview" | "reply";
   };
   let {
     frame = null,
@@ -24,7 +27,9 @@
     } else if (
       frozenFrame?.kind !== frame.kind ||
       frozenFrame?.source !== frame.source ||
-      frozenFrame?.captureEpoch !== frame.captureEpoch
+      frozenFrame?.captureEpoch !== frame.captureEpoch ||
+      frozenFrame?.playbackEpoch !== frame.playbackEpoch ||
+      frozenFrame?.outputId !== frame.outputId
     ) {
       frozenFrame = frame;
     }
