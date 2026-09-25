@@ -133,6 +133,9 @@ pub struct ExplicitExecutable {
     fingerprint: FileFingerprint,
 }
 impl ExplicitExecutable {
+    pub(crate) fn same_file(&self, other: &Self) -> bool {
+        self.fingerprint == other.fingerprint
+    }
     pub fn name(&self) -> &str {
         &self.name
     }
