@@ -166,31 +166,19 @@ pub struct Playback {
     pub gate: Arc<MediaGate>,
 }
 fn selected(name: &str, input: bool) -> Result<cpal::Device, ErrorCode> {
-    if name.is_empty() || name.len() > 512 {
+    if name.is_empty() || name.len() > 1024 || name.chars().any(char::is_control) {
         return Err(ErrorCode::Malformed);
     }
     let host = cpal::default_host();
-    let devices = if input {
-        host.input_devices()
-    } else {
-        host.output_devices()
+    let id: cpal::DeviceId = name.parse().map_err(|_| ErrorCode::Malformed)?;
+    if id.0 != host.id() || id.1.is_empty() || id.to_string() != name {
+        return Err(ErrorCode::Denied);
     }
-    .map_err(|_| ErrorCode::Unavailable)?;
-    let mut found = None;
-    for device in devices {
-        if device
-            .description()
-            .map_err(|_| ErrorCode::Unavailable)?
-            .name()
-            == name
-        {
-            if found.is_some() {
-                return Err(ErrorCode::Denied);
-            }
-            found = Some(device);
-        }
+    let device = host.device_by_id(&id).ok_or(ErrorCode::Unavailable)?;
+    if (input && !device.supports_input()) || (!input && !device.supports_output()) {
+        return Err(ErrorCode::Unsupported);
     }
-    found.ok_or(ErrorCode::Unavailable)
+    Ok(device)
 }
 fn native_config(
     device: &cpal::Device,

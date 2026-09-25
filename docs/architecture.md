@@ -1,5 +1,7 @@
 # Architecture
 
+Audio selections persist CPAL0.17.3 WASAPI endpoint IDs (`DeviceTrait::id` / `HostTrait::device_by_id`), with friendly names used only for display. Default-device markers compare IDs. Opening a selected endpoint validates its host, canonical ID and input/output direction; it never falls back to a same-named device. Settings carry `audio_device_schema: 1`. Legacy name-only settings migrate atomically to empty device selections with microphone mute enabled, requiring explicit reselection. Unknown newer schemas fail closed. Candidate and selection schema2 require endpoint IDs; old name-bound records are recoverable through explicit deletion/clear rather than silent reassignment. This is source migration only; no live enumeration or profile activation occurred.
+
 `avesra-contracts` owns serializable typed boundaries without desktop/model dependencies. `avesra-core` owns policy, local state and SQLite persistence. `avesra-server` is the Spark controller executable. `avesra-windows` owns native device integration. The Tauri app uses bundled Svelte/Tailwind resources and typed commands. No privileged remote page is loaded.
 
 One writer owns each SQLite connection behind the desktop's synchronization boundary. Audio callbacks must not acquire that lock, block on network, or run model inference. Local controls invalidate capture/action epochs before asynchronous work. The controller independently validates actions; neither frontend nor model owns authority.

@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Settings {
+    #[serde(default)]
+    pub audio_device_schema: u16,
     pub microphone: Option<String>,
     pub speaker: Option<String>,
     pub profile: Profile,
@@ -20,6 +22,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            audio_device_schema: 1,
             microphone: None,
             speaker: None,
             profile: Profile::SingleSpark,
@@ -37,7 +40,8 @@ impl Default for Settings {
 }
 impl Settings {
     pub fn validate(&self) -> Result<(), ErrorCode> {
-        if self.chime_volume > 100
+        if self.audio_device_schema != 1
+            || self.chime_volume > 100
             || self.speech_volume > 100
             || !(50..=200).contains(&self.speech_rate)
         {
@@ -46,11 +50,11 @@ impl Settings {
         if self
             .microphone
             .as_ref()
-            .is_some_and(|x| x.is_empty() || x.len() > 512)
+            .is_some_and(|x| !valid_audio_device_id(x))
             || self
                 .speaker
                 .as_ref()
-                .is_some_and(|x| x.is_empty() || x.len() > 512)
+                .is_some_and(|x| !valid_audio_device_id(x))
         {
             return Err(ErrorCode::Malformed);
         }
@@ -59,6 +63,12 @@ impl Settings {
         }
         Ok(())
     }
+}
+pub fn valid_audio_device_id(value: &str) -> bool {
+    value.starts_with("wasapi:")
+        && value.len() > 7
+        && value.len() <= 1024
+        && !value.chars().any(char::is_control)
 }
 
 #[derive(Clone, Debug, Serialize)]

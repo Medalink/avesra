@@ -57,13 +57,12 @@ fn selected(directory: &Path) -> Result<Option<Selection>, String> {
         .map_err(|_| "Selected profile cannot be decrypted")?;
     let value: Selection =
         serde_json::from_slice(&bytes).map_err(|_| "Invalid selected profile")?;
-    if value.version != 1
+    if value.version != 2
         || value.id.is_nil()
         || value.revision.is_nil()
         || value.model_revision.len() != 40
         || !value.model_revision.bytes().all(|v| v.is_ascii_hexdigit())
-        || value.microphone.is_empty()
-        || value.microphone.len() > 512
+        || !avesra_core::state::valid_audio_device_id(&value.microphone)
     {
         return Err("Invalid selected profile".into());
     }
@@ -111,7 +110,7 @@ pub fn select_candidate(
         return Err("Candidate does not match this microphone and speaker model".into());
     }
     let value = Selection {
-        version: 1,
+        version: 2,
         id,
         revision,
         model_revision: candidate.model_revision,

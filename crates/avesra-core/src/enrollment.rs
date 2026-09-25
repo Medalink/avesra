@@ -40,12 +40,11 @@ pub struct Candidate {
 }
 impl Candidate {
     pub fn validate(&self) -> Result<(), ErrorCode> {
-        if self.version != 1
+        if self.version != 2
             || self.id.is_nil()
             || self.revision.is_nil()
             || !valid_revision(&self.model_revision)
-            || self.microphone.is_empty()
-            || self.microphone.len() > 512
+            || !crate::state::valid_audio_device_id(&self.microphone)
             || self.segments != SEGMENTS
             || !(96_000..=960_000).contains(&self.collected_samples)
             || self.held_out_similarities.len() != 2
@@ -103,8 +102,7 @@ impl Enrollment {
     pub fn new(epoch: u64, revision: String, microphone: String) -> Result<Self, ErrorCode> {
         if epoch == 0
             || !valid_revision(&revision)
-            || microphone.is_empty()
-            || microphone.len() > 512
+            || !crate::state::valid_audio_device_id(&microphone)
         {
             return Err(ErrorCode::Malformed);
         }
@@ -214,7 +212,7 @@ impl Enrollment {
             })
             .collect();
         let value = Candidate {
-            version: 1,
+            version: 2,
             id: self.id,
             revision: Uuid::new_v4(),
             model_revision: self.revision,

@@ -213,9 +213,10 @@
                   disabled={!s || saving}
                   onchange={(e) =>
                     update({ microphone: e.currentTarget.value || null })}
-                  ><option value="">Select microphone</option
-                  >{#each devices.filter((d) => d.direction === "input") as device}<option
-                      value={device.name}
+                  ><option value="">Select microphone</option>
+                  {#if s?.microphone && !devices.some(d => d.direction === "input" && d.id === s.microphone)}<option value={s.microphone} disabled>Selected microphone unavailable</option>{/if}
+                  {#each devices.filter((d) => d.direction === "input") as device}<option
+                      value={device.id}
                       >{device.name}{device.is_default
                         ? " · default"
                         : ""}</option
@@ -240,9 +241,10 @@
                   disabled={!s || saving}
                   onchange={(e) =>
                     update({ speaker: e.currentTarget.value || null })}
-                  ><option value="">Select output</option
-                  >{#each devices.filter((d) => d.direction === "output") as device}<option
-                      value={device.name}
+                  ><option value="">Select output</option>
+                  {#if s?.speaker && !devices.some(d => d.direction === "output" && d.id === s.speaker)}<option value={s.speaker} disabled>Selected output unavailable</option>{/if}
+                  {#each devices.filter((d) => d.direction === "output") as device}<option
+                      value={device.id}
                       >{device.name}{device.is_default
                         ? " · default"
                         : ""}</option

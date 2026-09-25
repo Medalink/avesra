@@ -81,11 +81,26 @@ impl Store {
             })
             .optional()
             .map_err(|_| ErrorCode::Storage)?;
-        let settings = match value {
+        let mut settings: Settings = match value {
             Some(value) => serde_json::from_str(&value).map_err(|_| ErrorCode::Malformed)?,
             None => Settings::default(),
         };
+        let migrated = settings.audio_device_schema == 0;
+        if migrated {
+            // Legacy fields were friendly names. Never guess an endpoint from a
+            // label: require explicit device reselection and retain deliberate mute.
+            settings.microphone = None;
+            settings.speaker = None;
+            settings.explicit_mute = true;
+            settings.audio_device_schema = 1;
+        }
         settings.validate()?;
+        if migrated {
+            let value = serde_json::to_string(&settings).map_err(|_| ErrorCode::Malformed)?;
+            self.connection
+                .execute("UPDATE settings SET value=?1 WHERE id=1", [value])
+                .map_err(|_| ErrorCode::Storage)?;
+        }
         Ok(settings)
     }
     pub fn save_settings(&mut self, settings: &Settings) -> Result<(), ErrorCode> {

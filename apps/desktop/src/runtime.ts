@@ -1,5 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 export type Settings = {
+  audio_device_schema: number;
   microphone: string | null;
   speaker: string | null;
   profile: "single-spark" | "accelerated" | "gaming";
@@ -28,6 +29,7 @@ export type Runtime = {
   reason: string;
 };
 export type AudioDevice = {
+  id: string;
   name: string;
   direction: "input" | "output";
   is_default: boolean;

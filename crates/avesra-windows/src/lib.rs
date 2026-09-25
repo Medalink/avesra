@@ -14,6 +14,7 @@ pub mod session;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AudioDevice {
+    pub id: String,
     pub name: String,
     pub direction: &'static str,
     pub is_default: bool,
@@ -32,17 +33,17 @@ pub fn audio_devices() -> Result<Vec<AudioDevice>, ErrorCode> {
             host.default_output_device(),
         ),
     ] {
-        let default_name = default
-            .and_then(|device| device.description().ok())
-            .map(|d| d.name().to_string());
+        let default_id = default.and_then(|device| device.id().ok());
         for device in items.map_err(|_| ErrorCode::Unavailable)? {
             let name = device
                 .description()
                 .map_err(|_| ErrorCode::Unavailable)?
                 .name()
                 .to_string();
+            let id = device.id().map_err(|_| ErrorCode::Unavailable)?;
             devices.push(AudioDevice {
-                is_default: default_name.as_ref() == Some(&name),
+                is_default: default_id.as_ref() == Some(&id),
+                id: id.to_string(),
                 name,
                 direction,
             });
