@@ -20,6 +20,9 @@ use std::{
 };
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use uuid::Uuid;
+#[cfg(unix)]
+#[path = "voice_stream.rs"]
+mod voice_stream;
 struct ServerState {
     auth: Mutex<AuthStore>,
     admission: Arc<Semaphore>,
@@ -86,6 +89,7 @@ pub fn router(auth: AuthStore, directory: &std::path::Path) -> Result<Router, St
         .route("/control", get(control))
         .route("/speaker", get(speaker_health).post(speaker_infer))
         .route("/voice-analysis", post(voice_analysis))
+        .route("/voice-stream", get(voice_stream_upgrade))
         .layer(DefaultBodyLimit::max(1024))
         .with_state(Arc::new(ServerState {
             auth: Mutex::new(auth),
@@ -103,6 +107,21 @@ pub fn router(auth: AuthStore, directory: &std::path::Path) -> Result<Router, St
             sessions: Mutex::new(std::collections::HashMap::new()),
         }));
     Ok(router)
+}
+async fn voice_stream_upgrade(
+    State(auth): State<Shared>,
+    headers: HeaderMap,
+    ws: WebSocketUpgrade,
+) -> Result<Response, StatusCode> {
+    #[cfg(unix)]
+    {
+        voice_stream::upgrade(auth, headers, ws).await
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (auth, headers, ws);
+        Err(StatusCode::SERVICE_UNAVAILABLE)
+    }
 }
 
 #[cfg(unix)]
