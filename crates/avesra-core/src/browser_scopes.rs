@@ -35,8 +35,8 @@ impl Grant {
     }
 }
 pub struct Store(Connection);
-const SCHEMA: &str = "CREATE TABLE schema_version(version INTEGER NOT NULL); INSERT INTO schema_version VALUES(1);
-CREATE TABLE scopes(id TEXT PRIMARY KEY CHECK(length(id)=36),revision TEXT UNIQUE NOT NULL CHECK(length(revision)=36),actor TEXT NOT NULL CHECK(length(actor)=36),selection TEXT NOT NULL CHECK(length(selection)=36),origin TEXT NOT NULL CHECK(length(origin)<=512),body TEXT NOT NULL CHECK(length(body)<=4096),UNIQUE(actor,selection,origin));";
+const VERSION_SCHEMA: &str = "CREATE TABLE schema_version(version INTEGER NOT NULL)";
+const GRANTS_SCHEMA: &str = "CREATE TABLE scopes(id TEXT PRIMARY KEY CHECK(length(id)=36),revision TEXT UNIQUE NOT NULL CHECK(length(revision)=36),actor TEXT NOT NULL CHECK(length(actor)=36),selection TEXT NOT NULL CHECK(length(selection)=36),origin TEXT NOT NULL CHECK(length(origin)<=512),body TEXT NOT NULL CHECK(length(body)<=4096),UNIQUE(actor,selection,origin))";
 fn check_schema(db: &Connection) -> Result<bool, ErrorCode> {
     let objects: i64 = db
         .query_row(
@@ -61,6 +61,84 @@ fn check_schema(db: &Connection) -> Result<bool, ErrorCode> {
     let supported: i64 = db.query_row("SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('schema_version','scopes')", [], |r|r.get(0)).map_err(|_|ErrorCode::Malformed)?;
     if objects != 2 || supported != 2 {
         return Err(ErrorCode::Malformed);
+    }
+    for (name, expected) in [
+        ("schema_version", VERSION_SCHEMA),
+        ("scopes", GRANTS_SCHEMA),
+    ] {
+        let sql: String = db
+            .query_row(
+                "SELECT substr(sql,1,2049) FROM sqlite_master WHERE type='table' AND name=?1",
+                [name],
+                |r| r.get(0),
+            )
+            .map_err(|_| ErrorCode::Malformed)?;
+        if sql != expected {
+            return Err(ErrorCode::Malformed);
+        }
+    }
+    // Exact SQL binds affinities/checks; inspect actual constraint indexes too.
+    let mut indexes = db
+        .prepare("PRAGMA index_list('scopes')")
+        .map_err(|_| ErrorCode::Malformed)?;
+    let rows = indexes
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, i64>(4)?,
+            ))
+        })
+        .map_err(|_| ErrorCode::Malformed)?;
+    let mut found = [false; 3];
+    for row in rows {
+        let (name, unique, origin, partial) = row.map_err(|_| ErrorCode::Malformed)?;
+        let index = match (name.as_str(), origin.as_str()) {
+            ("sqlite_autoindex_scopes_1", "pk") => 0,
+            ("sqlite_autoindex_scopes_2", "u") => 1,
+            ("sqlite_autoindex_scopes_3", "u") => 2,
+            _ => return Err(ErrorCode::Malformed),
+        };
+        if found[index] || unique != 1 || partial != 0 {
+            return Err(ErrorCode::Malformed);
+        }
+        found[index] = true;
+    }
+    if found != [true; 3] {
+        return Err(ErrorCode::Malformed);
+    }
+    for (query, expected) in [
+        (
+            "PRAGMA index_info('sqlite_autoindex_scopes_1')",
+            vec![(0, "id")],
+        ),
+        (
+            "PRAGMA index_info('sqlite_autoindex_scopes_2')",
+            vec![(1, "revision")],
+        ),
+        (
+            "PRAGMA index_info('sqlite_autoindex_scopes_3')",
+            vec![(2, "actor"), (3, "selection"), (4, "origin")],
+        ),
+    ] {
+        let mut statement = db.prepare(query).map_err(|_| ErrorCode::Malformed)?;
+        let mut rows = statement.query([]).map_err(|_| ErrorCode::Malformed)?;
+        for (position, (column, name)) in expected.into_iter().enumerate() {
+            let row = rows
+                .next()
+                .map_err(|_| ErrorCode::Malformed)?
+                .ok_or(ErrorCode::Malformed)?;
+            if row.get::<_, i64>(0).map_err(|_| ErrorCode::Malformed)? != position as i64
+                || row.get::<_, i64>(1).map_err(|_| ErrorCode::Malformed)? != column
+                || row.get::<_, String>(2).map_err(|_| ErrorCode::Malformed)? != name
+            {
+                return Err(ErrorCode::Malformed);
+            }
+        }
+        if rows.next().map_err(|_| ErrorCode::Malformed)?.is_some() {
+            return Err(ErrorCode::Malformed);
+        }
     }
     db.prepare("SELECT id,revision,actor,selection,origin,body FROM scopes LIMIT 0")
         .map_err(|_| ErrorCode::Malformed)?;
@@ -133,7 +211,11 @@ impl Store {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|_| ErrorCode::Unavailable)?;
         if !check_schema(&tx)? {
-            tx.execute_batch(SCHEMA)
+            tx.execute_batch(VERSION_SCHEMA)
+                .map_err(|_| ErrorCode::Unavailable)?;
+            tx.execute("INSERT INTO schema_version VALUES(1)", [])
+                .map_err(|_| ErrorCode::Unavailable)?;
+            tx.execute_batch(GRANTS_SCHEMA)
                 .map_err(|_| ErrorCode::Unavailable)?;
         }
         count(&tx)?;
