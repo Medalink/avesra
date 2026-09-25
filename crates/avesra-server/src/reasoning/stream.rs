@@ -1,6 +1,7 @@
 //! Incremental OpenAI-compatible SSE decoding, not backend completion proof.
 use avesra_contracts::{ErrorCode, planner};
 use serde::Deserialize;
+use uuid::Uuid;
 const MAX_EVENT: usize = 65_536;
 const MAX_TOTAL: usize = 1_048_576;
 #[derive(Deserialize)]
@@ -55,14 +56,23 @@ struct Delta {
 /// This observation is only a well-formed upstream stream terminal. Deployment
 /// qualification must establish its relationship to actual engine completion.
 pub struct CompletedStream {
+    request: Uuid,
+    model: String,
     response: Result<planner::Response, ErrorCode>,
 }
 impl CompletedStream {
+    pub fn request(&self) -> Uuid {
+        self.request
+    }
+    pub fn model(&self) -> &str {
+        &self.model
+    }
     pub fn response(self) -> Result<planner::Response, ErrorCode> {
         self.response
     }
 }
 pub struct Parser {
+    request: Uuid,
     model: String,
     id: Option<String>,
     line: Vec<u8>,
@@ -76,8 +86,9 @@ pub struct Parser {
     failed: bool,
 }
 impl Parser {
-    pub fn new(model: &str) -> Result<Self, ErrorCode> {
-        if model.is_empty()
+    pub fn new(request: Uuid, model: &str) -> Result<Self, ErrorCode> {
+        if request.is_nil()
+            || model.is_empty()
             || model.len() > 128
             || !model
                 .bytes()
@@ -86,6 +97,7 @@ impl Parser {
             return Err(ErrorCode::Malformed);
         }
         Ok(Self {
+            request,
             model: model.into(),
             id: None,
             line: Vec::new(),
@@ -296,6 +308,10 @@ impl Parser {
                     }
                 })
         };
-        Ok(CompletedStream { response })
+        Ok(CompletedStream {
+            request: self.request,
+            model: self.model,
+            response,
+        })
     }
 }
