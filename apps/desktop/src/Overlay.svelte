@@ -40,6 +40,7 @@
         disconnected: "Disconnected",
         unavailable: "Setup needed",
         working: "Working",
+        enrolling: "Recording enrollment",
       } as Record<string, string>
     )[status] ?? "",
   );
@@ -55,7 +56,7 @@
     aria-label={`${statusLabel || status}. ${runtime?.reason ?? "Native connection unavailable"}. Expand Avesra`}
     onclick={expand}
   >
-    {#if ["passive", "recognizing", "accepted", "thinking", "speaking"].includes(status)}<span
+    {#if ["passive", "recognizing", "accepted", "thinking", "speaking", "enrolling"].includes(status)}<span
         class="relative flex h-[88px] w-full items-center"
         ><Signal frame={signal} />{#if !signal}<span
             class="h-px w-full bg-white/15"
@@ -137,7 +138,7 @@
         </p>
       </div>
       <div class="warning">
-        Setup is incomplete. No microphone or screen is being captured.
+        {runtime?.enrollment_capture ? "Recording your explicit enrollment phrase. Mute or cancel in Settings to stop. No screen is being captured." : runtime?.enrolled && runtime.voice_ready ? runtime.reason : "Setup is incomplete. No microphone or screen is being captured."}
       </div>
       {#if error}<p class="text-xs text-red-300" role="alert">
           {error}

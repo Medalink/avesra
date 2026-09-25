@@ -181,6 +181,7 @@ dependencies = [
  "avesra-contracts",
  "avesra-core",
  "avesra-windows",
+ "base64 0.22.1",
  "futures-util",
  "hex",
  "reqwest 0.12.28",

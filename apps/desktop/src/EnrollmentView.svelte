@@ -12,7 +12,7 @@
   let context = "";
   $effect(() => {
     const next = `${runtime?.capture_epoch}:${runtime?.connected}`;
-    if (next !== context) { context = next; generation++; status = null; }
+    if (next !== context) { context = next; if (!busy) { generation++; status = null; } }
   });
   async function refresh() {
     const current = generation;
@@ -27,6 +27,20 @@
     finally { busy = false; }
   }
   async function cancel() { generation++; status = null; await command("cancel_setup"); }
+  const prompts = ["Read naturally: Avesra helps me keep track of my work and the things I want to do today.", "Read naturally: I can pause the assistant whenever I need a quiet moment to think.", "Read naturally: The next project will take several careful steps, and I want to review each result.", "Speak naturally for eight seconds about a typical part of your day.", "Held-out phrase: A clear voice carries across the room while the afternoon light changes.", "Held-out phrase: Tomorrow I may choose a different task, but today I will finish this one."];
+  async function record() {
+    busy = true; error = "";
+    const current = ++generation;
+    try { const next = await command<Status>("record_enrollment"); if (current === generation) status = next.enrollment === "unavailable" ? null : next; }
+    catch (e) { if (current === generation) { error = String(e); status = null; } }
+    finally { busy = false; }
+  }
+  async function save() {
+    busy = true; error = "";
+    try { await command("finish_enrollment"); status = null; await refresh(); }
+    catch(e) { error = String(e); }
+    finally { busy = false; }
+  }
   async function remove(candidate: Candidate) {
     busy = true; error = "";
     try { await command("delete_speaker_candidate", { id: candidate.id, revision: candidate.revision }); await refresh(); }
@@ -41,16 +55,19 @@
   <div class="av-card flex flex-col gap-3 p-3.5">
     <div class="row"><h2>No owner enrolled</h2><span class="av-chip text-amber-200 ring-amber-400/30">Setup required</span></div>
     <p class="av-hint">Enrollment collects prompted phrases, natural speech and separate held-out phrases. Windows verification is required to prepare it.</p>
-    <button class="av-btn av-btn-primary self-start" disabled={busy || !runtime?.connected || !runtime.settings.microphone || !!status} onclick={prepare}>{busy ? "Preparing…" : "Prepare owner enrollment"}</button>
+    <button class="av-btn av-btn-primary self-start" disabled={busy || !runtime?.connected || !runtime.settings.microphone || runtime.settings.explicit_mute || !!status} onclick={prepare}>Prepare owner enrollment</button>
+    {#if runtime?.settings.explicit_mute}<p class="av-hint">Deliberate microphone mute is on. Unmute in Audio & Voice before verifying and preparing enrollment.</p>{/if}
   </div>
   {#if status}
     <!-- Inline enrollment card follows Settings.dc.html 605–614. -->
     <div class="av-card flex flex-col gap-2.5 p-3.5">
       <span class="text-[12.5px] font-medium text-zinc-100">Owner enrollment · {status.completed_segments} / 6 segments</span>
-      <p class="av-hint">{status.reason} The microphone remains off.</p>
+      <p class="av-hint">{status.reason}</p>
+      <p class="text-[12.5px] text-zinc-100">{prompts[status.completed_segments] ?? "Collection complete. Save this candidate for quality review."}</p>
+      <p class="av-hint" role="status">{runtime?.enrollment_capture ? "Microphone recording now · eight seconds" : busy ? "Checking the speaker service or processing the explicit phrase…" : "Microphone off between recordings."}</p>
       <div class="flex items-center justify-end gap-2.5">
         <button class="av-btn av-btn-ghost av-btn-sm" onclick={() => cancel().catch(e => error = String(e))}>Cancel</button>
-        <button class="av-btn av-btn-primary av-btn-sm" disabled>Record prompted phrase</button>
+        {#if status.completed_segments < 6}<button class="av-btn av-btn-primary av-btn-sm" disabled={busy || runtime?.settings.explicit_mute} onclick={record}>Record eight seconds</button>{:else}<button class="av-btn av-btn-primary av-btn-sm" disabled={busy} onclick={save}>Save unqualified candidate</button>{/if}
       </div>
     </div>
   {/if}

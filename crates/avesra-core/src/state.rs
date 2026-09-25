@@ -70,6 +70,7 @@ pub struct LocalState {
     pub connected: bool,
     pub enrolled: bool,
     pub voice_ready: bool,
+    pub enrollment_capture: bool,
     pub locked: bool,
     pub active_task: bool,
     pub status: String,
@@ -99,6 +100,7 @@ impl LocalState {
             connected: false,
             enrolled: false,
             voice_ready: false,
+            enrollment_capture: false,
             locked: false,
             active_task: false,
             status: String::new(),
@@ -109,14 +111,14 @@ impl LocalState {
     }
     pub fn capture_allowed(&self) -> bool {
         self.connected
-            && self.enrolled
-            && self.voice_ready
+            && ((self.enrolled && self.voice_ready) || self.enrollment_capture)
             && !self.locked
             && !self.settings.explicit_mute
             && !self.settings.deafened
             && !self.settings.paused
     }
     pub fn apply(&mut self, control: LocalControl) {
+        self.enrollment_capture = false;
         match control {
             LocalControl::Mute => self.settings.explicit_mute = true,
             LocalControl::Unmute => self.settings.explicit_mute = false,
@@ -163,6 +165,11 @@ impl LocalState {
             ("muted", "Microphone is off.")
         } else if !self.connected {
             ("disconnected", "Pair the Spark to connect Avesra.")
+        } else if self.enrollment_capture {
+            (
+                "enrolling",
+                "Recording an explicit enrollment phrase. Cancel or mute to stop.",
+            )
         } else if !self.enrolled {
             (
                 "unavailable",

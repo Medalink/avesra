@@ -18,6 +18,7 @@ struct Proof {
 }
 #[derive(Default)]
 pub struct Setup {
+    recording: tokio::sync::Mutex<()>,
     enrollment: Mutex<Option<avesra_core::enrollment::Enrollment>>,
     context: Mutex<Option<(u64, u64)>>,
     operation: Mutex<Option<avesra_windows::authentication::Verification>>,
@@ -129,7 +130,11 @@ pub async fn setup_status(
         }
         active.as_ref().map_or(("unavailable", 0, None), |session| {
             (
-                "waiting_for_service",
+                if local.enrollment_capture {
+                    "recording"
+                } else {
+                    "prepared"
+                },
                 session.completed(),
                 session.next_kind(),
             )
@@ -141,7 +146,7 @@ pub async fn setup_status(
         enrollment,
         completed_segments,
         next_segment,
-        reason: "Speaker enrollment capture and held-out quality validation are not ready. Verification does not enable listening.",
+        reason: "Each explicit recording first checks the paired speaker service, then records eight seconds. Collected candidates remain quality unqualified and cannot enable normal listening.",
     })
 }
 
@@ -160,7 +165,12 @@ pub async fn begin_enrollment(
     let state = app.state::<Runtime>();
     {
         let local = state.local.lock().map_err(|_| "Local state unavailable")?;
-        if !local.connected || local.locked || local.settings.paused || local.settings.deafened {
+        if !local.connected
+            || local.locked
+            || local.settings.paused
+            || local.settings.deafened
+            || local.settings.explicit_mute
+        {
             return Err(
                 "Connect Spark and restore local listening controls before enrollment".into(),
             );
@@ -199,6 +209,280 @@ pub async fn begin_enrollment(
         );
         *proof = None;
     }
+    setup_status(window, app.state::<Runtime>()).await
+}
+
+/// Outside Runtime::publish only: closes media and publishes the epoch used by
+/// the Spark session watch. Setup::invalidate itself never acquires local state.
+pub fn cancel_native(app: &tauri::AppHandle) {
+    let state = app.state::<Runtime>();
+    if let Ok(mut local) = state.local.lock() {
+        local.enrollment_capture = false;
+        local.capture_epoch = local.capture_epoch.saturating_add(1);
+        local.refresh();
+        state.publish(&local);
+        let _ = app.emit("runtime-state", local.clone());
+    }
+}
+
+#[tauri::command]
+pub async fn record_enrollment(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+) -> Result<SetupStatus, String> {
+    settings_only(&window)?;
+    let state = app.state::<Runtime>();
+    let _recording = state
+        .setup
+        .recording
+        .try_lock()
+        .map_err(|_| "Enrollment recording is already active")?;
+    let admission = {
+        let local = state.local.lock().map_err(|_| "Local state unavailable")?;
+        let active = state
+            .setup
+            .enrollment
+            .lock()
+            .map_err(|_| "Enrollment unavailable")?;
+        let session = active
+            .as_ref()
+            .filter(|session| session.current(local.capture_epoch))
+            .ok_or("Prepare a verified enrollment first")?;
+        (
+            session.id,
+            local.capture_epoch,
+            state.setup.generation.load(Ordering::SeqCst),
+            state.connection_generation.load(Ordering::SeqCst),
+        )
+    };
+    let check_admission = || -> Result<(), String> {
+        let local = state.local.lock().map_err(|_| "Local state unavailable")?;
+        if local.capture_epoch != admission.1
+            || !local.connected
+            || state.setup.generation.load(Ordering::SeqCst) != admission.2
+            || state.connection_generation.load(Ordering::SeqCst) != admission.3
+            || !state
+                .setup
+                .enrollment
+                .lock()
+                .map_err(|_| "Enrollment unavailable")?
+                .as_ref()
+                .is_some_and(|session| session.id == admission.0 && session.current(admission.1))
+        {
+            return Err("Original enrollment recording request was cancelled".into());
+        }
+        Ok(())
+    };
+    let directory = app
+        .path()
+        .app_data_dir()
+        .map_err(|_| "Pairing directory unavailable")?;
+    let pairing = tauri::async_runtime::spawn_blocking(move || crate::connection::load(&directory))
+        .await
+        .map_err(|_| "Pairing reader stopped")??;
+    check_admission()?;
+    // No microphone is opened unless the configured paired service is reachable.
+    crate::connection::speaker_available(&pairing).await?;
+    check_admission()?;
+    let visible = window
+        .is_visible()
+        .map_err(|_| "Settings window unavailable")?;
+    let (epoch, segment) = {
+        let mut local = state.local.lock().map_err(|_| "Local state unavailable")?;
+        if !local.connected
+            || local.locked
+            || local.settings.explicit_mute
+            || local.settings.deafened
+            || local.settings.paused
+            || !visible
+        {
+            return Err("Restore local listening controls and keep Settings open to record".into());
+        }
+        let mut active = state
+            .setup
+            .enrollment
+            .lock()
+            .map_err(|_| "Enrollment unavailable")?;
+        if !active.as_ref().is_some_and(|session| {
+            session.id == admission.0 && session.current(local.capture_epoch)
+        }) || local.capture_epoch != admission.1
+            || state.setup.generation.load(Ordering::SeqCst) != admission.2
+            || state.connection_generation.load(Ordering::SeqCst) != admission.3
+        {
+            return Err("Prepare a fresh verified enrollment first".into());
+        }
+        let mut session = active.take().ok_or("Enrollment unavailable")?;
+        drop(active);
+        local.capture_epoch = local.capture_epoch.saturating_add(1);
+        session
+            .rebind_idle_epoch(local.capture_epoch)
+            .map_err(|e| e.to_string())?;
+        let segment = session
+            .begin_segment(local.capture_epoch)
+            .map_err(|e| e.to_string())?;
+        local.refresh();
+        state.publish(&local);
+        *state
+            .setup
+            .enrollment
+            .lock()
+            .map_err(|_| "Enrollment unavailable")? = Some(session);
+        let _ = app.emit("runtime-state", local.clone());
+        (local.capture_epoch, segment)
+    };
+    struct RecordingGuard {
+        app: tauri::AppHandle,
+        epoch: u64,
+        complete: bool,
+    }
+    impl Drop for RecordingGuard {
+        fn drop(&mut self) {
+            if !self.complete {
+                let current = self
+                    .app
+                    .state::<Runtime>()
+                    .local
+                    .lock()
+                    .is_ok_and(|local| local.capture_epoch == self.epoch);
+                if current {
+                    cancel_native(&self.app);
+                }
+            }
+        }
+    }
+    let mut guard = RecordingGuard {
+        app: app.clone(),
+        epoch,
+        complete: false,
+    };
+    let acknowledgement = Instant::now();
+    let session = loop {
+        {
+            let local = state.local.lock().map_err(|_| "Local state unavailable")?;
+            if local.capture_epoch != epoch || !local.connected {
+                return Err("Enrollment cancelled".into());
+            }
+            let ack = *state
+                .acknowledged_session
+                .lock()
+                .map_err(|_| "Session unavailable")?;
+            if let Some(ack) = ack
+                && ack.epoch == epoch
+                && ack.generation == state.connection_generation.load(Ordering::SeqCst)
+            {
+                break ack;
+            }
+        }
+        if acknowledgement.elapsed() > Duration::from_secs(3) {
+            return Err("Spark did not acknowledge enrollment epoch".into());
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    };
+    let visible = window
+        .is_visible()
+        .map_err(|_| "Settings window unavailable")?;
+    {
+        let mut local = state.local.lock().map_err(|_| "Local state unavailable")?;
+        if local.capture_epoch != epoch || !visible {
+            return Err("Enrollment cancelled".into());
+        }
+        local.enrollment_capture = true;
+        local.refresh();
+        state.publish(&local);
+        let _ = app.emit("runtime-state", local.clone());
+    }
+    let started = Instant::now();
+    let mut sequence = 0u64;
+    let mut pcm = Vec::with_capacity(256_000);
+    while pcm.len() < 256_000 {
+        if started.elapsed() > Duration::from_secs(12)
+            || !window
+                .is_visible()
+                .map_err(|_| "Settings window unavailable")?
+        {
+            return Err("Enrollment capture timed out or Settings closed".into());
+        }
+        if !state
+            .setup
+            .enrollment
+            .lock()
+            .map_err(|_| "Enrollment unavailable")?
+            .as_ref()
+            .is_some_and(|session| session.current(epoch))
+        {
+            return Err("Enrollment session expired".into());
+        }
+        if let Some(frame) = state.media.take_enrollment_frame(epoch)? {
+            if frame.sequence != sequence + 1 {
+                return Err("Enrollment audio lost frames; retry collection".into());
+            }
+            sequence = frame.sequence;
+            for sample in frame.samples {
+                pcm.extend_from_slice(&sample.to_le_bytes());
+            }
+        } else {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+    {
+        let mut local = state.local.lock().map_err(|_| "Local state unavailable")?;
+        if local.capture_epoch != epoch {
+            return Err("Enrollment cancelled".into());
+        }
+        local.enrollment_capture = false;
+        local.refresh();
+        state.publish(&local);
+        let _ = app.emit("runtime-state", local.clone());
+    }
+    let remaining = Duration::from_secs(28)
+        .checked_sub(started.elapsed())
+        .ok_or("Enrollment media expired")?;
+    let inference = tokio::time::timeout(
+        remaining,
+        crate::connection::enrollment_embedding(&pairing, session, segment, pcm),
+    );
+    let freshness = async {
+        loop {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            if !state.setup.enrollment.lock().is_ok_and(|active| {
+                active
+                    .as_ref()
+                    .is_some_and(|session| session.current(epoch))
+            }) {
+                break;
+            }
+        }
+    };
+    let embedding = tokio::select! {
+        biased;
+        _=freshness=>return Err("Enrollment cancelled or expired".into()),
+        value=inference=>value.map_err(|_|"Enrollment media expired")??,
+    };
+    let visible = window
+        .is_visible()
+        .map_err(|_| "Settings window unavailable")?;
+    {
+        let local = state.local.lock().map_err(|_| "Local state unavailable")?;
+        if local.capture_epoch != epoch || !local.connected || !visible {
+            return Err("Enrollment result is stale".into());
+        }
+        state
+            .setup
+            .enrollment
+            .lock()
+            .map_err(|_| "Enrollment unavailable")?
+            .as_mut()
+            .ok_or("Enrollment cancelled")?
+            .add_embedding(
+                epoch,
+                segment,
+                "0f99f2d0ebe89ac095bcc5903c4dd8f72b367286",
+                128_000,
+                &embedding,
+            )
+            .map_err(|e| e.to_string())?;
+    }
+    guard.complete = true;
     setup_status(window, app.state::<Runtime>()).await
 }
 
@@ -315,7 +599,7 @@ pub async fn verify_setup(
         .pending
         .try_lock()
         .map_err(|_| "Local verification is already pending")?;
-    state.setup.invalidate();
+    cancel_native(&app);
     if state
         .setup
         .operation
@@ -353,6 +637,9 @@ pub async fn verify_setup(
         .operation
         .lock()
         .map_err(|_| "Setup unavailable")? = Some(operation.clone());
+    let visible = window
+        .is_visible()
+        .map_err(|_| "Settings window unavailable")?;
     {
         let local = state.local.lock().map_err(|_| "Local state unavailable")?;
         if state.setup.generation.load(Ordering::SeqCst) != challenge
@@ -360,9 +647,7 @@ pub async fn verify_setup(
             || local.capture_epoch != epoch
             || !local.connected
             || local.locked
-            || !window
-                .is_visible()
-                .map_err(|_| "Settings window unavailable")?
+            || !visible
         {
             operation.cancel();
             return Err("Setup changed while Windows verification opened".into());
@@ -399,11 +684,8 @@ pub async fn verify_setup(
     setup_status(window, app.state::<Runtime>()).await
 }
 #[tauri::command]
-pub fn cancel_setup(
-    window: tauri::WebviewWindow,
-    state: tauri::State<'_, Runtime>,
-) -> Result<(), String> {
+pub fn cancel_setup(window: tauri::WebviewWindow, app: tauri::AppHandle) -> Result<(), String> {
     settings_only(&window)?;
-    state.setup.invalidate();
+    cancel_native(&app);
     Ok(())
 }

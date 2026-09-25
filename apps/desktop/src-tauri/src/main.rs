@@ -42,6 +42,7 @@ struct WriteSettings {
     reply: oneshot::Sender<Result<(), String>>,
 }
 struct Runtime {
+    acknowledged_session: Mutex<Option<connection::SessionIdentity>>,
     setup: setup::Setup,
     media: media::MediaWorker,
     local: Mutex<LocalState>,
@@ -53,6 +54,11 @@ struct Runtime {
 }
 impl Runtime {
     fn publish(&self, local: &LocalState) {
+        if !local.connected
+            && let Ok(mut session) = self.acknowledged_session.lock()
+        {
+            *session = None;
+        }
         self.setup.observe(
             local.capture_epoch,
             self.connection_generation.load(Ordering::SeqCst),
@@ -128,6 +134,7 @@ async fn save_settings(
             || settings.speaker != local.settings.speaker
             || settings.profile != local.settings.profile
         {
+            local.enrollment_capture = false;
             local.capture_epoch = local.capture_epoch.saturating_add(1);
             local.action_epoch = local.action_epoch.saturating_add(1);
         }
@@ -320,6 +327,7 @@ fn main() {
             let media = media::MediaWorker::spawn(app.handle().clone())?;
             media.publish(&local);
             app.manage(Runtime {
+                acknowledged_session: Mutex::new(None),
                 setup: setup::Setup::default(),
                 media,
                 local: Mutex::new(local),
@@ -395,7 +403,7 @@ fn main() {
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() == "settings" {
-                    window.state::<Runtime>().setup.invalidate();
+                    setup::cancel_native(window.app_handle());
                 }
                 api.prevent_close();
                 let _ = window.hide();
@@ -409,6 +417,7 @@ fn main() {
             setup::finish_enrollment,
             setup::speaker_candidates,
             setup::delete_speaker_candidate,
+            setup::record_enrollment,
             runtime_snapshot,
             audio_devices,
             local_control,

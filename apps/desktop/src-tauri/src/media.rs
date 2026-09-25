@@ -23,6 +23,7 @@ fn device_failed(app: &tauri::AppHandle, epoch: u64) {
         return;
     }
     local.voice_ready = false;
+    local.enrollment_capture = false;
     local.capture_epoch = local.capture_epoch.saturating_add(1);
     local.action_epoch = local.action_epoch.saturating_add(1);
     local.refresh();
@@ -68,6 +69,23 @@ pub struct MediaWorker {
     shutdown: Arc<AtomicBool>,
 }
 impl MediaWorker {
+    pub fn take_enrollment_frame(&self, epoch: u64) -> Result<Option<AudioFrame>, String> {
+        if !self.capture_gate.current(epoch) {
+            return Err("Enrollment capture stopped".into());
+        }
+        let mut frames = self
+            .outbound
+            .lock()
+            .map_err(|_| "Capture queue unavailable")?;
+        let value = frames.pop_front();
+        if value.as_ref().is_some_and(|frame| {
+            frame.epoch != epoch || frame.captured.elapsed() > Duration::from_millis(500)
+        }) {
+            frames.clear();
+            return Err("Enrollment capture lost freshness".into());
+        }
+        Ok(value)
+    }
     pub fn spawn(app: tauri::AppHandle) -> std::io::Result<Self> {
         let configuration = Arc::new(Mutex::new(Configuration::default()));
         let capture_gate = Arc::new(MediaGate::default());

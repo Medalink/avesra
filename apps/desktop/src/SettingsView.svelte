@@ -3,9 +3,11 @@
   import Pairing from "./Pairing.svelte";
   import SetupLock from "./SetupLock.svelte";
   import EnrollmentView from "./EnrollmentView.svelte";
+  import type { SignalFrame } from "./Signal.svelte";
   import type { Runtime, Settings, AudioDevice } from "./runtime";
   let {
     runtime,
+    signal,
     devices,
     error,
     notice,
@@ -16,6 +18,7 @@
     drag,
   }: {
     runtime: Runtime | null;
+    signal: SignalFrame | null;
     devices: AudioDevice[];
     error: string;
     notice: string;
@@ -27,6 +30,7 @@
   } = $props();
   let section = $state("audio");
   let tab = $state("Memory");
+  const inputLevel = $derived(signal?.kind === "human" ? Math.min(1, Math.sqrt(signal.samples.reduce((sum,value)=>sum+value*value,0)/Math.max(1,signal.samples.length))) : 0);
   const sections = [
     [
       "audio",
@@ -185,12 +189,12 @@
                 <div class="flex items-center gap-2">
                   <div
                     class="flex flex-1 gap-0.5"
-                    aria-label="Input level unavailable"
+                    aria-label={runtime?.enrollment_capture ? "Measured enrollment input level" : "Input level unavailable"}
                   >
-                    {#each Array(24) as _}<span class="h-2 flex-1 bg-white/10"
+                    {#each Array(24) as _,i}<span class="h-2 flex-1 {i < Math.ceil(inputLevel*24) ? 'bg-zinc-400' : 'bg-white/10'}"
                       ></span>{/each}
                   </div>
-                  <span class="caption text-zinc-500">off</span>
+                  <span class="caption text-zinc-500">{runtime?.enrollment_capture ? "recording" : signal ? "live" : "off"}</span>
                 </div>
               </div>
               <div class="flex flex-col gap-1.5">
@@ -228,8 +232,7 @@
                 </div>{/each}
             </div>
             <div class="warning">
-              Listening is off. Pair Spark, prepare the speech services and
-              enroll your voice to begin.
+              {runtime?.enrollment_capture ? "Recording an explicit enrollment phrase. Mute or cancel enrollment to stop." : runtime?.enrolled && runtime.voice_ready ? runtime.reason : "Listening is off. Pair Spark, prepare the speech services and enroll your voice to begin."}
             </div>
             <div class="row">
               <div>

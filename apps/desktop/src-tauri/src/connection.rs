@@ -15,6 +15,108 @@ use tokio_tungstenite::{
     },
 };
 use uuid::Uuid;
+#[derive(Clone, Copy)]
+pub struct SessionIdentity {
+    pub id: Uuid,
+    pub epoch: u64,
+    pub generation: u64,
+}
+
+fn speaker_client(record: &PairingRecord) -> Result<reqwest::Client, String> {
+    let cert = certificate(&record.certificate)?;
+    reqwest::Client::builder()
+        .tls_built_in_root_certs(false)
+        .add_root_certificate(
+            reqwest::Certificate::from_der(&cert).map_err(|_| "Invalid TLS certificate")?,
+        )
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(20))
+        .build()
+        .map_err(|_| "Speaker TLS client unavailable".into())
+}
+pub async fn speaker_available(record: &PairingRecord) -> Result<(), String> {
+    let response = speaker_client(record)?
+        .get(
+            endpoint(&record.url)?
+                .join("speaker")
+                .map_err(|_| "Invalid Spark endpoint")?,
+        )
+        .bearer_auth(&record.credential)
+        .send()
+        .await
+        .map_err(|_| "Speaker service unavailable")?;
+    let value = bounded_response(response).await?;
+    if value.get("lane").and_then(|v| v.as_str()) != Some("speaker")
+        || value.get("model_revision").and_then(|v| v.as_str())
+            != Some("0f99f2d0ebe89ac095bcc5903c4dd8f72b367286")
+        || value.get("state").and_then(|v| v.as_str()) != Some("loaded_unqualified")
+        || value.get("permission_authority").and_then(|v| v.as_bool()) != Some(false)
+    {
+        return Err("Configured speaker deployment is not available for enrollment".into());
+    }
+    Ok(())
+}
+async fn bounded_response(mut response: reqwest::Response) -> Result<serde_json::Value, String> {
+    if !response.status().is_success() {
+        return Err("Speaker request was rejected or unavailable".into());
+    }
+    let mut bytes = vec![];
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| "Speaker response interrupted")?
+    {
+        if bytes.len() + chunk.len() > 16_384 {
+            return Err("Speaker response exceeds limit".into());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&bytes).map_err(|_| "Invalid speaker response".into())
+}
+pub async fn enrollment_embedding(
+    record: &PairingRecord,
+    session: SessionIdentity,
+    id: Uuid,
+    pcm: Vec<u8>,
+) -> Result<Vec<f32>, String> {
+    use base64::Engine;
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Reply {
+        version: u16,
+        request_id: Uuid,
+        session_id: Uuid,
+        capture_epoch: u64,
+        model_revision: String,
+        embedding: Vec<f32>,
+    }
+    let payload = serde_json::json!({"version":1,"request_id":id,"session_id":session.id,"capture_epoch":session.epoch,"pcm_s16le":base64::engine::general_purpose::STANDARD.encode(pcm)});
+    let response = speaker_client(record)?
+        .post(
+            endpoint(&record.url)?
+                .join("speaker")
+                .map_err(|_| "Invalid Spark endpoint")?,
+        )
+        .bearer_auth(&record.credential)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|_| "Enrollment speaker request failed")?;
+    drop(payload);
+    let value: Reply = serde_json::from_value(bounded_response(response).await?)
+        .map_err(|_| "Invalid embedding response")?;
+    if value.version != 1
+        || value.request_id != id
+        || value.session_id != session.id
+        || value.capture_epoch != session.epoch
+        || value.model_revision != "0f99f2d0ebe89ac095bcc5903c4dd8f72b367286"
+        || value.embedding.len() != 192
+        || value.embedding.iter().any(|v| !v.is_finite())
+    {
+        return Err("Embedding correlation failed".into());
+    }
+    Ok(value.embedding)
+}
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -344,7 +446,10 @@ pub async fn run(
           response_sequence=reply.sequence;last_reply=tokio::time::Instant::now();
           let state=app.state::<Runtime>();let mut local=state.local.lock().map_err(|_|"Local state unavailable")?;
           if state.connection_generation.load(std::sync::atomic::Ordering::SeqCst)!=generation{return Err("Session replaced".into());}
-          if !local.connected&&local.capture_epoch==reply.capture_epoch&&local.action_epoch==reply.action_epoch{local.connected=true;local.refresh();state.publish(&local);let _=app.emit("runtime-state",local.clone());}continue;
+          if local.capture_epoch==reply.capture_epoch&&local.action_epoch==reply.action_epoch {
+            if !local.connected {local.connected=true;local.refresh();state.publish(&local);let _=app.emit("runtime-state",local.clone());}
+            if let Ok(mut session)=state.acknowledged_session.lock(){*session=Some(SessionIdentity{id:hello.session_id,epoch:reply.capture_epoch,generation});}
+          }continue;
          }
         };
         if pending.len() >= 8 {

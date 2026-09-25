@@ -130,6 +130,18 @@ impl Enrollment {
     pub fn current(&self, epoch: u64) -> bool {
         self.epoch == epoch && self.created.elapsed() < Duration::from_secs(300)
     }
+    /// A fresh explicit native recording invalidates old device callbacks while
+    /// preserving already collected derived segments in this setup session.
+    pub fn rebind_idle_epoch(&mut self, epoch: u64) -> Result<(), ErrorCode> {
+        if epoch <= self.epoch
+            || self.active.is_some()
+            || self.created.elapsed() >= Duration::from_secs(300)
+        {
+            return Err(ErrorCode::Stale);
+        }
+        self.epoch = epoch;
+        Ok(())
+    }
     pub fn begin_segment(&mut self, epoch: u64) -> Result<Uuid, ErrorCode> {
         if !self.current(epoch)
             || self.next >= SEGMENTS

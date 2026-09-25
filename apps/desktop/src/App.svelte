@@ -91,7 +91,7 @@
     if (!captureAllowed()) signal = null;
   }
   function captureAllowed() {
-    return runtime?.connected && runtime.enrolled && runtime.voice_ready &&
+    return runtime?.connected && ((runtime.enrolled && runtime.voice_ready) || runtime.enrollment_capture) &&
       !runtime.locked && !runtime.settings.explicit_mute &&
       !runtime.settings.deafened && !runtime.settings.paused;
   }
@@ -153,6 +153,7 @@
 
 {#if settingsWindow}<SettingsView
     {runtime}
+    {signal}
     {devices}
     {error}
     {notice}

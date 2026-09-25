@@ -21,6 +21,7 @@ export type Runtime = {
   connected: boolean;
   enrolled: boolean;
   voice_ready: boolean;
+  enrollment_capture: boolean;
   locked: boolean;
   active_task: boolean;
   status: string;
