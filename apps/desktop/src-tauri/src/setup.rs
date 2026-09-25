@@ -215,8 +215,14 @@ pub async fn begin_enrollment(
 /// Outside Runtime::publish only: closes media and publishes the epoch used by
 /// the Spark session watch. Setup::invalidate itself never acquires local state.
 pub fn cancel_native(app: &tauri::AppHandle) {
+    cancel_native_epoch(app, None);
+}
+fn cancel_native_epoch(app: &tauri::AppHandle, expected: Option<u64>) {
     let state = app.state::<Runtime>();
     if let Ok(mut local) = state.local.lock() {
+        if expected.is_some_and(|epoch| local.capture_epoch != epoch) {
+            return;
+        }
         local.enrollment_capture = false;
         local.capture_epoch = local.capture_epoch.saturating_add(1);
         local.refresh();
@@ -338,15 +344,7 @@ pub async fn record_enrollment(
     impl Drop for RecordingGuard {
         fn drop(&mut self) {
             if !self.complete {
-                let current = self
-                    .app
-                    .state::<Runtime>()
-                    .local
-                    .lock()
-                    .is_ok_and(|local| local.capture_epoch == self.epoch);
-                if current {
-                    cancel_native(&self.app);
-                }
+                cancel_native_epoch(&self.app, Some(self.epoch));
             }
         }
     }
@@ -395,11 +393,7 @@ pub async fn record_enrollment(
     let mut sequence = 0u64;
     let mut pcm = Vec::with_capacity(256_000);
     while pcm.len() < 256_000 {
-        if started.elapsed() > Duration::from_secs(12)
-            || !window
-                .is_visible()
-                .map_err(|_| "Settings window unavailable")?
-        {
+        if started.elapsed() > Duration::from_secs(12) {
             return Err("Enrollment capture timed out or Settings closed".into());
         }
         if !state

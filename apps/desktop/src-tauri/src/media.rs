@@ -43,6 +43,7 @@ struct Configuration {
     output: Option<String>,
     capture: bool,
     playback: bool,
+    capture_deadline: Option<Instant>,
 }
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -128,7 +129,10 @@ impl MediaWorker {
                             capture = config.input.as_ref().and_then(|name| {
                                 Capture::open_with_gate(
                                     name,
-                                    capture_gate.new_attempt(config.epoch),
+                                    capture_gate.new_attempt_with_deadline(
+                                        config.epoch,
+                                        config.capture_deadline,
+                                    ),
                                 )
                                 .ok()
                             });
@@ -231,7 +235,11 @@ impl MediaWorker {
                                 }
                             }
                         }
-                        if stream.gate.failed() {
+                        if stream.gate.failed()
+                            || config
+                                .capture_deadline
+                                .is_some_and(|deadline| Instant::now() >= deadline)
+                        {
                             device_failed(&app, config.epoch);
                             let _ = app.emit(
                                 "media-health",
@@ -316,6 +324,9 @@ impl MediaWorker {
                 output: local.settings.speaker.clone(),
                 capture,
                 playback,
+                capture_deadline: local
+                    .enrollment_capture
+                    .then(|| Instant::now() + Duration::from_secs(12)),
             };
         } else {
             self.capture_gate.publish(false, local.capture_epoch);

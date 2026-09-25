@@ -28,6 +28,7 @@ pub struct AudioFrame {
 pub struct MediaGate {
     permission: Arc<MediaPermission>,
     attempt_epoch: Option<u64>,
+    deadline: Option<Instant>,
     failed: AtomicBool,
     dropped: AtomicU64,
 }
@@ -43,6 +44,7 @@ impl Default for MediaGate {
                 epoch: AtomicU64::new(1),
             }),
             attempt_epoch: None,
+            deadline: None,
             failed: AtomicBool::new(false),
             dropped: AtomicU64::new(0),
         }
@@ -52,9 +54,13 @@ impl MediaGate {
     /// Every device attempt gets independent failure state and an immutable epoch.
     /// A still-opening old device can never adopt a replacement device's epoch.
     pub fn new_attempt(&self, epoch: u64) -> Arc<Self> {
+        self.new_attempt_with_deadline(epoch, None)
+    }
+    pub fn new_attempt_with_deadline(&self, epoch: u64, deadline: Option<Instant>) -> Arc<Self> {
         Arc::new(Self {
             permission: self.permission.clone(),
             attempt_epoch: Some(epoch),
+            deadline,
             failed: AtomicBool::new(false),
             dropped: AtomicU64::new(0),
         })
@@ -78,6 +84,9 @@ impl MediaGate {
         self.permission.enabled.load(Ordering::SeqCst)
             && self.permission.epoch.load(Ordering::SeqCst) == epoch
             && self.attempt_epoch.is_none_or(|attempt| attempt == epoch)
+            && self
+                .deadline
+                .is_none_or(|deadline| Instant::now() < deadline)
             && !self.failed.load(Ordering::Relaxed)
     }
     fn fail(&self) {
