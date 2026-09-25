@@ -3,6 +3,7 @@ use crate::ErrorCode;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error};
 use uuid::Uuid;
 pub mod documents;
+pub mod reading;
 
 pub const VERSION: u16 = 5;
 pub const MAX_MESSAGE: usize = 65536;
