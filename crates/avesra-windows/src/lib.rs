@@ -11,6 +11,8 @@ mod playback;
 mod resampling;
 #[cfg(windows)]
 pub mod session;
+#[cfg(windows)]
+pub mod volume;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AudioDevice {
