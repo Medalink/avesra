@@ -8,6 +8,6 @@ if($Suite -eq 'Static'){
  Invoke-Checked pnpm @('-r','check')
 }else{
  Invoke-Checked pnpm @('-r','build')
- Invoke-Checked cargo @('build','--workspace','--release','--locked')
+ Invoke-Checked cargo @('build','--workspace','--release','--locked','--features','avesra-desktop/custom-protocol')
 }
 Write-Output "$Suite completed. Automated tests and live acceptance were not run."
