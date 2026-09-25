@@ -384,6 +384,8 @@ impl Issuance {
         self.pending.admission.current(generation)?;
         #[derive(Serialize)]
         struct Wire<'a> {
+            #[serde(rename = "type")]
+            kind: &'static str,
             version: u16,
             challenge: &'a browser::Challenge,
             pairing: PairingRef,
@@ -396,6 +398,7 @@ impl Issuance {
         }
         let frame = Zeroizing::new(
             serde_json::to_vec(&Wire {
+                kind: "issued",
                 version: browser::VERSION,
                 challenge: &self.pending.challenge,
                 pairing: self.saved.binding.pairing,

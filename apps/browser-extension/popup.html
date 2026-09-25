@@ -1,1 +1,10 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><link rel="stylesheet" href="popup.css"><title>Avesra companion</title></head><body><h1>Avesra</h1><p id="status" role="status">Not connected</p><p>This profile has no active page-reading or action permissions. Complete authenticated setup in the Windows app.</p><button id="connect">Connect companion</button><button id="disconnect">Disconnect</button><script type="module" src="popup.js"></script></body></html>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><link rel="stylesheet" href="popup.css"><title>Avesra companion</title></head><body>
+<header><h1>Avesra</h1><span id="chip" class="av-chip">Disconnected</span></header>
+<div class="av-card"><span class="av-kicker">Browser installation</span><p id="status" role="status">Not connected</p>
+<div id="compare-block" hidden><label for="comparison">Compare in Windows Settings</label><p id="comparison"></p></div>
+<div id="installation-block" hidden><label>Installation ID</label><div id="installation" class="identity"></div></div>
+<p>This identifies extension storage, not a browser account or filesystem profile.</p></div>
+<p>Start browser pairing in Avesra’s Windows Settings, then connect here. Page reading and browser actions have no granted scope.</p>
+<div class="row"><button id="connect" class="av-btn">Connect companion</button><button id="disconnect" class="av-btn av-btn-ghost">Disconnect</button></div>
+<div id="recovery" class="recovery" hidden><label>Saved credential revision</label><div id="revision" class="identity"></div><p>Removing this local credential does not remove its saved Windows pairing.</p><div class="row"><button id="forget" class="av-btn av-btn-ghost">Forget this revision</button></div></div>
+<script type="module" src="popup.js"></script></body></html>

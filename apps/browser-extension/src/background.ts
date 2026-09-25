@@ -1,78 +1,115 @@
+import * as p from "./protocol.js";
 let port: chrome.runtime.Port | null = null;
-let state = "Not connected";
 let generation = 0;
-function closeOwned(owned: chrome.runtime.Port, epoch: number, reason: string) {
-  if (port !== owned || epoch !== generation) return;
-  port = null;
-  generation++;
-  state = reason;
-  owned.disconnect();
+let state = "Not connected";
+let comparison = "";
+let installation = "";
+let savedPairing: p.Pairing | null = null;
+let connected = false;
+let busy = false;
+let poll: ReturnType<typeof setTimeout> | undefined;
+function current(owned: chrome.runtime.Port, epoch: number) { return owned === port && generation === epoch; }
+function close(reason: string, owned = port, epoch = generation) {
+  if (owned !== port || epoch !== generation) return;
+  port = null; generation++; state = reason; connected = false; comparison = "";
+  clearTimeout(poll); poll = undefined; owned?.disconnect();
+}
+function snapshot() { return { state, comparison, installation, pairing: savedPairing, connected, busy: busy || p.isWriting() }; }
+async function connect() {
+  if (port || busy || p.isWriting()) return;
+  busy = true; state = "Reading this installation";
+  const epoch = ++generation;
+  try {
+    const loaded = await p.load();
+    if (generation !== epoch) return;
+    installation = loaded.installation; savedPairing = loaded.record?.pairing ?? null;
+    let record = loaded.record;
+    const connection = crypto.randomUUID(), nonce = p.nonce();
+    const owned = chrome.runtime.connectNative("com.avesra.companion");
+    port = owned; state = "Connecting to the Settings pairing window";
+    let challenge: p.Challenge | null = null, handling = false, waiting = true, sequence = 0;
+    let phase: "challenge" | "pending" | "proof" | "authenticated" = "challenge";
+    function send(value: unknown) {
+      if (!current(owned, epoch)) throw new Error("Connection changed");
+      waiting = true; owned.postMessage(value);
+    }
+    function schedule() {
+      if (!current(owned, epoch) || !challenge) return;
+      poll = setTimeout(() => {
+        if (!current(owned, epoch) || !challenge || waiting || handling) return;
+        send({ type: "poll", body: { session: challenge.session, sequence: ++sequence } });
+      }, 1000);
+    }
+    async function authenticate() {
+      if (!challenge || !record) throw new Error("Pairing unavailable");
+      const proof = await p.proof(challenge, record, nonce);
+      if (!current(owned, epoch)) return;
+      phase = "proof"; state = "Verifying saved pairing";
+      send({ type: "authenticate", body: { version: 2, session: challenge.session, challenge: challenge.challenge, pairing: record.pairing, proof } });
+    }
+    async function receive(value: unknown) {
+      if (!current(owned, epoch)) return;
+      if (handling || !waiting) throw new Error("Unexpected native response");
+      handling = true; waiting = false;
+      try {
+        if (JSON.stringify(value).length > 65536) throw new Error("Native response exceeds limit");
+        if (p.object(value, ["type", "body"]) && value.type === "challenge" && p.challenge(value.body)) {
+          if (phase !== "challenge" || value.body.installation !== installation || value.body.connection !== connection || !p.equal(value.body.pairing, savedPairing)) throw new Error("Native challenge mismatch");
+          challenge = value.body; const code = await p.comparison(challenge);
+          if (!current(owned, epoch)) return;
+          comparison = code;
+          if (record) await authenticate();
+          else { phase = "pending"; state = "Compare this code and approve once in Windows Settings"; schedule(); }
+        } else if (p.object(value, ["type", "version", "challenge", "pairing", "credential"]) && value.type === "issued" && value.version === 2 && p.challenge(value.challenge) && p.pairing(value.pairing) && p.hex(value.credential)) {
+          const next = value.challenge;
+          if (phase !== "pending" || record || !challenge || next.session !== challenge.session || next.challenge !== challenge.challenge || next.nonce !== challenge.nonce || next.installation !== installation || next.connection !== connection || !p.equal(next.pairing, value.pairing)) throw new Error("Issued pairing mismatch");
+          record = { version: 1, installation, pairing: value.pairing, credential: value.credential };
+          // A disconnect while persistence is in flight may leave a saved unconfirmed
+          // record. Never rollback/reissue automatically or publish for the old port.
+          await p.persist(record);
+          if (!current(owned, epoch)) return;
+          savedPairing = record.pairing; challenge = next; await authenticate();
+        } else if (p.object(value, ["type", "body"]) && value.type === "authenticated" && p.object(value.body, ["version", "session", "installation", "connection", "pairing", "generation"])) {
+          const body = value.body;
+          if (phase !== "proof" || !challenge || !record || body.version !== 2 || body.session !== challenge.session || body.installation !== installation || body.connection !== connection || !p.pairing(body.pairing) || !p.equal(body.pairing, record.pairing) || !Number.isSafeInteger(body.generation) || Number(body.generation) <= 0) throw new Error("Authentication reply mismatch");
+          phase = "authenticated"; connected = true; comparison = ""; state = "Paired connection · no page permissions"; schedule();
+        } else if (p.object(value, ["type", "session", "sequence", "state"]) && value.type === "status") {
+          if (!challenge || value.session !== challenge.session || value.sequence !== sequence || !["pending", "authenticated"].includes(phase) || value.state !== (phase === "authenticated" ? "authenticated_no_scopes" : "pending")) throw new Error("Native status mismatch");
+          schedule();
+        } else throw new Error("Invalid native response");
+      } finally { handling = false; }
+    }
+    owned.onMessage.addListener((value: unknown) => {
+      void receive(value).catch(() => close("Connection or persistence unavailable. Check saved pairings before retrying.", owned, epoch));
+    });
+    owned.onDisconnect.addListener(() => {
+      const failed = chrome.runtime.lastError;
+      if (!current(owned, epoch)) return;
+      close(failed ? "Native companion unavailable or expired. Open pairing in Windows Settings." : "Disconnected", owned, epoch);
+    });
+    send({ type: "hello", body: { version: 2, installation, connection, extension: chrome.runtime.id, nonce, pairing: savedPairing } });
+  } catch {
+    if (generation === epoch) {
+      const identity = await p.recoveryIdentity().catch(() => null);
+      if (generation === epoch) { savedPairing = identity; close("Setup or saved pairing unavailable; nothing was replaced."); }
+    }
+  }
+  finally { busy = false; }
 }
 chrome.runtime.onMessage.addListener((message: unknown, sender, reply) => {
-  if (
-    sender.id !== chrome.runtime.id ||
-    sender.url !== chrome.runtime.getURL("popup.html")
-  )
-    return false;
-  if (!message || typeof message !== "object" || Array.isArray(message) || Object.keys(message).length !== 1 || !("operation" in message))
-    return false;
-  const operation = (message as { operation: unknown }).operation;
-  if (operation === "status") {
-    reply({ state });
-    return false;
+  if (sender.id !== chrome.runtime.id || sender.url !== chrome.runtime.getURL("popup.html")) return false;
+  if (p.object(message, ["operation"])) {
+    if (message.operation === "status") { reply(snapshot()); return false; }
+    if (message.operation === "connect") { void connect().then(() => reply(snapshot())); return true; }
+    if (message.operation === "disconnect") { close("Disconnected"); reply(snapshot()); return false; }
   }
-  if (operation === "connect") {
-    if (!port) {
-      try {
-        const owned = chrome.runtime.connectNative("com.avesra.companion");
-        const epoch = ++generation;
-        port = owned;
-        state = "Connecting";
-        owned.onMessage.addListener((data: unknown) => {
-          if (port !== owned || epoch !== generation) return;
-          if (
-            data &&
-            typeof data === "object" &&
-            !Array.isArray(data) &&
-            Object.keys(data).length === 3 &&
-            "version" in data && data.version === 1 &&
-            "reason" in data && data.reason === "authenticated_browser_control_not_configured" &&
-            "status" in data &&
-            data.status === "unavailable"
-          )
-            state =
-              "Companion reached; authenticated browser control unavailable";
-          else {
-            closeOwned(owned, epoch, "Invalid native response");
-          }
-        });
-        owned.onDisconnect.addListener(() => {
-          const failed = chrome.runtime.lastError;
-          if (port !== owned || epoch !== generation) return;
-          state = failed
-            ? "Native host unavailable. Complete Avesra setup."
-            : "Disconnected";
-          port = null;
-          generation++;
-        });
-        owned.postMessage({ version: 1, type: "status" });
-      } catch {
-        state = "Native host unavailable. Complete Avesra setup.";
-        const owned = port;
-        port = null; generation++;
-        owned?.disconnect();
-      }
-    }
-    reply({ state });
-    return false;
-  }
-  if (operation === "disconnect") {
-    const owned = port;
-    port = null;
-    generation++;
-    state = "Disconnected";
-    owned?.disconnect();
-    reply({ state });
+  if (p.object(message, ["operation", "pairing"]) && message.operation === "forget" && p.pairing(message.pairing) && !busy && !p.isWriting()) {
+    close("Removing this installation's saved credential"); busy = true;
+    const epoch = generation;
+    void p.forget(message.pairing).then(() => { if (generation === epoch) { savedPairing = null; state = "Local credential removed. Revoke its saved revision in Windows Settings too."; } })
+      .catch(() => { if (generation === epoch) state = "Local removal uncertain; saved revision was not replaced."; })
+      .finally(() => { busy = false; reply(snapshot()); });
+    return true;
   }
   return false;
 });
