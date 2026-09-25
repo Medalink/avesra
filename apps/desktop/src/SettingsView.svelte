@@ -6,6 +6,7 @@
   import ShortcutSettings from "./ShortcutSettings.svelte";
   import EnrollmentView from "./EnrollmentView.svelte";
   import AppCatalog from "./AppCatalog.svelte";
+  import BrowserSetup from "./BrowserSetup.svelte";
   import type { SignalFrame } from "./Signal.svelte";
   import type { Runtime, Settings, AudioDevice } from "./runtime";
   import { command, native } from "./runtime";
@@ -412,18 +413,7 @@
           <section class="section">
             <span class="av-kicker">Machines</span>
             <Pairing connected={!!runtime?.connected} />
-            <div class="av-card p-4">
-              <div class="row">
-                <div>
-                  <h2>This PC</h2>
-                  <p class="av-hint mt-1">
-                    Audio, local controls and desktop tools
-                  </p>
-                </div>
-                <span class="av-chip text-zinc-300 ring-white/15">Local</span>
-              </div>
-              <p class="av-hint mt-3">Client inference is disabled.</p>
-            </div>
+            <BrowserSetup {runtime} />
           </section>
           <section class="section">
             <span class="av-kicker">Overlay</span>

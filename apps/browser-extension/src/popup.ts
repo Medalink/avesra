@@ -5,7 +5,7 @@ async function send(operation: string) {
   const generation = ++publication;
   try {
     const response: unknown = await chrome.runtime.sendMessage(operation === "forget" ? { operation, pairing: saved } : { operation });
-    if (generation !== publication || !object(response, ["state", "comparison", "installation", "pairing", "connected", "busy"]) || typeof response.state !== "string" || typeof response.comparison !== "string" || typeof response.installation !== "string" || typeof response.connected !== "boolean" || typeof response.busy !== "boolean") return;
+    if (generation !== publication || !object(response, ["state", "displayPhase", "tone", "comparison", "installation", "pairing", "connected", "busy"]) || typeof response.state !== "string" || typeof response.displayPhase !== "string" || !["error", "unavailable", "paired"].includes(String(response.tone)) || typeof response.comparison !== "string" || typeof response.installation !== "string" || typeof response.connected !== "boolean" || typeof response.busy !== "boolean") return;
     document.getElementById("status")!.textContent = response.state;
     document.getElementById("comparison")!.textContent = response.comparison;
     document.getElementById("compare-block")!.hidden = !response.comparison;
@@ -15,8 +15,10 @@ async function send(operation: string) {
     document.getElementById("recovery")!.hidden = !saved;
     document.getElementById("revision")!.textContent = saved ? `${saved.id} / ${saved.revision}` : "";
     const chip = document.getElementById("chip")!;
-    chip.textContent = response.connected ? "Paired · no scopes" : "Disconnected";
-    chip.classList.toggle("connected", response.connected);
+    chip.textContent = response.displayPhase;
+    chip.classList.toggle("connected", response.tone === "paired");
+    chip.classList.toggle("unavailable", response.tone === "unavailable");
+    chip.classList.toggle("error", response.tone === "error");
     (document.getElementById("connect") as HTMLButtonElement).disabled = response.busy || response.connected;
     (document.getElementById("forget") as HTMLButtonElement).disabled = response.busy || !saved;
   } catch { if (generation === publication) document.getElementById("status")!.textContent = "Extension state unavailable. Reopen this popup."; }
