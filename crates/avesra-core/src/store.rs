@@ -19,7 +19,7 @@ impl Store {
                     |r| Ok((r.get(0)?, r.get(1)?)),
                 )
                 .map_err(|_| ErrorCode::Storage)?;
-            if count != 1 || !matches!(version, Some(1 | 2)) {
+            if count != 1 || !matches!(version, Some(1..=3)) {
                 return Err(ErrorCode::Unsupported);
             }
         } else {
@@ -54,8 +54,9 @@ impl Store {
           CREATE TABLE IF NOT EXISTS ledger_approvals(id TEXT PRIMARY KEY, action_revision TEXT NOT NULL REFERENCES action_revisions(revision), body TEXT NOT NULL, consumed INTEGER NOT NULL DEFAULT 0, revoked INTEGER NOT NULL DEFAULT 0);
           CREATE TABLE IF NOT EXISTS ledger_events(id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL REFERENCES tasks(id), step_id TEXT, kind TEXT NOT NULL, at_ms INTEGER NOT NULL);
           CREATE TABLE IF NOT EXISTS reconciliation_evidence(dispatch_id TEXT PRIMARY KEY REFERENCES dispatch_bindings(dispatch_id), evidence_id TEXT NOT NULL, actor_id TEXT NOT NULL, outcome TEXT NOT NULL, at_ms INTEGER NOT NULL);
+          CREATE TABLE IF NOT EXISTS native_observations(dispatch_id TEXT PRIMARY KEY REFERENCES dispatch_bindings(dispatch_id), target_id TEXT NOT NULL, action_revision TEXT NOT NULL REFERENCES action_revisions(revision), body TEXT NOT NULL, at_ms INTEGER NOT NULL);
           DELETE FROM schema_version;
-          INSERT INTO schema_version VALUES(2);
+          INSERT INTO schema_version VALUES(3);
         ").map_err(|_|ErrorCode::Storage)?;
         // A crash cannot prove a running mutation failed or succeeded.
         tx.execute(

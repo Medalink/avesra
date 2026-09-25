@@ -70,6 +70,61 @@ fn event(
 }
 
 impl Store {
+    /// Recheck an already claimed exact revision immediately before its native
+    /// commit boundary. Consumed approval is valid only for this bound dispatch.
+    pub fn validate_dispatch(
+        &self,
+        permit: &DispatchPermit,
+        session: &DispatchSession,
+        now_ms: u64,
+    ) -> Result<(), ErrorCode> {
+        if !session.active
+            || session.actor_id != permit.action.actor_id
+            || session.device_id != permit.device_id
+            || session.session_id != permit.session_id
+            || session.capture_epoch != permit.capture_epoch
+            || session.action_epoch != permit.action_epoch
+            || permit.dispatch_id.is_nil()
+        {
+            return Err(ErrorCode::Stale);
+        }
+        let (body, state, cancelled): (String,String,bool) = sql(self.connection.query_row(
+            "SELECT a.body,s.state,a.cancel_requested OR i.cancel_requested FROM action_revisions a JOIN action_heads h ON h.revision=a.revision JOIN steps s ON s.id=a.step_id JOIN accepted_intents i ON i.task_id=s.task_id JOIN dispatch_bindings d ON d.dispatch_id=a.dispatch_id WHERE a.dispatch_id=?1 AND d.actor_id=?2 AND d.device_id=?3 AND d.session_id=?4 AND d.capture_epoch=?5 AND d.action_epoch=?6",
+            params![permit.dispatch_id.to_string(),session.actor_id.to_string(),session.device_id.to_string(),session.session_id.to_string(),session.capture_epoch.to_string(),session.action_epoch.to_string()],
+            |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))))?;
+        if cancelled
+            || decode::<TaskState>(&state)? != TaskState::Running
+            || decode::<Action>(&body)? != permit.action
+        {
+            return Err(ErrorCode::Stale);
+        }
+        let (payloads,explicit_submit):(String,bool)=sql(self.connection.query_row("SELECT payloads,explicit_submit FROM accepted_intents WHERE task_id=?1 AND actor_id=?2 AND revision=?3 AND sealed=1",params![permit.action.task_id.to_string(),session.actor_id.to_string(),permit.action.intent_revision.to_string()],|r|Ok((r.get(0)?,r.get(1)?))))?;
+        let (body, revoked): (String, bool) = sql(self.connection.query_row(
+            "SELECT body,revoked FROM ledger_grants WHERE id=?1",
+            [permit.action.grant_id.to_string()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        ))?;
+        let mut grant: Grant = decode(&body)?;
+        grant.revoked |= revoked;
+        let approval = if let Some(id) = permit.action.approval_id {
+            let body:Option<String>=sql(self.connection.query_row("SELECT body FROM ledger_approvals WHERE id=?1 AND action_revision=?2 AND consumed=1 AND revoked=0",params![id.to_string(),permit.action.revision.to_string()],|r|r.get(0)).optional())?;
+            body.map(|body| decode::<Approval>(&body)).transpose()?
+        } else {
+            None
+        };
+        PolicyContext {
+            actor_id: session.actor_id,
+            accepted_task_id: permit.action.task_id,
+            intent_revision: permit.action.intent_revision,
+            permitted_payloads: &decode::<Vec<ActionPayload>>(&payloads)?,
+            now_ms,
+            grant: &grant,
+            approval: approval.as_ref(),
+            explicit_submit,
+            session_active: session.active,
+        }
+        .authorize(&permit.action)
+    }
     /// Resolve uncertainty without issuing another effect. Remaining work stays
     /// suspended and requires a new accepted task/intent, not mutation replay.
     pub fn reconcile_action(
@@ -386,7 +441,7 @@ impl Store {
             return Err(ErrorCode::Malformed);
         }
         if sql(self.connection.execute(
-            "UPDATE ledger_approvals SET revoked=1 WHERE id=?1 AND consumed=0",
+            "UPDATE ledger_approvals SET revoked=1 WHERE id=?1",
             [id.to_string()],
         ))? != 1
         {
@@ -593,6 +648,16 @@ impl Store {
         outcome: Outcome,
         now_ms: u64,
     ) -> Result<(), ErrorCode> {
+        self.finish_observed_action(dispatch, session, outcome, None, now_ms)
+    }
+    pub fn finish_observed_action(
+        &mut self,
+        dispatch: Uuid,
+        session: &DispatchSession,
+        outcome: Outcome,
+        observation: Option<&crate::execution::EffectObservation>,
+        now_ms: u64,
+    ) -> Result<(), ErrorCode> {
         if dispatch.is_nil()
             || !session.active
             || [session.actor_id, session.device_id, session.session_id]
@@ -611,6 +676,19 @@ impl Store {
         if action.actor_id != session.actor_id || decode::<TaskState>(&state)? != TaskState::Running
         {
             return Err(ErrorCode::InvalidTransition);
+        }
+        if let Some(observation) = observation {
+            observation.validate(&action, outcome)?;
+            sql(tx.execute(
+                "INSERT INTO native_observations VALUES(?1,?2,?3,?4,?5)",
+                params![
+                    dispatch.to_string(),
+                    action.target_id.to_string(),
+                    action.revision.to_string(),
+                    encode(observation)?,
+                    clock(now_ms)?
+                ],
+            ))?;
         }
         let next = match outcome {
             Outcome::Success => TaskState::Succeeded,

@@ -224,6 +224,7 @@ name = "avesra-windows"
 version = "0.1.0"
 dependencies = [
  "avesra-contracts",
+ "avesra-core",
  "cpal",
  "rubato",
  "serde",

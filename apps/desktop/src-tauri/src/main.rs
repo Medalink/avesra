@@ -45,6 +45,7 @@ struct Runtime {
     acknowledged_session: Mutex<Option<connection::SessionIdentity>>,
     setup: setup::Setup,
     media: media::MediaWorker,
+    effects: avesra_windows::effects::NativeEffects,
     local: Mutex<LocalState>,
     writes: SyncSender<WriteSettings>,
     modes: tokio::sync::watch::Sender<ModeSnapshot>,
@@ -65,6 +66,17 @@ impl Runtime {
             self.connection_generation.load(Ordering::SeqCst),
         );
         self.media.publish(local);
+        self.effects.observe(
+            local.capture_epoch,
+            local.action_epoch,
+            local.connected
+                && local.enrolled
+                && local.voice_ready
+                && !local.locked
+                && !local.settings.paused
+                && !local.settings.explicit_mute
+                && !local.settings.deafened,
+        );
         self.modes.send_replace(ModeSnapshot::from(local));
     }
 }
@@ -411,10 +423,17 @@ fn main() {
             let (modes, _) = tokio::sync::watch::channel(ModeSnapshot::from(&local));
             let media = media::MediaWorker::spawn(app.handle().clone())?;
             media.publish(&local);
+            // Native target catalog and accepted-intent producer remain closed
+            // until authenticated setup. No model/webview can populate them.
+            let effects = avesra_windows::effects::NativeEffects::spawn(
+                directory.join("native-actions.db"),
+                Vec::new(),
+            )?;
             app.manage(Runtime {
                 acknowledged_session: Mutex::new(None),
                 setup: setup::Setup::default(),
                 media,
+                effects,
                 local: Mutex::new(local),
                 writes,
                 modes,
