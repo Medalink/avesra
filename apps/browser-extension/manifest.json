@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "description": "Connect a selected Chrome or Brave profile to the local Avesra companion.",
   "permissions": ["nativeMessaging", "storage"],
+  "optional_host_permissions": ["https://*/*"],
   "minimum_chrome_version": "106",
   "background": { "service_worker": "background.js", "type": "module" },
   "action": { "default_popup": "popup.html" },

@@ -18,11 +18,13 @@ use std::{
 };
 use tauri::Manager;
 use uuid::Uuid;
+pub mod scopes;
 
 #[derive(Default)]
 pub struct BrowserSetup {
     work: Arc<tokio::sync::Mutex<()>>,
     inner: Mutex<Inner>,
+    scopes: scopes::Coordinator,
 }
 #[derive(Default)]
 struct Inner {
@@ -40,6 +42,9 @@ struct Attempt {
     pending: Option<Confirmation>,
     approval: Option<ManagementProof>,
     selection: Option<Id>,
+    session: Option<Id>,
+    pairing: Option<browser::PairingRef>,
+    actor: Option<Uuid>,
     state: &'static str,
 }
 impl Attempt {
@@ -63,6 +68,7 @@ pub struct Status {
     selection: Option<Id>,
     action_epoch: u64,
     mode_allows_actions: bool,
+    scope: Option<browser::ScopeStatus>,
 }
 impl BrowserSetup {
     /// Caller lock order: Runtime.local -> browser.inner. Never does I/O.
@@ -73,6 +79,7 @@ impl BrowserSetup {
             inner.action_allowed = false;
             inner.attempt = None;
         }
+        self.scopes.invalidate();
     }
     pub fn settings_hidden(&self) {
         if let Ok(mut inner) = self.inner.lock() {
@@ -85,6 +92,7 @@ impl BrowserSetup {
                 inner.attempt = None;
             }
         }
+        self.scopes.invalidate();
     }
     /// Runtime.local owns every publication. Future document ingress must match
     /// this exact epoch even when a transport survives Stop/Pause for status.
@@ -92,6 +100,7 @@ impl BrowserSetup {
         if let Ok(mut inner) = self.inner.lock() {
             inner.action_epoch = local.action_epoch;
             inner.action_allowed = local.connected && !local.locked && !local.settings.paused;
+            self.scopes.observe(local);
         }
     }
 }
@@ -173,6 +182,7 @@ pub async fn revoke_browser_pairing(
             .checked_add(1)
             .ok_or("Restart Avesra")?;
         inner.attempt = None;
+        state.browser.scopes.invalidate();
         let work = state.browser.work.clone().try_lock_owned().map_err(
             |_| "Connection is closing. Refresh, then explicitly revoke the saved revision.",
         )?;
@@ -216,6 +226,7 @@ fn selection_change(
         .checked_add(1)
         .ok_or("Restart Avesra")?;
     inner.attempt = None;
+    state.browser.scopes.invalidate();
     let work = state
         .browser
         .work
@@ -421,6 +432,16 @@ pub fn browser_pairing_status(
         selection: active.and_then(|v| v.selection),
         action_epoch: inner.action_epoch,
         mode_allows_actions: inner.action_allowed,
+        scope: if let Some(attempt) = active {
+            state
+                .browser
+                .scopes
+                .status(&state, &local, inner.generation, attempt)
+                .map_err(|_| "Scope state unavailable")?
+        } else {
+            state.browser.scopes.invalidate();
+            None
+        },
     })
 }
 #[tauri::command]
@@ -443,6 +464,7 @@ pub fn cancel_browser_pairing(
         inner.generation = inner.generation.saturating_add(1);
         inner.settings_generation = inner.settings_generation.saturating_add(1);
         inner.attempt = None;
+        state.browser.scopes.invalidate();
     }
     Ok(())
 }
@@ -469,6 +491,7 @@ pub fn release_browser_management(
             && current.state == "authenticated_no_scopes"
             && current.current_time();
         inner.settings_generation = inner.settings_generation.saturating_add(1);
+        state.browser.scopes.invalidate();
         if !established {
             inner.generation = inner.generation.saturating_add(1);
             inner.attempt = None;
@@ -567,6 +590,7 @@ fn begin(
             .generation
             .checked_add(1)
             .ok_or("Restart Avesra to reset browser ownership")?;
+        state.browser.scopes.invalidate();
         inner.attempt = Some(Attempt {
             id,
             connection: state.connection_generation.load(Ordering::SeqCst),
@@ -575,6 +599,9 @@ fn begin(
             pending: None,
             approval: None,
             selection: None,
+            session: None,
+            pairing: None,
+            actor: None,
             state: "preparing",
         });
         inner.generation
@@ -751,6 +778,33 @@ async fn run(
             })?;
             let message: Client = browser::decode(&pipe.receive().await?)?;
             with_attempt(app, id, generation, |_, _, _| Ok(()))?;
+            let message = match message {
+                Client::ScopeResult {
+                    session,
+                    sequence: next,
+                    reference,
+                    action_epoch,
+                    permitted,
+                } if authenticated
+                    && session == challenge.session
+                    && sequence.checked_add(1) == Some(next) =>
+                {
+                    scopes::decision(
+                        app,
+                        id,
+                        generation,
+                        session,
+                        reference,
+                        action_epoch,
+                        permitted,
+                    )?;
+                    Client::Poll {
+                        session,
+                        sequence: next,
+                    }
+                }
+                other => other,
+            };
             match message {
                 Client::Disconnect { session } if session == challenge.session => return Ok(()),
                 Client::Poll {
@@ -829,7 +883,7 @@ async fn run(
                             }));
                         }
                     }
-                    let status = with_attempt(app, id, generation, |_, local, attempt| {
+                    let status = with_attempt(app, id, generation, |state, local, attempt| {
                         let value = browser::StatusReply {
                             version: browser::VERSION,
                             session: challenge.session,
@@ -849,6 +903,14 @@ async fn run(
                                         && !local.settings.paused,
                                 },
                             ),
+                            scope: if authenticated && attempt.selection.is_some() {
+                                state
+                                    .browser
+                                    .scopes
+                                    .status(state, local, generation, attempt)?
+                            } else {
+                                None
+                            },
                         };
                         value.validate()?;
                         Ok(value)
@@ -867,6 +929,9 @@ async fn run(
                         attempt.state = "authenticated_no_scopes";
                         attempt.pending = None;
                         attempt.selection = selected_revision;
+                        attempt.session = Some(response.session);
+                        attempt.pairing = Some(response.pairing);
+                        attempt.actor = Some(actor);
                         Ok(response)
                     })?;
                     pipe.send(
@@ -885,10 +950,11 @@ async fn run(
     .await;
     // Invalidate publication before waiting for potentially blocked storage. The
     // top-level owned slot is not released until the actual writer exits.
-    let _ = with_attempt(app, id, generation, |_, _, attempt| {
+    let _ = with_attempt(app, id, generation, |state, _, attempt| {
         attempt.pending = None;
         attempt.approval = None;
         attempt.state = "closing";
+        state.browser.scopes.invalidate();
         Ok(())
     });
     drop(pipe);

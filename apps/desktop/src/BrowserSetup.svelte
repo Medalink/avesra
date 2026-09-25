@@ -1,12 +1,13 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
+  import BrowserScopes from "./BrowserScopes.svelte";
   import SetupLock from "./SetupLock.svelte";
   import { command, native, type Runtime } from "./runtime";
   let { runtime }: { runtime: Runtime | null } = $props();
   type Pairing = { id: string; revision: string };
   type Confirmation = { installation: string; connection: string; session: string; challenge: string; extension: string; comparison: string };
-  type Status = { attempt: string | null; state: string; browser_app: string | null; browser_revision: string | null; browser_label: string | null; pending: Confirmation | null; selection: string | null; action_epoch: number; mode_allows_actions: boolean };
+  type Status = { attempt: string | null; state: string; browser_app: string | null; browser_revision: string | null; browser_label: string | null; pending: Confirmation | null; selection: string | null; action_epoch: number; mode_allows_actions: boolean; scope: {state: string; reference: Pairing; origin?: string; operations?: string[]; remaining_ms?: number} | null };
   type Alias = { id: string; phrase: string; name: string; target: string; target_revision: string; available: boolean };
   type Saved = { pairing: Pairing; available: boolean; binding: null | { label: string; installation: string; browser_app: string; browser_revision: string } };
   type Selected = { revision: string; selected: null | { revision: string; pairing: Pairing; actor: string }; binding: Saved["binding"]; available: boolean };
@@ -21,7 +22,7 @@
   const reportedActive = $derived(!!status?.attempt && ["preparing", "waiting_for_extension", "awaiting_owner", "saving", "awaiting_persistence_proof", "authenticating", "authenticated_no_scopes", "closing"].includes(status.state));
   const active = $derived(!!ownedAttempt || reportedActive);
   const unavailable = $derived(status?.state === "unavailable_refresh_saved_pairings" || (!status && !!ownedAttempt));
-  const stateLabel = $derived(status?.state === "authenticated_no_scopes" ? status.selection ? "Selected · no scopes" : "Paired · no scopes" : unavailable ? "Unavailable" : reportedActive ? "Pairing session" : !status ? "Not inspected" : "Not connected");
+  const stateLabel = $derived(status?.state === "authenticated_no_scopes" ? status.selection ? "Selected · paired" : "Paired" : unavailable ? "Unavailable" : reportedActive ? "Pairing session" : !status ? "Not inspected" : "Not connected");
   function invalidate() {
     const attempt = ownedAttempt; ownedAttempt = null;
     generation++; status = null; aliases = null; saved = null; selections = null; phrase = "";
@@ -152,7 +153,7 @@
 </div>
 {#if expanded}
   <div class="flex flex-col gap-3">
-    <SetupLock {runtime} purpose="browser pairing, selection and revocation" />
+    <SetupLock {runtime} purpose="browser pairing, selection, site scopes and revocation" />
     <div class="av-card flex flex-col gap-3 p-3.5">
       <div class="flex items-baseline justify-between gap-3"><span class="av-kicker">Selected browser installation</span><button class="av-btn av-btn-ghost av-btn-sm" disabled={!enabled || busy || active} onclick={refresh}>Refresh</button></div>
       <label class="av-label" for="browser-app">Owner-selected application name</label>
@@ -180,6 +181,7 @@
         <div class="mt-3 flex items-center justify-end gap-1.5"><button class="av-btn av-btn-ghost av-btn-sm" disabled={busy} onclick={cancel}>Decline</button><button class="av-btn av-btn-primary av-btn-sm" disabled={!enabled || busy} onclick={approve}>Approve once</button></div>
       </div>
     {/if}
+    <BrowserScopes {runtime} {status} />
     {#if saved !== null}
       <div class="av-card divide-y divide-white/[0.06]">
         {#each saved as record (`${record.pairing.id}:${record.pairing.revision}`)}

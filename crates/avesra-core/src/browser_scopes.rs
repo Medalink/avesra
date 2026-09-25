@@ -40,7 +40,7 @@ const GRANTS_SCHEMA: &str = "CREATE TABLE scopes(id TEXT PRIMARY KEY CHECK(lengt
 fn check_schema(db: &Connection) -> Result<bool, ErrorCode> {
     let objects: i64 = db
         .query_row(
-            "SELECT count(*) FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'",
+            "SELECT count(*) FROM sqlite_master WHERE name NOT GLOB 'sqlite_*'",
             [],
             |r| r.get(0),
         )

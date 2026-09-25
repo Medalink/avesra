@@ -3,7 +3,7 @@ use crate::ErrorCode;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error};
 use uuid::Uuid;
 
-pub const VERSION: u16 = 3;
+pub const VERSION: u16 = 4;
 pub const MAX_MESSAGE: usize = 65536;
 pub const HANDSHAKE_SECONDS: u64 = 45;
 
@@ -153,6 +153,50 @@ pub struct PairingRef {
     pub id: Id,
     pub revision: Id,
 }
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScopeRef {
+    pub id: Id,
+    pub revision: Id,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ScopeStatus {
+    Pending {
+        reference: ScopeRef,
+        origin: Origin,
+        operations: Vec<ScopeOperation>,
+        remaining_ms: u64,
+    },
+    Saving {
+        reference: ScopeRef,
+    },
+    Saved {
+        reference: ScopeRef,
+    },
+    Declined {
+        reference: ScopeRef,
+    },
+    Unavailable {
+        reference: ScopeRef,
+    },
+}
+impl ScopeStatus {
+    pub fn validate(&self) -> Result<(), ErrorCode> {
+        if let Self::Pending {
+            operations,
+            remaining_ms,
+            ..
+        } = self
+        {
+            validate_operations(operations)?;
+            if *remaining_ms == 0 || *remaining_ms > 45_000 {
+                return Err(ErrorCode::Expired);
+            }
+        }
+        Ok(())
+    }
+}
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Hello {
@@ -228,7 +272,17 @@ pub struct StatusReply {
     pub generation: u64,
     pub sequence: u64,
     pub state: Phase,
+    #[serde(deserialize_with = "required_nullable")]
     pub authority: Option<Authority>,
+    #[serde(deserialize_with = "required_nullable")]
+    pub scope: Option<ScopeStatus>,
+}
+fn required_nullable<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer)
 }
 impl StatusReply {
     pub fn validate(&self) -> Result<(), ErrorCode> {
@@ -246,6 +300,12 @@ impl StatusReply {
         {
             return Err(ErrorCode::Malformed);
         }
+        if let Some(scope) = &self.scope {
+            if self.authority.is_none() {
+                return Err(ErrorCode::Malformed);
+            }
+            scope.validate()?;
+        }
         Ok(())
     }
 }
@@ -259,8 +319,20 @@ impl StatusReply {
 pub enum Client {
     Hello(Hello),
     Authenticate(Authenticate),
-    Poll { session: Id, sequence: u64 },
-    Disconnect { session: Id },
+    Poll {
+        session: Id,
+        sequence: u64,
+    },
+    ScopeResult {
+        session: Id,
+        sequence: u64,
+        reference: ScopeRef,
+        action_epoch: u64,
+        permitted: bool,
+    },
+    Disconnect {
+        session: Id,
+    },
 }
 /// Canonical comparison input, independent of JSON field order/whitespace.
 /// Pairing is excluded because the native-generated pairing is issued only after
@@ -270,7 +342,7 @@ pub fn comparison_transcript(challenge: &Challenge) -> Result<Vec<u8>, ErrorCode
         return Err(ErrorCode::Unsupported);
     }
     Ok(format!(
-        "AVESRA-BROWSER-COMPARE-3\n{}\n{}\n{}\n{}\n{}\n",
+        "AVESRA-BROWSER-COMPARE-4\n{}\n{}\n{}\n{}\n{}\n",
         challenge.installation.uuid(),
         challenge.connection.uuid(),
         challenge.session.uuid(),
@@ -297,7 +369,7 @@ pub fn transcript(
         return Err(ErrorCode::Stale);
     }
     Ok(format!(
-        "AVESRA-BROWSER-AUTH-3\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n",
+        "AVESRA-BROWSER-AUTH-4\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n",
         pairing.id.uuid(),
         pairing.revision.uuid(),
         hello.installation.uuid(),

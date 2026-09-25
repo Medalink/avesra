@@ -4,7 +4,8 @@
 <div id="compare-block" hidden><label for="comparison">Compare in Windows Settings</label><p id="comparison"></p></div>
 <div id="installation-block" hidden><label>Installation ID</label><div id="installation" class="identity"></div></div>
 <p>This identifies extension storage, not a browser account or filesystem profile.</p></div>
-<p>Start browser pairing in Avesra’s Windows Settings, then connect here. Page reading and browser actions have no granted scope.</p>
+<p>Start browser pairing in Avesra’s Windows Settings, then connect here. Page reading and browser actions are not implemented yet.</p>
 <div class="row"><button id="connect" class="av-btn">Connect companion</button><button id="disconnect" class="av-btn av-btn-ghost">Disconnect</button></div>
+<div id="scope" class="av-card scope" hidden><span class="av-kicker">Site permission proposal</span><div id="scope-origin" class="identity"></div><p id="scope-operations"></p><p id="scope-outcome" role="status"></p><div id="scope-reference" class="identity"></div><p id="scope-note">Approve this exact site in Chrome. Saved scope metadata does not enable page actions yet.</p><div id="scope-actions" class="row"><button id="scope-decline" class="av-btn av-btn-ghost">Decline</button><button id="scope-approve" class="av-btn">Approve once</button></div></div>
 <div id="recovery" class="recovery" hidden><label>Saved credential revision</label><div id="revision" class="identity"></div><p>Removing this local credential does not remove its saved Windows pairing.</p><div class="row"><button id="forget" class="av-btn av-btn-ghost">Forget this revision</button></div></div>
 <script type="module" src="popup.js"></script></body></html>
