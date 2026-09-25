@@ -6,7 +6,9 @@ use avesra_contracts::{
 };
 use avesra_core::apps::AppRecord;
 use avesra_windows::{
-    browser_pairing::{Admission, Confirmation, Issuance, Saved, Selection, Store, Summary},
+    browser_pairing::{
+        Admission, Confirmation, Issuance, Saved, Selection, SelectionStatus, Store, Summary,
+    },
     browser_pipe::Listener,
 };
 use serde::Serialize;
@@ -158,6 +160,155 @@ pub async fn revoke_browser_pairing(
         if !crate::owner::matches_actor(&directory,actor) { return Err(ErrorCode::Unauthenticated); }
         Store::open(&directory.join("browser-pairings"))?.remove(pairing,&mut ||management_current(&app,generation,Some(&proof)))
     }).await.map_err(|_|"Browser revocation worker stopped")?.map_err(|_|"Revocation did not return a verified result. Refresh saved pairings before another explicit attempt.".into())
+}
+fn selection_change(
+    window: &tauri::WebviewWindow,
+    app: &tauri::AppHandle,
+) -> Result<(tokio::sync::OwnedMutexGuard<()>, u64, ManagementProof), String> {
+    let admitted = visible(window)?;
+    let state = app.state::<Runtime>();
+    let local = state.local.lock().map_err(|_| "Local state unavailable")?;
+    let mut inner = state
+        .browser
+        .inner
+        .lock()
+        .map_err(|_| "Browser setup unavailable")?;
+    if inner.generation != admitted {
+        return Err("Settings changed".into());
+    }
+    // Withdraw old connection admission before a durable selection mutation.
+    inner.generation = inner.generation.checked_add(1).ok_or("Restart Avesra")?;
+    inner.attempt = None;
+    let work = state
+        .browser
+        .work
+        .clone()
+        .try_lock_owned()
+        .map_err(|_| "Connection is closing. Refresh before changing its selection.")?;
+    let proof = state
+        .setup
+        .management_proof(&local, state.connection_generation.load(Ordering::SeqCst))?;
+    Ok((work, inner.generation, proof))
+}
+#[tauri::command]
+pub async fn browser_selections(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+) -> Result<Vec<SelectionStatus>, String> {
+    let generation = visible(&window)?;
+    let work = app
+        .state::<Runtime>()
+        .browser
+        .work
+        .clone()
+        .try_lock_owned()
+        .map_err(|_| "Close the browser connection before reading selection")?;
+    let actor = crate::owner::current_actor(&app).await?;
+    management_current(&app, generation, None).map_err(|_| "Settings changed")?;
+    let directory = app
+        .path()
+        .app_data_dir()
+        .map_err(|_| "Owner directory unavailable")?;
+    let owned_app = app.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let _work = work;
+        let mut values =
+            Store::open(&directory.join("browser-pairings"))?.selections(Id::new(actor)?)?;
+        for value in &mut values {
+            if let Some(binding) = &value.binding {
+                let inspected = owned_app
+                    .state::<Runtime>()
+                    .effects
+                    .with_app(
+                        actor,
+                        binding.browser_app.uuid(),
+                        binding.browser_revision.uuid(),
+                        Box::new(|| Ok(())),
+                    )
+                    .and_then(|reply| reply.recv().map_err(|_| ErrorCode::Unavailable)?);
+                value.available &= inspected.is_ok();
+            }
+        }
+        Ok::<_, ErrorCode>(values)
+    })
+    .await
+    .map_err(|_| "Browser selection reader stopped")?
+    .map_err(|_| "Browser selection is unavailable")?;
+    management_current(&app, generation, None).map_err(|_| "Settings changed")?;
+    Ok(result)
+}
+#[tauri::command]
+pub async fn select_browser_pairing(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    pairing: browser::PairingRef,
+) -> Result<(), String> {
+    let (work, generation, proof) = selection_change(&window, &app)?;
+    let actor = crate::owner::current_actor(&app).await?;
+    management_current(&app, generation, Some(&proof))
+        .map_err(|_| "Original verification expired")?;
+    let directory = app
+        .path()
+        .app_data_dir()
+        .map_err(|_| "Owner directory unavailable")?;
+    tokio::task::spawn_blocking(move || {
+        if !crate::owner::matches_actor(&directory, actor) {
+            return Err(ErrorCode::Unauthenticated);
+        }
+        let store = Store::open(&directory.join("browser-pairings"))?;
+        let actor_id = Id::new(actor)?;
+        let binding = store.load(pairing, actor_id)?.binding().clone();
+        let owned_app = app.clone();
+        // Keep store/work ownership in the actual catalog job, including when the
+        // async waiter is cancelled. Revalidation follows any catalog queue delay.
+        let reply = app.state::<Runtime>().effects.with_app(
+            actor,
+            binding.browser_app.uuid(),
+            binding.browser_revision.uuid(),
+            Box::new(move || {
+                let _retained_work = &work;
+                store.select(pairing, actor_id, &mut || {
+                    management_current(&owned_app, generation, Some(&proof))
+                })?;
+                Ok(())
+            }),
+        )?;
+        reply.recv().map_err(|_| ErrorCode::Unavailable)?
+    })
+    .await
+    .map_err(|_| "Browser selection worker stopped")?
+    .map_err(|_| {
+        "Selection did not return a verified result. Refresh to inspect the saved revision.".into()
+    })
+}
+#[tauri::command]
+pub async fn clear_browser_selection(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    revision: Id,
+) -> Result<(), String> {
+    let (work, generation, proof) = selection_change(&window, &app)?;
+    let actor = crate::owner::current_actor(&app).await?;
+    management_current(&app, generation, Some(&proof))
+        .map_err(|_| "Original verification expired")?;
+    let directory = app
+        .path()
+        .app_data_dir()
+        .map_err(|_| "Owner directory unavailable")?;
+    tokio::task::spawn_blocking(move || {
+        let _work = work;
+        if !crate::owner::matches_actor(&directory, actor) {
+            return Err(ErrorCode::Unauthenticated);
+        }
+        Store::open(&directory.join("browser-pairings"))?.clear_selection(revision, &mut || {
+            management_current(&app, generation, Some(&proof))
+        })
+    })
+    .await
+    .map_err(|_| "Browser selection worker stopped")?
+    .map_err(|_| {
+        "Clear did not return a verified result. Refresh to inspect the saved revision.".into()
+    })
 }
 fn visible(window: &tauri::WebviewWindow) -> Result<u64, String> {
     // Snapshot before the synchronous main-thread getter; no native lock is held

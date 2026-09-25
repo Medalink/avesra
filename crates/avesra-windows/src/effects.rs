@@ -74,6 +74,13 @@ enum Command {
         String,
         SyncSender<Result<avesra_core::apps::ResolvedApp, ErrorCode>>,
     ),
+    WithApp {
+        actor: Uuid,
+        id: Uuid,
+        revision: Uuid,
+        operation: CatalogAuthorization,
+        reply: SyncSender<Result<(), ErrorCode>>,
+    },
 }
 pub type CatalogAuthorization = Box<dyn FnMut() -> Result<(), ErrorCode> + Send>;
 /// Native-owned setup commands. Neither an alias nor registration grants effects.
@@ -272,6 +279,24 @@ impl NativeEffects {
                             let _ = reply.try_send(adapter.apps.resolve(actor, &phrase));
                             continue;
                         }
+                        Command::WithApp {
+                            actor,
+                            id,
+                            revision,
+                            mut operation,
+                            reply,
+                        } => {
+                            let result = adapter.apps.get(id).and_then(|record| {
+                                if record.selected_by != actor || record.revision != revision {
+                                    return Err(ErrorCode::Stale);
+                                }
+                                // The same catalog owner retains this exact mapping through
+                                // the native operation; queued revoke cannot interleave.
+                                operation()
+                            });
+                            let _ = reply.try_send(result);
+                            continue;
+                        }
                     };
                     let result =
                         controller.execute(job.step, &job.session, &job.cancellation, &mut adapter);
@@ -381,6 +406,30 @@ impl NativeEffects {
         let (reply, receive) = mpsc::sync_channel(1);
         self.send
             .try_send(Command::ResolveApp(actor, phrase, reply))
+            .map_err(|_| ErrorCode::Unavailable)?;
+        Ok(receive)
+    }
+    /// Native management only. Callback retains its actual resources if the
+    /// caller disappears; no second catalog owner or mutable identity rebinding.
+    pub fn with_app(
+        &self,
+        actor: Uuid,
+        id: Uuid,
+        revision: Uuid,
+        operation: CatalogAuthorization,
+    ) -> Result<Receiver<Result<(), ErrorCode>>, ErrorCode> {
+        if actor.is_nil() || id.is_nil() || revision.is_nil() {
+            return Err(ErrorCode::Malformed);
+        }
+        let (reply, receive) = mpsc::sync_channel(1);
+        self.send
+            .try_send(Command::WithApp {
+                actor,
+                id,
+                revision,
+                operation,
+                reply,
+            })
             .map_err(|_| ErrorCode::Unavailable)?;
         Ok(receive)
     }

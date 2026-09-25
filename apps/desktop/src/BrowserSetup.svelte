@@ -9,10 +9,12 @@
   type Status = { attempt: string | null; state: string; browser_app: string | null; browser_revision: string | null; browser_label: string | null; pending: Confirmation | null };
   type Alias = { id: string; phrase: string; name: string; target: string; target_revision: string; available: boolean };
   type Saved = { pairing: Pairing; available: boolean; binding: null | { label: string; installation: string; browser_app: string; browser_revision: string } };
+  type Selected = { revision: string; selected: null | { revision: string; pairing: Pairing; actor: string }; binding: Saved["binding"]; available: boolean };
   let expanded = $state(false), busy = $state(false), error = $state("");
   let status = $state<Status | null>(null), aliases = $state<Alias[] | null>(null), saved = $state<Saved[] | null>(null);
   let phrase = $state(""), panel = $state<string | null>(null);
   let ownedAttempt = $state<string | null>(null);
+  let selections = $state<Selected[] | null>(null);
   let lifetimeReady = $state(false);
   let mounted = false, generation = 0, refreshing = false, context = "";
   const enabled = $derived(native && lifetimeReady && !!runtime?.connected && !runtime.locked);
@@ -22,7 +24,7 @@
   const stateLabel = $derived(status?.state === "authenticated_no_scopes" ? "Paired · no scopes" : unavailable ? "Unavailable" : reportedActive ? "Pairing session" : "Not connected");
   function invalidate() {
     const attempt = ownedAttempt; ownedAttempt = null;
-    generation++; status = null; aliases = null; saved = null; phrase = "";
+    generation++; status = null; aliases = null; saved = null; selections = null; phrase = "";
     const owned = panel; panel = null;
     if (native && owned) void command("close_app_catalog", { panel: owned }).catch(() => {});
     if (native && attempt) void command("cancel_browser_pairing", { attempt }).catch(() => {});
@@ -62,11 +64,18 @@
     if (!mounted || current !== generation) return;
     status = next;
     // Roster reads have explicit admission; no automatic storage retry loop.
-    try { const records = await command<Saved[]>("saved_browser_pairings"); if (mounted && current === generation) saved = records; }
-    catch (e) { if (mounted && current === generation) { saved = null; error = String(e); } }
+    await refreshSaved(current);
   }); }
+  async function refreshSaved(current: number) {
+    try {
+      const records = await command<Saved[]>("saved_browser_pairings");
+      if (!mounted || current !== generation) return;
+      const selected = await command<Selected[]>("browser_selections");
+      if (mounted && current === generation) { saved = records; selections = selected; }
+    } catch (e) { if (mounted && current === generation) { saved = null; selections = null; error = String(e); } }
+  }
   function begin() { return run(async current => {
-    saved = null;
+    saved = null; selections = null;
     const attempt = await command<string>("begin_browser_pairing", { phrase });
     if (!mounted || current !== generation) { void command("cancel_browser_pairing", { attempt }).catch(() => {}); return; }
     ownedAttempt = attempt;
@@ -86,9 +95,20 @@
     if (mounted && current === generation) { status = null; ownedAttempt = null; }
   }); }
   function revoke(record: Saved) { return run(async current => {
+    saved = null; selections = null;
     await command("revoke_browser_pairing", { pairing: record.pairing });
-    const records = await command<Saved[]>("saved_browser_pairings");
-    if (mounted && current === generation) { saved = records; status = null; }
+    if (!mounted || current !== generation) return;
+    status = null; await refreshSaved(current);
+  }); }
+  function select(record: Saved) { return run(async current => {
+    selections = null;
+    await command("select_browser_pairing", { pairing: record.pairing });
+    if (mounted && current === generation) await refreshSaved(current);
+  }); }
+  function clearSelection(record: Selected) { return run(async current => {
+    selections = null;
+    await command("clear_browser_selection", { revision: record.revision });
+    if (mounted && current === generation) await refreshSaved(current);
   }); }
   async function toggle() {
     if (expanded) { await cancel(); expanded = false; invalidate(); }
@@ -121,7 +141,7 @@
 </div>
 {#if expanded}
   <div class="flex flex-col gap-3">
-    <SetupLock {runtime} purpose="browser pairing and revocation" />
+    <SetupLock {runtime} purpose="browser pairing, selection and revocation" />
     <div class="av-card flex flex-col gap-3 p-3.5">
       <div class="flex items-baseline justify-between gap-3"><span class="av-kicker">Selected browser installation</span><button class="av-btn av-btn-ghost av-btn-sm" disabled={!enabled || busy || active} onclick={refresh}>Refresh</button></div>
       <label class="av-label" for="browser-app">Owner-selected application name</label>
@@ -152,8 +172,15 @@
     {#if saved !== null}
       <div class="av-card divide-y divide-white/[0.06]">
         {#each saved as record (`${record.pairing.id}:${record.pairing.revision}`)}
-          <div class="flex items-start gap-3 px-3.5 py-2.5"><div class="min-w-0 flex-1"><span class="text-[12.5px] text-zinc-200">{record.binding?.label ?? "Unavailable saved record"}</span><p class="av-hint">{record.available ? "Saved; extension persistence and live connection are separate." : "Corrupt or foreign record; exact revision recovery remains available."}</p><p class="break-all font-mono text-[10.5px] leading-4 text-zinc-400">{record.pairing.id} / {record.pairing.revision}</p></div><button class="av-btn av-btn-ghost av-btn-sm" disabled={!enabled || busy || active} onclick={() => revoke(record)}>Revoke</button></div>
+          <div class="flex items-start gap-3 px-3.5 py-2.5"><div class="min-w-0 flex-1"><span class="text-[12.5px] text-zinc-200">{record.binding?.label ?? "Unavailable saved record"}</span><p class="av-hint">{record.available ? "Saved; extension persistence and live connection are separate." : "Corrupt or foreign record; exact revision recovery remains available."}</p><p class="break-all font-mono text-[10.5px] leading-4 text-zinc-400">{record.pairing.id} / {record.pairing.revision}</p>{#if record.binding}<p class="break-all font-mono text-[10.5px] leading-4 text-zinc-400">Installation: {record.binding.installation}<br />Application: {record.binding.browser_app} / {record.binding.browser_revision}</p>{/if}</div><div class="flex flex-col items-end gap-1.5"><button class="av-btn av-btn-secondary av-btn-sm" disabled={!enabled || busy || active || !record.available || selections === null || selections.length !== 0} onclick={() => select(record)}>Use installation</button><button class="av-btn av-btn-ghost av-btn-sm" disabled={!enabled || busy || active} onclick={() => revoke(record)}>Revoke</button></div></div>
         {:else}<p class="av-hint px-3.5 py-2.5">No saved browser pairings.</p>{/each}
+      </div>
+    {/if}
+    {#if selections !== null}
+      <div class="av-card divide-y divide-white/[0.06]">
+        {#each selections as selected (selected.revision)}
+          <div class="flex items-start gap-3 px-3.5 py-2.5"><div class="min-w-0 flex-1"><span class="text-[12.5px] text-zinc-200">{selected.available ? `Selected · ${selected.binding?.label}` : "Selected installation unavailable"}</span><p class="av-hint">{selected.available ? "Saved configuration only. No page scopes or task connection are active." : "Corrupt, ambiguous, missing credential or unavailable application. Clear this exact revision to recover."}</p><p class="break-all font-mono text-[10.5px] leading-4 text-zinc-400">Selection: {selected.revision}</p>{#if selected.selected}<p class="break-all font-mono text-[10.5px] leading-4 text-zinc-400">Pairing: {selected.selected.pairing.id} / {selected.selected.pairing.revision}</p>{/if}</div><button class="av-btn av-btn-ghost av-btn-sm" disabled={!enabled || busy || active} onclick={() => clearSelection(selected)}>Clear selection</button></div>
+        {:else}<p class="av-hint px-3.5 py-2.5">No installation selected. Choosing one does not grant page access or prove an account.</p>{/each}
       </div>
     {/if}
     {#if error}<p class="av-hint text-amber-200" role="alert">{error}</p>{/if}
