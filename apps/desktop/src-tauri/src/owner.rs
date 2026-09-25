@@ -51,6 +51,9 @@ fn read(path: &Path) -> Result<OwnerStatus, ErrorCode> {
         revision: Some(record.revision),
     })
 }
+pub fn matches_actor(directory: &Path, actor: Uuid) -> bool {
+    read(&directory.join("owner.db")).is_ok_and(|v| v.actor == Some(actor))
+}
 pub async fn current_actor(app: &tauri::AppHandle) -> Result<Uuid, String> {
     let state = app.state::<Runtime>();
     let _owner = state

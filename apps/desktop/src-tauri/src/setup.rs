@@ -22,6 +22,9 @@ impl ManagementProof {
         let Ok(local) = state.local.lock() else {
             return false;
         };
+        self.current_locked(state, &local)
+    }
+    fn current_locked(&self, state: &Runtime, local: &avesra_core::state::LocalState) -> bool {
         !local.locked
             && local.connected
             && self.0.verified_at.elapsed() < Duration::from_secs(60)
@@ -53,25 +56,21 @@ impl Setup {
     pub fn challenge(&self) -> u64 {
         self.generation.load(Ordering::SeqCst)
     }
-    fn consume_proof(
-        &self,
-        local: &avesra_core::state::LocalState,
-        generation: u64,
-    ) -> Result<(), String> {
-        self.management_proof(local, generation).map(|_| ())
-    }
     pub fn management_proof(
         &self,
         local: &avesra_core::state::LocalState,
         generation: u64,
     ) -> Result<ManagementProof, String> {
         let mut proof = self.proof.lock().map_err(|_| "Setup unavailable")?;
-        if !proof.as_ref().is_some_and(|proof| {
-            proof.challenge == self.generation.load(Ordering::SeqCst)
-                && proof.generation == generation
-                && proof.epoch == local.capture_epoch
-                && proof.verified_at.elapsed() < Duration::from_secs(60)
-        }) {
+        if local.locked
+            || !local.connected
+            || !proof.as_ref().is_some_and(|proof| {
+                proof.challenge == self.generation.load(Ordering::SeqCst)
+                    && proof.generation == generation
+                    && proof.epoch == local.capture_epoch
+                    && proof.verified_at.elapsed() < Duration::from_secs(60)
+            })
+        {
             return Err("Verify Windows Hello again for this management action".into());
         }
         Ok(ManagementProof(proof.take().ok_or("Setup unavailable")?))
@@ -185,11 +184,18 @@ pub async fn begin_enrollment(
     {
         return Err("Open Settings to enroll".into());
     }
-    let owner_actor = crate::owner::current_actor(&app).await?;
     let state = app.state::<Runtime>();
+    let proof = {
+        let local = state.local.lock().map_err(|_| "Local state unavailable")?;
+        state
+            .setup
+            .management_proof(&local, state.connection_generation.load(Ordering::SeqCst))?
+    };
+    let owner_actor = crate::owner::current_actor(&app).await?;
     {
         let local = state.local.lock().map_err(|_| "Local state unavailable")?;
-        if !local.connected
+        if !proof.current_locked(&state, &local)
+            || !local.connected
             || local.locked
             || local.settings.paused
             || local.settings.deafened
@@ -204,16 +210,6 @@ pub async fn begin_enrollment(
             .microphone
             .clone()
             .ok_or("Select a microphone first")?;
-        let mut proof = state.setup.proof.lock().map_err(|_| "Setup unavailable")?;
-        let valid = proof.as_ref().is_some_and(|proof| {
-            proof.challenge == state.setup.generation.load(Ordering::SeqCst)
-                && proof.generation == state.connection_generation.load(Ordering::SeqCst)
-                && proof.epoch == local.capture_epoch
-                && proof.verified_at.elapsed() < Duration::from_secs(60)
-        });
-        if !valid {
-            return Err("Verify Windows Hello again before enrollment".into());
-        }
         let mut active = state
             .setup
             .enrollment
@@ -232,7 +228,6 @@ pub async fn begin_enrollment(
             )
             .map_err(|e| e.to_string())?,
         );
-        *proof = None;
     }
     setup_status(window, app.state::<Runtime>()).await
 }
@@ -540,7 +535,7 @@ pub async fn finish_enrollment(
     if owner_actor != admission.1 {
         return Err("Enrollment owner changed".into());
     }
-    let candidate = {
+    let (candidate, context) = {
         let local = state.local.lock().map_err(|_| "Local state unavailable")?;
         let mut active = state
             .setup
@@ -555,18 +550,43 @@ pub async fn finish_enrollment(
         }) {
             return Err("Complete actual prompted and held-out collection first".into());
         }
-        active
+        let candidate = active
             .take()
             .ok_or("Enrollment unavailable")?
             .candidate(local.capture_epoch)
-            .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())?;
+        (
+            candidate,
+            (
+                local.capture_epoch,
+                state.setup.challenge(),
+                state.connection_generation.load(Ordering::SeqCst),
+                Instant::now(),
+            ),
+        )
     };
     let directory = app
         .path()
         .app_data_dir()
         .map_err(|_| "Profile directory unavailable")?;
     tauri::async_runtime::spawn_blocking(move || {
-        crate::profiles::save_candidate(&directory, &candidate)
+        crate::profiles::save_candidate(&directory, &candidate, &mut || {
+            if !crate::owner::matches_actor(&directory, owner_actor) {
+                return Err("Enrollment owner changed".into());
+            }
+            let state = app.state::<Runtime>();
+            let local = state.local.lock().map_err(|_| "Local state unavailable")?;
+            if local.locked
+                || !local.connected
+                || local.capture_epoch != context.0
+                || state.setup.challenge() != context.1
+                || state.connection_generation.load(Ordering::SeqCst) != context.2
+                || context.3.elapsed() >= Duration::from_secs(30)
+            {
+                return Err("Candidate publication expired; refresh stored status".into());
+            }
+            Ok(())
+        })
     })
     .await
     .map_err(|_| "Profile writer stopped")??;
@@ -595,32 +615,19 @@ pub async fn delete_speaker_candidate(
     id: uuid::Uuid,
     revision: uuid::Uuid,
 ) -> Result<(), String> {
-    settings_only(&window)?;
-    if !window
-        .is_visible()
-        .map_err(|_| "Settings window unavailable")?
-    {
-        return Err("Open Settings to remove a candidate".into());
-    }
-    let _owner_actor = crate::owner::current_actor(&app).await?;
-    let state = app.state::<Runtime>();
-    {
-        let mut local = state.local.lock().map_err(|_| "Local state unavailable")?;
-        state
-            .setup
-            .consume_proof(&local, state.connection_generation.load(Ordering::SeqCst))?;
-        local.capture_epoch = local.capture_epoch.saturating_add(1);
-        local.action_epoch = local.action_epoch.saturating_add(1);
-        local.refresh();
-        state.publish(&local);
-        let _ = app.emit("runtime-state", local.clone());
+    let (_, proof) = authorize_profile_selection(&window, &app)?;
+    let actor = crate::owner::current_actor(&app).await?;
+    if !proof.current(&app.state::<Runtime>()) {
+        return Err("Profile management expired".into());
     }
     let directory = app
         .path()
         .app_data_dir()
         .map_err(|_| "Profile directory unavailable")?;
     tauri::async_runtime::spawn_blocking(move || {
-        crate::profiles::remove_candidate(&directory, id, revision)
+        crate::profiles::remove_candidate(&directory, id, revision, &mut || {
+            authorize_profile_write(&app, &directory, actor, &proof)
+        })
     })
     .await
     .map_err(|_| "Profile writer stopped")?
@@ -628,16 +635,16 @@ pub async fn delete_speaker_candidate(
 fn authorize_profile_selection(
     window: &tauri::WebviewWindow,
     app: &tauri::AppHandle,
-) -> Result<Option<String>, String> {
+) -> Result<(Option<String>, ManagementProof), String> {
     settings_only(window)?;
     if !window.is_visible().map_err(|_| "Settings unavailable")? {
         return Err("Open Settings to manage profile selection".into());
     }
     let state = app.state::<Runtime>();
     let mut local = state.local.lock().map_err(|_| "Local state unavailable")?;
-    state
+    let mut proof = state
         .setup
-        .consume_proof(&local, state.connection_generation.load(Ordering::SeqCst))?;
+        .management_proof(&local, state.connection_generation.load(Ordering::SeqCst))?;
     let microphone = local.settings.microphone.clone();
     local.enrollment_capture = false;
     local.voice_ready = false;
@@ -646,10 +653,26 @@ fn authorize_profile_selection(
     local.action_epoch = local.action_epoch.saturating_add(1);
     local.refresh();
     state.publish(&local);
+    // This command's own serialized invalidation withdraws prior voice state.
+    // Rebind only that transition, preserving the consumed proof's expiry and
+    // connection identity; later invalidations still revoke this operation.
+    proof.0.challenge = state.setup.challenge();
+    proof.0.epoch = local.capture_epoch;
     let snapshot = local.clone();
     drop(local);
     let _ = app.emit("runtime-state", snapshot);
-    Ok(microphone)
+    Ok((microphone, proof))
+}
+fn authorize_profile_write(
+    app: &tauri::AppHandle,
+    directory: &std::path::Path,
+    actor: uuid::Uuid,
+    proof: &ManagementProof,
+) -> Result<(), String> {
+    if !crate::owner::matches_actor(directory, actor) || !proof.current(&app.state::<Runtime>()) {
+        return Err("Profile management expired or owner changed; refresh stored status".into());
+    }
+    Ok(())
 }
 #[tauri::command]
 pub async fn select_speaker_candidate(
@@ -658,16 +681,20 @@ pub async fn select_speaker_candidate(
     id: uuid::Uuid,
     revision: uuid::Uuid,
 ) -> Result<(), String> {
-    settings_only(&window)?;
-    let _owner_actor = crate::owner::current_actor(&app).await?;
-    let microphone = authorize_profile_selection(&window, &app)?
-        .ok_or("Select the enrollment microphone first")?;
+    let (microphone, proof) = authorize_profile_selection(&window, &app)?;
+    let microphone = microphone.ok_or("Select the enrollment microphone first")?;
+    let actor = crate::owner::current_actor(&app).await?;
+    if !proof.current(&app.state::<Runtime>()) {
+        return Err("Profile management expired".into());
+    }
     let directory = app
         .path()
         .app_data_dir()
         .map_err(|_| "Profile directory unavailable")?;
     tauri::async_runtime::spawn_blocking(move || {
-        crate::profiles::select_candidate(&directory, id, revision, &microphone)
+        crate::profiles::select_candidate(&directory, id, revision, &microphone, &mut || {
+            authorize_profile_write(&app, &directory, actor, &proof)
+        })
     })
     .await
     .map_err(|_| "Profile writer stopped")?
@@ -677,16 +704,22 @@ pub async fn clear_speaker_selection(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    settings_only(&window)?;
-    let _owner_actor = crate::owner::current_actor(&app).await?;
-    authorize_profile_selection(&window, &app)?;
+    let (_, proof) = authorize_profile_selection(&window, &app)?;
+    let actor = crate::owner::current_actor(&app).await?;
+    if !proof.current(&app.state::<Runtime>()) {
+        return Err("Profile management expired".into());
+    }
     let directory = app
         .path()
         .app_data_dir()
         .map_err(|_| "Profile directory unavailable")?;
-    tauri::async_runtime::spawn_blocking(move || crate::profiles::clear_selection(&directory))
-        .await
-        .map_err(|_| "Profile writer stopped")?
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::profiles::clear_selection(&directory, &mut || {
+            authorize_profile_write(&app, &directory, actor, &proof)
+        })
+    })
+    .await
+    .map_err(|_| "Profile writer stopped")?
 }
 #[tauri::command]
 pub async fn verify_setup(

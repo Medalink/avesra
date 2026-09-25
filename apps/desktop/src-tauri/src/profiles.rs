@@ -73,6 +73,7 @@ pub fn select_candidate(
     id: Uuid,
     revision: Uuid,
     microphone: &str,
+    authorize: &mut dyn FnMut() -> Result<(), String>,
 ) -> Result<(), String> {
     use std::io::Read;
     if id.is_nil() || revision.is_nil() {
@@ -135,6 +136,7 @@ pub fn select_candidate(
             .and_then(|_| file.sync_all())
             .map_err(|_| "Selection storage failed")?;
         drop(file);
+        authorize()?;
         std::fs::hard_link(&temporary, directory.join("speaker-selection.dpapi"))
             .map_err(|_| "Selection publication failed")?;
         Ok(())
@@ -142,8 +144,12 @@ pub fn select_candidate(
     let _ = std::fs::remove_file(temporary);
     result
 }
-pub fn clear_selection(directory: &Path) -> Result<(), String> {
+pub fn clear_selection(
+    directory: &Path,
+    authorize: &mut dyn FnMut() -> Result<(), String>,
+) -> Result<(), String> {
     let _lock = lock_directory(&directory.join("speaker-candidates"))?;
+    authorize()?;
     match std::fs::remove_file(directory.join("speaker-selection.dpapi")) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -226,7 +232,12 @@ pub fn list_candidates(directory: &Path) -> Result<Vec<CandidateSummary>, String
     }
     Ok(summaries)
 }
-pub fn remove_candidate(directory: &Path, id: Uuid, revision: Uuid) -> Result<(), String> {
+pub fn remove_candidate(
+    directory: &Path,
+    id: Uuid,
+    revision: Uuid,
+    authorize: &mut dyn FnMut() -> Result<(), String>,
+) -> Result<(), String> {
     if id.is_nil() || revision.is_nil() {
         return Err("Invalid candidate identity".into());
     }
@@ -234,16 +245,31 @@ pub fn remove_candidate(directory: &Path, id: Uuid, revision: Uuid) -> Result<()
         .join("speaker-candidates")
         .join(format!("{id}-{revision}.dpapi"));
     let _lock = lock_directory(&directory.join("speaker-candidates"))?;
-    if selected(directory)?
-        .is_some_and(|selected| selected.id == id && selected.revision == revision)
-    {
+    let is_selected = selected(directory)?
+        .is_some_and(|selected| selected.id == id && selected.revision == revision);
+    authorize()?;
+    if is_selected {
         std::fs::remove_file(directory.join("speaker-selection.dpapi"))
             .map_err(|_| "Selected profile could not be cleared")?;
+        authorize().map_err(
+            |_| "Selection was cleared, but candidate removal was cancelled; refresh stored status",
+        )?;
     }
-    std::fs::remove_file(path).map_err(|_| "Candidate could not be removed".into())
+    std::fs::remove_file(path).map_err(|_| {
+        if is_selected {
+            "Selection was cleared, but candidate removal failed; refresh stored status"
+        } else {
+            "Candidate could not be removed; refresh stored status"
+        }
+        .into()
+    })
 }
 
-pub fn save_candidate(directory: &Path, candidate: &Candidate) -> Result<(), String> {
+pub fn save_candidate(
+    directory: &Path,
+    candidate: &Candidate,
+    authorize: &mut dyn FnMut() -> Result<(), String>,
+) -> Result<(), String> {
     candidate
         .validate()
         .map_err(|_| "Invalid speaker candidate")?;
@@ -295,6 +321,7 @@ pub fn save_candidate(directory: &Path, candidate: &Candidate) -> Result<(), Str
             .and_then(|_| file.sync_all())
             .map_err(|_| "Candidate storage failed")?;
         drop(file);
+        authorize()?;
         std::fs::hard_link(&temporary, &destination).map_err(|_| "Candidate publication failed")?;
         Ok(())
     })();
