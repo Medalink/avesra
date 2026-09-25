@@ -69,6 +69,11 @@ enum Command {
         CatalogCommand,
         SyncSender<Result<Vec<avesra_core::apps::AppAlias>, ErrorCode>>,
     ),
+    ResolveApp(
+        Uuid,
+        String,
+        SyncSender<Result<avesra_core::apps::ResolvedApp, ErrorCode>>,
+    ),
 }
 pub type CatalogAuthorization = Box<dyn FnMut() -> Result<(), ErrorCode> + Send>;
 /// Native-owned setup commands. Neither an alias nor registration grants effects.
@@ -90,6 +95,7 @@ impl CatalogCommand {
     fn apply(
         self,
         apps: &mut avesra_core::apps::AppCatalog,
+        store: &Store,
     ) -> Result<Vec<avesra_core::apps::AppAlias>, ErrorCode> {
         match self {
             Self::List => {}
@@ -105,7 +111,12 @@ impl CatalogCommand {
                 mut authorize,
             } => apps.forget(id, revision, actor, &mut authorize)?,
         }
-        apps.aliases()
+        let mut values = apps.aliases()?;
+        for value in &mut values {
+            value.last_success_ms =
+                store.last_app_success(value.target, value.target_revision, value.selected_by)?;
+        }
+        Ok(values)
     }
 }
 
@@ -252,7 +263,13 @@ impl NativeEffects {
                             continue;
                         }
                         Command::Catalog(command, reply) => {
-                            let _ = reply.try_send(command.apply(&mut adapter.apps));
+                            let _ = reply.try_send(
+                                command.apply(&mut adapter.apps, controller.management()),
+                            );
+                            continue;
+                        }
+                        Command::ResolveApp(actor, phrase, reply) => {
+                            let _ = reply.try_send(adapter.apps.resolve(actor, &phrase));
                             continue;
                         }
                     };
@@ -347,6 +364,23 @@ impl NativeEffects {
         let (reply, receive) = mpsc::sync_channel(1);
         self.send
             .try_send(Command::Catalog(command, reply))
+            .map_err(|_| ErrorCode::Unavailable)?;
+        Ok(receive)
+    }
+    /// Authenticated native planner only; a resolved mapping is not authority.
+    /// Freeze its immutable app UUID in the proposal and recheck accepted scope.
+    pub fn resolve_app(
+        &self,
+        actor: Uuid,
+        phrase: String,
+    ) -> Result<Receiver<Result<avesra_core::apps::ResolvedApp, ErrorCode>>, ErrorCode> {
+        avesra_core::apps::alias_phrase(&phrase)?;
+        if actor.is_nil() {
+            return Err(ErrorCode::Malformed);
+        }
+        let (reply, receive) = mpsc::sync_channel(1);
+        self.send
+            .try_send(Command::ResolveApp(actor, phrase, reply))
             .map_err(|_| ErrorCode::Unavailable)?;
         Ok(receive)
     }

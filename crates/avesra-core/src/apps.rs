@@ -59,6 +59,14 @@ pub struct AppAlias {
     pub name: String,
     pub detail: String,
     pub available: bool,
+    /// Populated only from the owning execution ledger's validated observation.
+    pub last_success_ms: Option<u64>,
+}
+/// Lookup is a planning input, never an accepted intent or executable grant.
+pub struct ResolvedApp {
+    pub alias_id: Uuid,
+    pub alias_revision: Uuid,
+    pub record: AppRecord,
 }
 /// Canonical lookup key; a phrase never chooses an executable or grants rights.
 pub fn alias_phrase(value: &str) -> Result<String, ErrorCode> {
@@ -264,6 +272,7 @@ impl AppCatalog {
                 name: String::new(),
                 detail: String::new(),
                 available: false,
+                last_success_ms: None,
             };
             let (body, length, revoked): (String,i64,i64) = self.0.query_row("SELECT substr(body,1,32769),length(CAST(body AS BLOB)),revoked FROM apps WHERE id=?1 AND revision=?2",params![value.target.to_string(),value.target_revision.to_string()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(|_|ErrorCode::Malformed)?;
             if length > 32768 || !matches!(revoked, 0 | 1) {
@@ -286,6 +295,29 @@ impl AppCatalog {
             result.push(value);
         }
         Ok(result)
+    }
+    pub fn resolve(&self, actor: Uuid, phrase: &str) -> Result<ResolvedApp, ErrorCode> {
+        if actor.is_nil() {
+            return Err(ErrorCode::Malformed);
+        }
+        let phrase = alias_phrase(phrase)?;
+        let mut matches = self.aliases()?.into_iter().filter(|v| v.phrase == phrase);
+        let alias = matches.next().ok_or(ErrorCode::Denied)?;
+        if matches.next().is_some() {
+            return Err(ErrorCode::Malformed);
+        }
+        if alias.selected_by != actor || !alias.available {
+            return Err(ErrorCode::Denied);
+        }
+        let record = self.get(alias.target)?;
+        if record.revision != alias.target_revision || record.selected_by != actor {
+            return Err(ErrorCode::Stale);
+        }
+        Ok(ResolvedApp {
+            alias_id: alias.id,
+            alias_revision: alias.revision,
+            record,
+        })
     }
     pub fn forget(
         &mut self,

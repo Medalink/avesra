@@ -45,13 +45,15 @@ VPN connection changes network state and requires exact local approval. Navigati
 
 The configured Spark endpoint may use an owner-selected DNS name or IP address on HTTPS port 9474; its verified certificate must include the same DNS/IP subject alternative name. There is no global DNS override or certificate bypass. The setup default reflects the currently discovered Spark address, but the saved endpoint is explicit and editable before pairing. A disconnect invalidates pending pair/load generations as well as active sockets, so a delayed result cannot reconnect silently.
 
-## Durable execution ledger (schema 3)
+## Durable execution ledger (schema 4)
 
 `accept_intent` records the final controller-accepted actor, ordered exact payload list and explicit-submit scope. It is not exposed as a remotely supplied authority. `propose_action` stores immutable UUID revisions and the current head for each ordered step; changed arguments need a new accepted intent. `seal_task` requires the complete step count and freezes the plan before any claim. Grants are immutable scoped records; replacing scope means revoke plus new grant. Local approvals bind full arguments/revision and are revoked or consumed once.
 
 `claim_action` checks durable scope, current grant/approval, expiry, active authenticated session, sealed uncancelled plan and prior-step success in a single transaction. It commits a unique dispatch and exact actor/device/session/epoch binding before an effect is sent. Duplicate claims cannot issue another permit. `finish_action` requires the same binding and a currently running step. Cancellation stops queued work and marks running dispatches for cancellation; a late verified success records the real effect without resurrecting the cancelled task. Crash recovery turns running steps/tasks into unknown effects and queued/waiting work into suspended state.
 
 `reconcile_action` is reserved for authenticated local management with observed postcondition evidence; it resolves waiting/unknown outcomes without issuing an effect. Remaining work stays suspended and requires a new accepted task. No mutation can be blindly resumed by changing its state. The previous generic task-transition escape hatch is removed. These are durable core APIs; controller/owner-management wiring and live execution remain incomplete. No live database migration or effect workflow is claimed from static compilation.
+
+Schema 4 adds insert-only native finalization outcomes bound to dispatch/target/action revision/actor/time in the original result transaction. Historical application success requires this exact original Success plus a fully validated matching Application observation. Task/step reconciliation cannot change that outcome or establish native-observed success. Existing schemas 1–3 upgrade transactionally without inventing finalization rows for legacy observations; unsupported schemas still reject before mutation.
 
 ## Media packet and local speech adapter implementation
 

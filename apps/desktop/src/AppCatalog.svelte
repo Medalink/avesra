@@ -4,7 +4,7 @@
   import SetupLock from "./SetupLock.svelte";
   import { command, native, type Runtime } from "./runtime";
   let { runtime }: { runtime: Runtime | null } = $props();
-  type Alias = { id: string; revision: string; phrase: string; name: string; detail: string; available: boolean };
+  type Alias = { id: string; revision: string; phrase: string; name: string; detail: string; available: boolean; last_success_ms: number | null };
   type Candidate = { id: string; name: string; source: string; detail: string; arguments: string; working_directory: string | null; selectable: boolean };
   type Scan = { candidates: Candidate[]; skipped: number; truncated: boolean };
   let panel = $state<string | null>(null);
@@ -21,6 +21,11 @@
   function invalidate() { generation++; panel = null; aliases = null; scan = null; selected = ""; }
   const candidate = $derived(scan?.candidates.find(v => v.id === selected));
   const enabled = $derived(native && runtime?.connected && !runtime.locked);
+  function observedDate(value: number | null): string | null {
+    if (value === null || !Number.isSafeInteger(value) || value <= 0) return null;
+    const date = new Date(value);
+    return Number.isFinite(date.getTime()) ? date.toLocaleDateString() : null;
+  }
   $effect(() => {
     const next = `${runtime?.connected}:${runtime?.locked}`;
     if (next !== context) {
@@ -102,7 +107,7 @@
           <span class="truncate text-[12.5px] text-zinc-100">{alias.name}</span>
           <span class="av-hint truncate" title={alias.detail}>{alias.detail}</span>
         </div>
-        <span class="shrink-0 text-[11px] text-zinc-400" title={alias.available ? "Last successful launch is unavailable" : "The selected application is unavailable"}>{alias.available ? "Unverified" : "Unavailable"}</span>
+        <span class="shrink-0 text-[11px] text-zinc-400" title={observedDate(alias.last_success_ms) ? "Your last native-observed successful opening; current app state is not checked" : "Last successful launch is unavailable"}>{observedDate(alias.last_success_ms) ?? (alias.available ? "Unverified" : "Unavailable")}</span>
         <button class="av-iconbtn size-7 hover:bg-red-500/10 hover:text-red-300" disabled={!enabled || busy} onclick={() => forget(alias)} aria-label={`Forget ${alias.phrase}`} title="Forget">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"></path></svg>
         </button>

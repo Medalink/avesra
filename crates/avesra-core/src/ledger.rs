@@ -54,6 +54,54 @@ fn decode<T: DeserializeOwned>(value: &str) -> Result<T, ErrorCode> {
 fn sql<T>(value: rusqlite::Result<T>) -> Result<T, ErrorCode> {
     value.map_err(|_| ErrorCode::Storage)
 }
+
+impl Store {
+    /// Historical evidence only. Never authorizes a new effect or claims that a
+    /// process/window is still present. Use the existing ledger owner.
+    pub fn last_app_success(
+        &self,
+        target: Uuid,
+        catalog_revision: Uuid,
+        actor: Uuid,
+    ) -> Result<Option<u64>, ErrorCode> {
+        if target.is_nil() || catalog_revision.is_nil() || actor.is_nil() {
+            return Err(ErrorCode::Malformed);
+        }
+        let mut query = sql(self.connection.prepare("SELECT substr(o.body,1,4097),length(CAST(o.body AS BLOB)),substr(a.body,1,32769),length(CAST(a.body AS BLOB)),o.action_revision,o.at_ms,s.id,s.task_id,b.actor_id FROM native_observations o JOIN action_revisions a ON a.revision=o.action_revision AND a.dispatch_id=o.dispatch_id JOIN steps s ON s.id=a.step_id JOIN dispatch_bindings b ON b.dispatch_id=o.dispatch_id JOIN native_finalizations f ON f.dispatch_id=o.dispatch_id AND f.action_revision=o.action_revision AND f.target_id=o.target_id AND f.actor_id=b.actor_id AND f.at_ms=o.at_ms WHERE o.target_id=?1 AND s.target_id=?1 AND b.actor_id=?2 AND f.outcome='\"success\"' ORDER BY o.rowid DESC LIMIT 1"))?;
+        let mut rows = sql(query.query(params![target.to_string(), actor.to_string()]))?;
+        let Some(row) = sql(rows.next())? else {
+            return Ok(None);
+        };
+        let length: i64 = sql(row.get(1))?;
+        let action_length: i64 = sql(row.get(3))?;
+        if !(1..=4096).contains(&length) || !(1..=32768).contains(&action_length) {
+            return Err(ErrorCode::Malformed);
+        }
+        let observation: crate::execution::EffectObservation = decode(&sql::<String>(row.get(0))?)?;
+        let action: Action = decode(&sql::<String>(row.get(2))?)?;
+        action.validate(action.issued_at_ms)?;
+        if sql::<String>(row.get(4))? != action.revision.to_string()
+            || sql::<String>(row.get(6))? != action.step_id.to_string()
+            || sql::<String>(row.get(7))? != action.task_id.to_string()
+            || sql::<String>(row.get(8))? != action.actor_id.to_string()
+            || action.target_id != target
+            || action.actor_id != actor
+        {
+            return Err(ErrorCode::Malformed);
+        }
+        observation.validate(&action, Outcome::Success)?;
+        if !matches!(observation, crate::execution::EffectObservation::Application{app_id,catalog_revision: revision,..} if app_id==target && revision==catalog_revision)
+        {
+            return Err(ErrorCode::Malformed);
+        }
+        let at: i64 = sql(row.get(5))?;
+        let at = u64::try_from(at).map_err(|_| ErrorCode::Malformed)?;
+        if at == 0 || at < action.issued_at_ms {
+            return Err(ErrorCode::Malformed);
+        }
+        Ok(Some(at))
+    }
+}
 fn clock(value: u64) -> Result<i64, ErrorCode> {
     i64::try_from(value).map_err(|_| ErrorCode::Malformed)
 }
@@ -692,6 +740,19 @@ impl Store {
                 ],
             ))?;
         }
+        // Immutable original outcome: later reconciliation cannot rewrite this
+        // into invented observed success. Legacy observations have no row.
+        sql(tx.execute(
+            "INSERT INTO native_finalizations VALUES(?1,?2,?3,?4,?5,?6)",
+            params![
+                dispatch.to_string(),
+                action.target_id.to_string(),
+                action.revision.to_string(),
+                action.actor_id.to_string(),
+                encode(&outcome)?,
+                clock(now_ms)?
+            ],
+        ))?;
         let next = match outcome {
             Outcome::Success => TaskState::Succeeded,
             Outcome::Failed | Outcome::Unsupported => TaskState::Failed,
