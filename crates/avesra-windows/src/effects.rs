@@ -381,6 +381,7 @@ pub struct NativeEffects {
     send: SyncSender<Command>,
     browser_completion: SyncSender<BrowserCompletion>,
     browser_blocked: Arc<AtomicU64>,
+    browser_preparation: Mutex<Option<crate::browser_read_channel::PreparationReceiver>>,
     state: Arc<Mutex<State>>,
 }
 impl NativeEffects {
@@ -398,6 +399,8 @@ impl NativeEffects {
         let (send, receive) = mpsc::sync_channel::<Command>(16);
         let (browser_completion, browser_receive) = mpsc::sync_channel::<BrowserCompletion>(1);
         let browser_blocked = Arc::new(AtomicU64::new(1));
+        let (browser_preparation_owner, browser_preparation) =
+            crate::browser_read_channel::channel(browser_blocked.clone());
         let owned_browser = browser_blocked.clone();
         let state = Arc::new(Mutex::new(State {
             action_epoch: 0,
@@ -413,6 +416,9 @@ impl NativeEffects {
             .spawn(move || {
                 let _ownership = ownership;
                 let _browser_lifetime = BrowserWorkerLifetime(owned_browser.clone());
+                // Kept inside the actual owner. No offers are sent until the
+                // specialized dispatch/current-authority path is integrated.
+                let _browser_preparation_owner = browser_preparation_owner;
                 let Ok(store) = Store::open(&path) else {
                     return;
                 };
@@ -665,7 +671,19 @@ impl NativeEffects {
             state,
             browser_completion,
             browser_blocked,
+            browser_preparation: Mutex::new(Some(browser_preparation)),
         })
+    }
+    /// Native runtime only. No clone/replacement receiver or sender injection.
+    /// Taking this endpoint does not admit a read or construct an offer.
+    pub fn take_browser_preparation(
+        &self,
+    ) -> Result<crate::browser_read_channel::PreparationReceiver, ErrorCode> {
+        self.browser_preparation
+            .lock()
+            .map_err(|_| ErrorCode::Unavailable)?
+            .take()
+            .ok_or(ErrorCode::InvalidTransition)
     }
     /// A resource-exclusion snapshot only, closed through initialization/exit.
     /// It never grants metadata or accepted page access.

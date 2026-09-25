@@ -26,6 +26,42 @@ const POSSIBLY_PUBLISHED: u8 = 2;
 const RETURNED: u8 = 3;
 const SETTLED: u8 = 4;
 
+/// One-use preparation provenance from an actual claimed read. Not authority
+/// to publish, and not reconstructible from the serialized permit/history.
+pub struct Preparation {
+    permit: DispatchPermit,
+    cancellation: Cancellation,
+    started: Instant,
+    admitted_ms: u64,
+    deadline: Instant,
+}
+impl Preparation {
+    pub fn permit(&self) -> &DispatchPermit {
+        &self.permit
+    }
+    pub fn remaining_ms(&self) -> Result<u64, ErrorCode> {
+        let now = now_ms()?;
+        let elapsed =
+            u64::try_from(self.started.elapsed().as_millis()).map_err(|_| ErrorCode::Expired)?;
+        if self.cancellation.is_cancelled()
+            || now.abs_diff(self.admitted_ms.saturating_add(elapsed)) > 1000
+        {
+            return Err(ErrorCode::Stale);
+        }
+        let remaining = self
+            .deadline
+            .saturating_duration_since(Instant::now())
+            .as_millis();
+        if remaining == 0 {
+            return Err(ErrorCode::Expired);
+        }
+        u64::try_from(remaining).map_err(|_| ErrorCode::Expired)
+    }
+    pub fn withdraw(&self) {
+        self.cancellation.cancel();
+    }
+}
+
 /// Actual worker retains this lease. No reconstruction from wire/history.
 pub struct MarkerLease {
     revision: Uuid,
@@ -111,6 +147,7 @@ pub struct ReadExecution<'a> {
     admitted_ms: u64,
     deadline: Instant,
     attempted: bool,
+    preparation_taken: bool,
     marker: Option<(Uuid, Context)>,
     phase: Arc<AtomicU8>,
     finished: bool,
@@ -153,6 +190,7 @@ impl<'a> ReadExecution<'a> {
             admitted_ms,
             deadline: started + Duration::from_millis(lifetime),
             attempted: false,
+            preparation_taken: false,
             marker: None,
             phase: Arc::new(AtomicU8::new(NO_PERMIT)),
             finished: false,
@@ -160,6 +198,41 @@ impl<'a> ReadExecution<'a> {
     }
     pub fn permit(&self) -> &DispatchPermit {
         &self.permit
+    }
+    /// The sole worker transfers this once into its native preparation channel.
+    /// Failed delivery/expiry does not permit a replacement preparation attempt.
+    pub fn take_preparation(&mut self) -> Result<Preparation, ErrorCode> {
+        if self.preparation_taken || self.attempted {
+            return Err(ErrorCode::InvalidTransition);
+        }
+        self.preparation_taken = true;
+        if let Err(error) = self.current() {
+            self.cancellation.cancel();
+            return Err(error);
+        }
+        let permit = &self.permit;
+        Ok(Preparation {
+            permit: DispatchPermit {
+                dispatch_id: permit.dispatch_id,
+                action: permit.action.clone(),
+                device_id: permit.device_id,
+                session_id: permit.session_id,
+                capture_epoch: permit.capture_epoch,
+                action_epoch: permit.action_epoch,
+            },
+            cancellation: self.cancellation.clone(),
+            started: self.started,
+            admitted_ms: self.admitted_ms,
+            deadline: self.deadline,
+        })
+    }
+    /// Read-only exact historical lookup while this owner still borrows Store.
+    /// It cannot acknowledge wire data, retire this marker, or release resources.
+    pub fn retirement(
+        &self,
+        context: &Context,
+    ) -> Result<Option<browser_jobs::Retirement>, ErrorCode> {
+        self.store.browser_read_retirement(context)
     }
     pub fn remaining_ms(&self) -> Result<u64, ErrorCode> {
         self.current()?;

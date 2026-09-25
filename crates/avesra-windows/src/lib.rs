@@ -68,6 +68,8 @@ pub mod browser_pairing;
 #[cfg(windows)]
 pub mod browser_pipe;
 #[cfg(windows)]
+pub mod browser_read_channel;
+#[cfg(windows)]
 pub mod browser_receive;
 #[cfg(windows)]
 pub mod discovery;
