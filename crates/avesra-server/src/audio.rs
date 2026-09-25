@@ -203,6 +203,11 @@ impl AudioClient {
             .map_err(|_| ErrorCode::Stale)?;
         Ok(())
     }
+    pub fn configured_revision(&self) -> Option<&str> {
+        self.deployment
+            .as_ref()
+            .map(|(_, revision)| revision.as_str())
+    }
     async fn exchange(
         &self,
         request: serde_json::Value,
@@ -320,6 +325,26 @@ impl AudioClient {
         utterance_id: Uuid,
         payload: AudioInput,
     ) -> Result<AudioResult, ErrorCode> {
+        self.infer_with_budget(
+            request_id,
+            epoch,
+            utterance_id,
+            payload,
+            Duration::from_secs(30),
+        )
+        .await
+    }
+    pub async fn infer_with_budget(
+        &self,
+        request_id: Uuid,
+        epoch: u64,
+        utterance_id: Uuid,
+        payload: AudioInput,
+        budget: Duration,
+    ) -> Result<AudioResult, ErrorCode> {
+        if budget.is_zero() || budget > Duration::from_secs(30) {
+            return Err(ErrorCode::Expired);
+        }
         if request_id.is_nil()
             || utterance_id.is_nil()
             || epoch != self.epoch.load(Ordering::SeqCst)
@@ -332,10 +357,10 @@ impl AudioClient {
             .clone()
             .try_acquire_owned()
             .map_err(|_| ErrorCode::Unavailable)?;
-        let mut request = self.request("infer", request_id, epoch, 30_000)?;
+        let mut request = self.request("infer", request_id, epoch, budget.as_millis() as u64)?;
         payload.validate()?;
         request["payload"] = serde_json::to_value(payload).map_err(|_| ErrorCode::Malformed)?;
-        let result = self.exchange(request, Duration::from_secs(30)).await?;
+        let result = self.exchange(request, budget).await?;
         if self.epoch.load(Ordering::SeqCst) != epoch {
             return Err(ErrorCode::Stale);
         }

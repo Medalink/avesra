@@ -24,6 +24,31 @@ struct ServerState {
     auth: Mutex<AuthStore>,
     admission: Arc<Semaphore>,
     connections: Arc<Semaphore>,
+    #[cfg(unix)]
+    speaker: Option<Arc<avesra_server::audio::AudioClient>>,
+    #[cfg(unix)]
+    speaker_admission: Arc<Semaphore>,
+    #[cfg(unix)]
+    speaker_health_admission: Arc<Semaphore>,
+    #[cfg(unix)]
+    sessions: Mutex<std::collections::HashMap<Uuid, LiveSession>>,
+}
+#[cfg(unix)]
+struct LiveSession {
+    device: Uuid,
+    epoch: u64,
+    updated: std::time::Instant,
+    seen: std::collections::VecDeque<(Uuid, std::time::Instant)>,
+}
+#[cfg(unix)]
+fn session_current(auth: &Shared, device: Uuid, session: Uuid, epoch: u64) -> bool {
+    auth.sessions.lock().is_ok_and(|sessions| {
+        sessions.get(&session).is_some_and(|live| {
+            live.device == device
+                && live.epoch == epoch
+                && live.updated.elapsed() < Duration::from_secs(30)
+        })
+    })
 }
 type Shared = Arc<ServerState>;
 #[derive(Deserialize)]
@@ -44,16 +69,254 @@ struct SessionReply {
     session_id: Uuid,
     status: &'static str,
 }
-pub fn router(auth: AuthStore) -> Router {
-    Router::new()
+pub fn router(auth: AuthStore, directory: &std::path::Path) -> Result<Router, String> {
+    #[cfg(unix)]
+    let speaker = speaker_client(directory)?;
+    #[cfg(not(unix))]
+    let _ = directory;
+    let router = Router::new()
         .route("/pair", post(pair))
         .route("/control", get(control))
+        .route("/speaker", get(speaker_health).post(speaker_infer))
         .layer(DefaultBodyLimit::max(1024))
         .with_state(Arc::new(ServerState {
             auth: Mutex::new(auth),
             admission: Arc::new(Semaphore::new(8)),
             connections: Arc::new(Semaphore::new(4)),
-        }))
+            #[cfg(unix)]
+            speaker,
+            #[cfg(unix)]
+            speaker_admission: Arc::new(Semaphore::new(1)),
+            #[cfg(unix)]
+            speaker_health_admission: Arc::new(Semaphore::new(2)),
+            #[cfg(unix)]
+            sessions: Mutex::new(std::collections::HashMap::new()),
+        }));
+    Ok(router)
+}
+
+#[cfg(unix)]
+fn speaker_client(
+    directory: &std::path::Path,
+) -> Result<Option<Arc<avesra_server::audio::AudioClient>>, String> {
+    use std::io::Read;
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Configuration {
+        socket: std::path::PathBuf,
+        model_revision: String,
+    }
+    let file = match std::fs::File::open(directory.join("speaker-deployment.json")) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err("Speaker deployment cannot be read".into()),
+    };
+    let mut bytes = vec![];
+    file.take(4097)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "Speaker deployment cannot be read")?;
+    if bytes.len() > 4096 {
+        return Err("Speaker deployment exceeds limit".into());
+    }
+    let config: Configuration =
+        serde_json::from_slice(&bytes).map_err(|_| "Invalid speaker deployment")?;
+    let client = avesra_server::audio::AudioClient::for_deployment(
+        &config.socket,
+        "speaker",
+        &config.model_revision,
+    )
+    .map_err(|_| "Speaker deployment is unavailable")?;
+    Ok(Some(Arc::new(client)))
+}
+async fn authenticate_headers(auth: Shared, headers: &HeaderMap) -> Result<Uuid, StatusCode> {
+    let permit = auth
+        .admission
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| StatusCode::TOO_MANY_REQUESTS)?;
+    let token = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .ok_or(StatusCode::UNAUTHORIZED)?
+        .to_owned();
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        auth.auth
+            .lock()
+            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
+            .authenticate(&token)
+            .map_err(|_| StatusCode::UNAUTHORIZED)
+    })
+    .await
+    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
+}
+async fn speaker_health(
+    State(auth): State<Shared>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    authenticate_headers(auth.clone(), &headers).await?;
+    #[cfg(unix)]
+    {
+        let _permit = auth
+            .speaker_health_admission
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| StatusCode::TOO_MANY_REQUESTS)?;
+        let client = auth
+            .speaker
+            .as_ref()
+            .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+        let health = client
+            .health()
+            .await
+            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+        Ok(Json(
+            serde_json::to_value(health).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+        ))
+    }
+    #[cfg(not(unix))]
+    Err(StatusCode::SERVICE_UNAVAILABLE)
+}
+async fn speaker_infer(
+    State(auth): State<Shared>,
+    request: axum::extract::Request,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let device = authenticate_headers(auth.clone(), request.headers()).await?;
+    #[cfg(unix)]
+    {
+        use avesra_server::audio::{AudioInput, AudioOutput};
+        let client = auth
+            .speaker
+            .as_ref()
+            .ok_or(StatusCode::SERVICE_UNAVAILABLE)?
+            .clone();
+        let _speaker_permit = auth
+            .speaker_admission
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| StatusCode::TOO_MANY_REQUESTS)?;
+        // Keep admission for the complete request, including body retention.
+        let _permit = auth
+            .admission
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| StatusCode::TOO_MANY_REQUESTS)?;
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Input {
+            version: u16,
+            request_id: Uuid,
+            session_id: Uuid,
+            capture_epoch: u64,
+            pcm_s16le: String,
+        }
+        let bytes = tokio::time::timeout(
+            Duration::from_secs(3),
+            axum::body::to_bytes(request.into_body(), 460_000),
+        )
+        .await
+        .map_err(|_| StatusCode::REQUEST_TIMEOUT)?
+        .map_err(|_| StatusCode::PAYLOAD_TOO_LARGE)?;
+        let input: Input = serde_json::from_slice(&bytes).map_err(|_| StatusCode::BAD_REQUEST)?;
+        drop(bytes);
+        if input.version != 1
+            || input.request_id.is_nil()
+            || input.session_id.is_nil()
+            || input.capture_epoch == 0
+            || input.pcm_s16le.len() > 426_668
+        {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+        {
+            let mut sessions = auth
+                .sessions
+                .lock()
+                .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+            let live = sessions
+                .get_mut(&input.session_id)
+                .ok_or(StatusCode::UNAUTHORIZED)?;
+            if live.device != device
+                || live.epoch != input.capture_epoch
+                || live.updated.elapsed() >= Duration::from_secs(30)
+            {
+                return Err(StatusCode::UNAUTHORIZED);
+            }
+            while live
+                .seen
+                .front()
+                .is_some_and(|(_, created)| created.elapsed() > Duration::from_secs(61))
+            {
+                live.seen.pop_front();
+            }
+            if live.seen.len() >= 128 || live.seen.iter().any(|(id, _)| *id == input.request_id) {
+                return Err(StatusCode::CONFLICT);
+            }
+            live.seen
+                .push_back((input.request_id, std::time::Instant::now()));
+        }
+        {
+            use base64::Engine;
+            let raw = base64::engine::general_purpose::STANDARD
+                .decode(&input.pcm_s16le)
+                .map_err(|_| StatusCode::BAD_REQUEST)?;
+            if !(32_000..=320_000).contains(&raw.len()) || !raw.len().is_multiple_of(2) {
+                return Err(StatusCode::BAD_REQUEST);
+            }
+        }
+        struct Cancel {
+            client: Arc<avesra_server::audio::AudioClient>,
+            id: Uuid,
+            complete: bool,
+        }
+        impl Drop for Cancel {
+            fn drop(&mut self) {
+                if !self.complete {
+                    let client = self.client.clone();
+                    let id = self.id;
+                    tokio::spawn(async move {
+                        let _ = client.cancel(id).await;
+                    });
+                }
+            }
+        }
+        let worker_id = Uuid::new_v4();
+        let mut cancel = Cancel {
+            client: client.clone(),
+            id: worker_id,
+            complete: false,
+        };
+        let result = client
+            .infer_with_budget(
+                worker_id,
+                1,
+                input.request_id,
+                AudioInput::Pcm {
+                    pcm_s16le: input.pcm_s16le,
+                },
+                Duration::from_secs(15),
+            )
+            .await
+            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+        cancel.complete = true;
+        if !session_current(&auth, device, input.session_id, input.capture_epoch)
+            || !active(auth.clone(), device).await
+            || !session_current(&auth, device, input.session_id, input.capture_epoch)
+        {
+            return Err(StatusCode::UNAUTHORIZED);
+        }
+        match result.output {
+            AudioOutput::Embedding { embedding, .. } => Ok(Json(
+                serde_json::json!({"version":1,"request_id":input.request_id,"session_id":input.session_id,"capture_epoch":input.capture_epoch,"model_revision":client.configured_revision(),"embedding":embedding}),
+            )),
+            _ => Err(StatusCode::UNPROCESSABLE_ENTITY),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = device;
+        Err(StatusCode::SERVICE_UNAVAILABLE)
+    }
 }
 async fn pair(
     State(auth): State<Shared>,
@@ -148,6 +411,24 @@ async fn session(
     _connection: OwnedSemaphorePermit,
 ) {
     let session_id = Uuid::new_v4();
+    #[cfg(unix)]
+    struct SessionLease {
+        auth: Shared,
+        id: Uuid,
+    }
+    #[cfg(unix)]
+    impl Drop for SessionLease {
+        fn drop(&mut self) {
+            if let Ok(mut sessions) = self.auth.sessions.lock() {
+                sessions.remove(&self.id);
+            }
+        }
+    }
+    #[cfg(unix)]
+    let _lease = SessionLease {
+        auth: auth.clone(),
+        id: session_id,
+    };
     let reply = SessionReply {
         version: 1,
         device_id,
@@ -238,6 +519,20 @@ async fn session(
         } = envelope.message
         {
             mode = (muted, deafened, paused);
+        }
+        #[cfg(unix)]
+        {
+            let Ok(mut sessions) = auth.sessions.lock() else {
+                break;
+            };
+            let live = sessions.entry(session_id).or_insert_with(|| LiveSession {
+                device: device_id,
+                epoch: envelope.capture_epoch,
+                updated: std::time::Instant::now(),
+                seen: std::collections::VecDeque::new(),
+            });
+            live.epoch = envelope.capture_epoch;
+            live.updated = std::time::Instant::now();
         }
         let Some(next) = response_sequence.checked_add(1) else {
             break;

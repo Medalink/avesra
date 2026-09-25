@@ -74,7 +74,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         [_,command,directory]if command=="serve"=>{
             let directory=Path::new(directory);let tls=axum_server::tls_rustls::RustlsConfig::from_pem_file(directory.join("server-cert.pem"),directory.join("server-key.pem")).await?;
             let auth=auth::AuthStore::open(&directory.join("authentication.db"))?;
-            let app=transport::router(auth).route("/health",get(status));
+            let app=transport::router(auth,directory)?.route("/health",get(status));
             eprintln!("Avesra TLS control listening on port 9474; owner setup required; actions disabled");
             axum_server::bind_rustls("0.0.0.0:9474".parse::<std::net::SocketAddr>()?,tls).serve(app.into_make_service()).await?;
         },
