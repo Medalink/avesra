@@ -546,6 +546,19 @@
                 <span class="{{jevChipCls}}">{{jevChip}}</span>
               </div>
             </section>
+
+            <section class="flex flex-col gap-2.5">
+              <span class="av-kicker">Display</span>
+              <div class="av-card flex items-center gap-3 p-3.5">
+                <div class="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <span class="text-[12.5px] text-zinc-100">Interface size</span>
+                  <span class="av-hint">Scales text and controls in every Avesra window on this PC. These mockups are drawn at 100%.</span>
+                </div>
+                <div class="av-seg" role="group" aria-label="Interface size">
+                  <sc-for list="{{uiScales}}" as="z" hint-placeholder-count="5"><button type="button" class="av-seg-btn" aria-pressed="{{z.on}}" onClick="{{z.pick}}">{{z.label}}</button></sc-for>
+                </div>
+              </div>
+            </section>
           </sc-if>
 
           <!-- ================= PEOPLE & VOICE ID ================= -->
@@ -1030,7 +1043,7 @@ class Component extends DCLogic {
         { id: 'accel', name: 'Accelerated', status: 'notset', desc: 'Eligible speech lanes on the RTX 5090, only where measured faster.', assign: null },
         { id: 'gaming', name: 'Gaming', status: 'ready', desc: 'Frees the RTX 5090 for games. Everything runs on Spark2.', assign: all('spark2') }
       ],
-      autoGaming: true,
+      autoGaming: true, uiScale: 125,
       extraMachines: [],
       users: [
         { id: 'jordan', name: 'Jordan', enrolled: 'Sep 20, 2026', grants: { apps: true, volume: true, media: true, browser: false, email: false, diag: false } }
@@ -1728,6 +1741,7 @@ class Component extends DCLogic {
 
       // profiles
       profiles: profiles, selProfileName: selP.name, autoGaming: s.autoGaming,
+      uiScales: [100, 110, 125, 150, 175].map((z) => ({ label: z + '%', on: s.uiScale === z, pick: () => this.edit({ uiScale: z }) })),
       toggleAutoGaming: () => this.edit({ autoGaming: !s.autoGaming }),
       canSetUp: selP.status === 'notset' && !s.editAssign,
       canEditAssign: selP.status !== 'notset' && !s.editAssign,

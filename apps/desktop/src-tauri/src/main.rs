@@ -233,7 +233,7 @@ async fn save_settings(
     state: tauri::State<'_, Runtime>,
 ) -> Result<LocalState, String> {
     settings.validate().map_err(|e| e.to_string())?;
-    let (snapshot, pending) = {
+    let (snapshot, pending, scale_changed) = {
         let mut local = state.local.lock().map_err(|_| "Local state unavailable")?;
         if settings.explicit_mute != local.settings.explicit_mute
             || settings.deafened != local.settings.deafened
@@ -247,6 +247,7 @@ async fn save_settings(
             );
         }
         let pending = enqueue(&state, settings.clone())?;
+        let scale_changed = settings.interface_scale != local.settings.interface_scale;
         if settings.speaker != local.settings.speaker || settings.profile != local.settings.profile
         {
             local.playback_epoch = local.playback_epoch.saturating_add(1);
@@ -262,13 +263,17 @@ async fn save_settings(
         local.settings = settings;
         local.refresh();
         state.publish(&local);
-        (local.clone(), pending)
+        (local.clone(), pending, scale_changed)
     };
     app.emit("runtime-state", &snapshot)
         .map_err(|_| "Unable to notify windows")?;
     if let Some(window) = app.get_webview_window("overlay") {
         window
             .set_always_on_top(snapshot.settings.always_on_top)
+            .map_err(|_| "Preference changed but window update failed")?;
+    }
+    if scale_changed {
+        apply_interface_scale(&app, snapshot.settings.interface_scale)
             .map_err(|_| "Preference changed but window update failed")?;
     }
     pending.await.map_err(|_| "Settings writer stopped")??;
@@ -435,6 +440,25 @@ fn session_changed(app: &tauri::AppHandle, locked: bool) {
     let _ = app.emit("signal-clear", ());
     let _ = app.emit("runtime-state", snapshot);
 }
+/// Reference window sizes at 100%, matching the approved mockups in `design/`.
+const OVERLAY_SIZE: (f64, f64) = (440.0, 124.0);
+const SETTINGS_SIZE: (f64, f64) = (880.0, 640.0);
+/// Zooms both webviews uniformly and scales the settings window to match. The
+/// overlay's height depends on its expanded state, so its webview resizes itself.
+fn apply_interface_scale(app: &tauri::AppHandle, percent: u16) -> tauri::Result<()> {
+    let zoom = f64::from(percent) / 100.0;
+    for label in ["overlay", "settings"] {
+        if let Some(window) = app.get_webview_window(label) {
+            window.set_zoom(zoom)?;
+        }
+    }
+    if let Some(window) = app.get_webview_window("settings") {
+        let size = tauri::LogicalSize::new(SETTINGS_SIZE.0 * zoom, SETTINGS_SIZE.1 * zoom);
+        window.set_min_size(Some(size))?;
+        window.set_size(size)?;
+    }
+    Ok(())
+}
 fn main() {
     let _ = rustls::crypto::ring::default_provider().install_default();
     tauri::Builder::default()
@@ -443,13 +467,20 @@ fn main() {
             std::fs::create_dir_all(&directory)?;
             let mut store = Store::open(&directory.join("avesra.db"))?;
             let settings = store.settings()?;
+            let zoom = f64::from(settings.interface_scale) / 100.0;
+            apply_interface_scale(app.handle(), settings.interface_scale)?;
             if let Some(window) = app.get_webview_window("overlay") {
                 window.set_always_on_top(settings.always_on_top)?;
+                window.set_size(tauri::LogicalSize::new(
+                    OVERLAY_SIZE.0 * zoom,
+                    OVERLAY_SIZE.1 * zoom,
+                ))?;
                 if let Some(monitor) = window.current_monitor()? {
                     let area = monitor.work_area();
                     let scale = monitor.scale_factor();
-                    let x = area.position.x
-                        + ((f64::from(area.size.width) - 464.0 * scale).max(0.0)) as i32;
+                    let width = (OVERLAY_SIZE.0 * zoom + 24.0) * scale;
+                    let x =
+                        area.position.x + ((f64::from(area.size.width) - width).max(0.0)) as i32;
                     let y = area.position.y + (24.0 * scale) as i32;
                     window.set_position(tauri::PhysicalPosition::new(x, y))?;
                 }

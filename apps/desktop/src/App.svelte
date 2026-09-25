@@ -73,12 +73,18 @@
       await w?.setFocus();
     }
   }
-  async function expand() {
+  // Both webviews are zoomed natively to the interface size; the overlay window
+  // keeps its reference geometry (440 × 124, or 370 tall expanded) times that zoom.
+  // Startup sizing happens natively; this follows later setting and expand changes.
+  $effect(() => {
+    if (!s || !native || settingsWindow) return;
+    const zoom = s.interface_scale / 100;
+    void getCurrentWindow().setSize(
+      new LogicalSize(440 * zoom, (expanded ? 370 : 124) * zoom),
+    );
+  });
+  function expand() {
     expanded = !expanded;
-    if (native)
-      await getCurrentWindow().setSize(
-        new LogicalSize(440, expanded ? 370 : 124),
-      );
   }
   async function drag(event: PointerEvent) {
     if (native && event.button === 0) await getCurrentWindow().startDragging();

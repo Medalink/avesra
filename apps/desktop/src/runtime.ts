@@ -8,6 +8,7 @@ export type Settings = {
   speaker: string | null;
   profile: "single-spark" | "accelerated" | "gaming";
   always_on_top: boolean;
+  interface_scale: number;
   learning_chime: boolean;
   action_chime: boolean;
   chime_volume: number;
