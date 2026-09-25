@@ -57,6 +57,7 @@ impl Store {
           CREATE TABLE IF NOT EXISTS native_observations(dispatch_id TEXT PRIMARY KEY REFERENCES dispatch_bindings(dispatch_id), target_id TEXT NOT NULL, action_revision TEXT NOT NULL REFERENCES action_revisions(revision), body TEXT NOT NULL, at_ms INTEGER NOT NULL);
           CREATE INDEX IF NOT EXISTS native_observation_target ON native_observations(target_id);
           CREATE TABLE IF NOT EXISTS native_finalizations(dispatch_id TEXT PRIMARY KEY REFERENCES dispatch_bindings(dispatch_id), target_id TEXT NOT NULL, action_revision TEXT NOT NULL REFERENCES action_revisions(revision), actor_id TEXT NOT NULL, outcome TEXT NOT NULL, at_ms INTEGER NOT NULL);
+          CREATE INDEX IF NOT EXISTS native_finalization_lookup ON native_finalizations(target_id,actor_id,outcome);
           DELETE FROM schema_version;
           INSERT INTO schema_version VALUES(4);
         ").map_err(|_|ErrorCode::Storage)?;
