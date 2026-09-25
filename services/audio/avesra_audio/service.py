@@ -197,6 +197,8 @@ class Service:
             if "result" in result:
                 self.successful_inferences += 1
                 self.last_inference_ms = round((time.monotonic() - started) * 1000, 3)
+                result["lane"] = self.config["lane"]
+                result["model_revision"] = self.config["model_revision"]
             return result
         except (Exception, asyncio.CancelledError):
             if generation == self.generation:

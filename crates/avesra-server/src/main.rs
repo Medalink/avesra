@@ -58,6 +58,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let args: Vec<String> = std::env::args().collect();
     match args.as_slice(){
+        #[cfg(unix)]
+        [_,command,socket]if command=="audio-health"=>{
+            let client=avesra_server::audio::AudioClient::new(Path::new(socket))?;
+            println!("{}",serde_json::to_string(&client.health().await?)?);
+        },
         [_,command,directory,dns]if command=="init"=>initialize(Path::new(directory),dns)?,
         [_,command,directory]if command=="pair-code"=>{
             let directory=Path::new(directory);if !directory.join("server-cert.pem").is_file(){return Err("Initialize the server first".into());}
