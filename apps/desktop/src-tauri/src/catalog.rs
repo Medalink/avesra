@@ -2,7 +2,7 @@
 use crate::{Runtime, setup::ManagementProof};
 use avesra_contracts::ErrorCode;
 use avesra_core::apps::AppAlias;
-use avesra_windows::{discovery::Candidate, effects::CatalogCommand};
+use avesra_windows::effects::CatalogCommand;
 use serde::Serialize;
 use std::{
     path::PathBuf,
@@ -25,12 +25,33 @@ struct Panel {
 }
 struct Choice {
     id: Uuid,
-    native: Candidate,
+    native: NativeCandidate,
     cwd: Option<PathBuf>,
     discovered: Instant,
     hints: Vec<(Uuid, avesra_windows::apps::WindowHint)>,
     selected_hint: Option<Uuid>,
     hints_complete: bool,
+}
+#[derive(Clone)]
+enum NativeCandidate {
+    Executable(avesra_windows::discovery::Candidate),
+    Packaged(avesra_windows::packages::Candidate),
+}
+impl NativeCandidate {
+    fn select(
+        &self,
+        actor: Uuid,
+        cwd: Option<&std::path::Path>,
+    ) -> Result<avesra_core::apps::AppRecord, ErrorCode> {
+        match self {
+            Self::Executable(value) => value.select(actor, cwd.ok_or(ErrorCode::Malformed)?),
+            Self::Packaged(value) if cwd.is_none() => value.select(actor),
+            Self::Packaged(_) => Err(ErrorCode::Malformed),
+        }
+    }
+    fn packaged(&self) -> bool {
+        matches!(self, Self::Packaged(_))
+    }
 }
 #[derive(Serialize)]
 pub struct WindowHintView {
@@ -46,6 +67,7 @@ pub struct CandidateView {
     source: avesra_core::apps::AppSource,
     detail: String,
     arguments: String,
+    packaged: bool,
     working_directory: Option<String>,
     selectable: bool,
     window_hints: Vec<WindowHintView>,
@@ -54,14 +76,31 @@ pub struct CandidateView {
 }
 impl Choice {
     fn view(&self) -> CandidateView {
+        let (name, source, detail, arguments, selectable) = match &self.native {
+            NativeCandidate::Executable(value) => (
+                value.name.clone(),
+                value.source.clone(),
+                value.executable.clone(),
+                value.arguments.clone(),
+                value.selectable,
+            ),
+            NativeCandidate::Packaged(value) => (
+                value.name.clone(),
+                avesra_core::apps::AppSource::PackageRegistration,
+                format!("{} · {}", value.app_id, value.package_full_name),
+                String::new(),
+                true,
+            ),
+        };
         CandidateView {
             id: self.id,
-            name: self.native.name.clone(),
-            source: self.native.source.clone(),
-            detail: self.native.executable.clone(),
-            arguments: self.native.arguments.clone(),
+            name,
+            source,
+            detail,
+            arguments,
+            packaged: self.native.packaged(),
             working_directory: self.cwd.as_ref().map(|v| v.to_string_lossy().into_owned()),
-            selectable: self.native.selectable,
+            selectable,
             window_hints: self
                 .hints
                 .iter()
@@ -82,6 +121,7 @@ pub struct Scan {
     candidates: Vec<CandidateView>,
     skipped: u32,
     truncated: bool,
+    unavailable_sources: Vec<&'static str>,
 }
 impl CatalogSetup {
     pub fn invalidate(&self) {
@@ -234,20 +274,50 @@ pub async fn scan_app_catalog(
     tauri::async_runtime::spawn(async move {
         let _owner = owner;
         let scans = tokio::task::spawn_blocking(|| {
-            let first = avesra_windows::discovery::start_menu()?;
-            let second = avesra_windows::discovery::registered_apps()?;
-            Ok::<_, ErrorCode>((first, second))
+            let first = avesra_windows::discovery::start_menu();
+            let second = avesra_windows::discovery::registered_apps();
+            let third = avesra_windows::packages::discover();
+            (first, second, third)
         })
         .await
-        .map_err(|_| "Discovery worker stopped")?
-        .map_err(|_| "Native application discovery unavailable")?;
+        .map_err(|_| "Discovery worker stopped")?;
         with_panel(&app, panel, |p| {
+            let mut unavailable_sources = Vec::new();
+            let first = scans.0.unwrap_or_else(|_| {
+                unavailable_sources.push("Start menu");
+                Default::default()
+            });
+            let second = scans.1.unwrap_or_else(|_| {
+                unavailable_sources.push("App Paths");
+                Default::default()
+            });
+            let third = scans.2.unwrap_or_else(|_| {
+                unavailable_sources.push("Packaged applications");
+                Default::default()
+            });
+            let scans = (first, second, third);
             let mut choices = Vec::new();
             for value in scans.0.candidates.into_iter().chain(scans.1.candidates) {
                 choices.push(Choice {
                     id: Uuid::new_v4(),
                     cwd: value.working_directory.as_ref().map(PathBuf::from),
-                    native: value,
+                    native: NativeCandidate::Executable(value),
+                    discovered: Instant::now(),
+                    hints: vec![],
+                    selected_hint: None,
+                    hints_complete: false,
+                });
+            }
+            let mut truncated = scans.0.truncated || scans.1.truncated || scans.2.truncated;
+            for value in scans.2.candidates {
+                if choices.len() >= 768 {
+                    truncated = true;
+                    break;
+                }
+                choices.push(Choice {
+                    id: Uuid::new_v4(),
+                    cwd: None,
+                    native: NativeCandidate::Packaged(value),
                     discovered: Instant::now(),
                     hints: vec![],
                     selected_hint: None,
@@ -258,8 +328,13 @@ pub async fn scan_app_catalog(
             p.candidates = choices;
             Ok(Scan {
                 candidates,
-                skipped: scans.0.skipped.saturating_add(scans.1.skipped),
-                truncated: scans.0.truncated || scans.1.truncated,
+                skipped: scans
+                    .0
+                    .skipped
+                    .saturating_add(scans.1.skipped)
+                    .saturating_add(scans.2.skipped),
+                truncated,
+                unavailable_sources,
             })
         })
     })
@@ -282,8 +357,7 @@ pub async fn choose_app_folder(
             .find(|v| v.id == candidate)
             .ok_or("Candidate unavailable")?;
         if choice.discovered.elapsed() >= Duration::from_secs(120)
-            || choice.native.working_directory.is_some()
-            || !choice.native.selectable
+            || !matches!(&choice.native, NativeCandidate::Executable(value) if value.working_directory.is_none() && value.selectable)
         {
             return Err("Candidate changed or does not need a folder".into());
         }
@@ -381,6 +455,9 @@ pub async fn observe_app_windows(
         if choice.discovered.elapsed() >= Duration::from_secs(120) {
             return Err("Candidate expired; scan again".into());
         }
+        if choice.native.packaged() {
+            return Err("Packaged window observation is not available yet".into());
+        }
         choice.hints.clear();
         choice.selected_hint = None;
         choice.hints_complete = false;
@@ -395,7 +472,7 @@ pub async fn observe_app_windows(
         let actor = crate::owner::current_actor(&app).await?;
         with_panel(&app, panel, |_| Ok(()))?;
         let hints = tokio::task::spawn_blocking(move || {
-            let record = native.select(actor, &cwd)?;
+            let record = native.select(actor, Some(&cwd))?;
             avesra_windows::apps::window_hints(&record)
         })
         .await
@@ -482,7 +559,11 @@ pub async fn remember_app(
         }
         Ok((
             choice.native.clone(),
-            choice.cwd.clone().ok_or("Choose a working folder first")?,
+            if choice.native.packaged() {
+                None
+            } else {
+                Some(choice.cwd.clone().ok_or("Choose a working folder first")?)
+            },
             choice.discovered,
             choice
                 .selected_hint
@@ -505,8 +586,9 @@ pub async fn remember_app(
         }
         with_panel(&app, panel, |_| Ok(()))?;
         let selected_hint = hint.clone();
+        let final_candidate = native.clone();
         let record = tokio::task::spawn_blocking(move || {
-            let mut record = native.select(actor, &cwd)?;
+            let mut record = native.select(actor, cwd.as_deref())?;
             if let Some(hint) = selected_hint {
                 avesra_windows::apps::bind_window_hint(&mut record, &hint)?;
             }
@@ -528,6 +610,9 @@ pub async fn remember_app(
                     }
                     if let Some(hint) = &hint {
                         avesra_windows::apps::bind_window_hint(&mut confirmed_record, hint)?;
+                    }
+                    if let NativeCandidate::Packaged(value) = &final_candidate {
+                        value.revalidate()?;
                     }
                     authorize()
                 }),

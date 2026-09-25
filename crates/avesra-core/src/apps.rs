@@ -140,9 +140,10 @@ impl AppRecord {
                     publisher_id,
                 } => {
                     text(app_id, 512, false)
-                        && app_id.contains('!')
                         && text(package_full_name, 512, false)
                         && text(publisher_id, 128, false)
+                        && self.source == AppSource::PackageRegistration
+                        && package_identity(app_id, package_full_name, publisher_id)
                 }
             };
         if valid {
@@ -151,6 +152,34 @@ impl AppRecord {
             Err(ErrorCode::Malformed)
         }
     }
+}
+
+fn package_identity(app: &str, full: &str, publisher: &str) -> bool {
+    let component = |v: &str| {
+        !v.is_empty()
+            && v.bytes()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'-'))
+    };
+    let Some((family, relative)) = app.split_once('!') else {
+        return false;
+    };
+    let parts: Vec<_> = full.split('_').collect();
+    if parts.len() != 5
+        || !component(parts[0])
+        || !component(parts[2])
+        || (!parts[3].is_empty() && !component(parts[3]))
+        || !component(publisher)
+        || parts[4] != publisher
+        || !component(relative)
+    {
+        return false;
+    }
+    let version: Vec<_> = parts[1].split('.').collect();
+    version.len() == 4
+        && version.iter().all(|v| {
+            !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()) && v.parse::<u16>().is_ok()
+        })
+        && family == format!("{}_{}", parts[0], publisher)
 }
 
 /// Owned only by the native effect thread. Registration requires a trusted

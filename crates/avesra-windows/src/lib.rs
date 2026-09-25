@@ -66,4 +66,6 @@ pub mod apps;
 #[cfg(windows)]
 pub mod discovery;
 #[cfg(windows)]
+pub mod packages;
+#[cfg(windows)]
 pub mod principal;
