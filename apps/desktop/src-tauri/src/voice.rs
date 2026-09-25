@@ -22,6 +22,7 @@ impl Drop for Worker {
 }
 pub fn spawn(app: tauri::AppHandle, record: PairingRecord, generation: u64) -> Worker {
     Worker(tauri::async_runtime::spawn(async move {
+        let mut attempted_epoch = None;
         loop {
             tokio::time::sleep(Duration::from_millis(100)).await;
             let state = app.state::<Runtime>();
@@ -45,6 +46,12 @@ pub fn spawn(app: tauri::AppHandle, record: PairingRecord, generation: u64) -> W
             let Some(session) = session else {
                 continue;
             };
+            // No continuous ambient windows without a qualified turn segmenter.
+            // A fresh native readiness/epoch transition must admit each attempt.
+            if attempted_epoch == Some(session.epoch) {
+                continue;
+            }
+            attempted_epoch = Some(session.epoch);
             if window(&app, &record, session).await.is_err() {
                 let state = app.state::<Runtime>();
                 if let Ok(mut local) = state.local.lock()
@@ -246,7 +253,7 @@ async fn window(
                 last_reply=Instant::now();
             }
             _=tick.tick(), if sent<500=>{
-                let frame=app.state::<Runtime>().media.take_enrollment_frame(session.epoch)?;
+                let frame=app.state::<Runtime>().media.take_capture_frame(session.epoch)?;
                 let Some(frame)=frame else {if opened.elapsed()>Duration::from_millis(sent*20+500){return Err("Capture frame late".into());} continue;};
                 if frame.epoch!=session.epoch||frame.sequence!=sent+1||frame.captured<opened||frame.captured>Instant::now()||frame.captured.elapsed()>Duration::from_millis(500){return Err("Capture sequence or freshness lost".into());}
                 let packet=AudioPacket{device_id:record.device_id,session_id:session.id,utterance_id:utterance,capture_epoch:session.epoch,sequence:frame.sequence,sample_offset:sent*320,start:sent==0,end:sent==499,pcm:frame.samples.iter().flat_map(|sample|sample.to_le_bytes()).collect()};

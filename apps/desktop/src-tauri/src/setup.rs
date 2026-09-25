@@ -406,7 +406,7 @@ pub async fn record_enrollment(
         {
             return Err("Enrollment session expired".into());
         }
-        if let Some(frame) = state.media.take_enrollment_frame(epoch)? {
+        if let Some(frame) = state.media.take_capture_frame(epoch)? {
             if frame.sequence != sequence + 1 {
                 return Err("Enrollment audio lost frames; retry collection".into());
             }

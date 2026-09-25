@@ -105,9 +105,9 @@ impl MediaWorker {
             }
         }
     }
-    pub fn take_enrollment_frame(&self, epoch: u64) -> Result<Option<AudioFrame>, String> {
+    pub fn take_capture_frame(&self, epoch: u64) -> Result<Option<AudioFrame>, String> {
         if !self.capture_gate.current(epoch) {
-            return Err("Enrollment capture stopped".into());
+            return Err("Capture stopped".into());
         }
         let mut frames = self
             .outbound
@@ -118,7 +118,7 @@ impl MediaWorker {
             frame.epoch != epoch || frame.captured.elapsed() > Duration::from_millis(500)
         }) {
             frames.clear();
-            return Err("Enrollment capture lost freshness".into());
+            return Err("Capture lost freshness".into());
         }
         Ok(value)
     }
