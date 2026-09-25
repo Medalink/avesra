@@ -51,6 +51,14 @@ fn read(path: &Path) -> Result<OwnerStatus, ErrorCode> {
         revision: Some(record.revision),
     })
 }
+/// Called only under the actual native owner coordinator, never Runtime.local.
+pub(crate) fn identity(directory: &Path) -> Result<(Uuid, Uuid), ErrorCode> {
+    let status = read(&directory.join("owner.db"))?;
+    Ok((
+        status.actor.ok_or(ErrorCode::Denied)?,
+        status.revision.ok_or(ErrorCode::Denied)?,
+    ))
+}
 pub fn matches_actor(directory: &Path, actor: Uuid) -> bool {
     read(&directory.join("owner.db")).is_ok_and(|v| v.actor == Some(actor))
 }

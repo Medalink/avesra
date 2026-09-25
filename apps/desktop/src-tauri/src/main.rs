@@ -1,4 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+mod actor_registration;
 mod browser;
 mod catalog;
 mod connection;
@@ -654,6 +655,9 @@ fn main() {
             shortcuts::shortcut_status,
             owner::owner_status,
             owner::create_owner,
+            actor_registration::actor_registration_status,
+            actor_registration::register_owner_with_spark,
+            actor_registration::revoke_owner_registration,
             shortcuts::set_shortcut,
             shortcuts::begin_shortcut_recording,
             shortcuts::end_shortcut_recording,

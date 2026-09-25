@@ -17,11 +17,96 @@ use tokio_tungstenite::{
 use uuid::Uuid;
 #[derive(Clone, Copy)]
 pub struct SessionIdentity {
+    pub device: Uuid,
+    pub server_fingerprint: [u8; 32],
     pub id: Uuid,
     pub epoch: u64,
     pub playback_epoch: u64,
     pub action_epoch: u64,
     pub generation: u64,
+}
+// Actor setup uses the same pinned certificate, with no environment proxy route.
+fn actor_client(record: &PairingRecord, seconds: u64) -> Result<reqwest::Client, String> {
+    record.validate()?;
+    reqwest::Client::builder()
+        .no_proxy()
+        .tls_built_in_root_certs(false)
+        .add_root_certificate(
+            reqwest::Certificate::from_der(&certificate(&record.certificate)?)
+                .map_err(|_| "Invalid TLS certificate")?,
+        )
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(3))
+        .timeout(Duration::from_secs(seconds))
+        .build()
+        .map_err(|_| "Actor TLS unavailable".into())
+}
+pub async fn actor_operation(
+    record: &PairingRecord,
+    request: &avesra_contracts::actors::Request,
+) -> Result<avesra_contracts::actors::Reply, String> {
+    request.validate().map_err(|_| "Invalid actor request")?;
+    let body = serde_json::to_vec(request).map_err(|_| "Invalid actor request")?;
+    if body.len() > 1024 {
+        return Err("Actor request exceeds limit".into());
+    }
+    let mut response = actor_client(record, 7)?
+        .post(
+            endpoint(&record.url)?
+                .join("actors")
+                .map_err(|_| "Invalid actor endpoint")?,
+        )
+        .bearer_auth(&record.credential)
+        .header("Content-Type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .map_err(|_| "Actor request interrupted; refresh registration to reconcile")?;
+    if !response.status().is_success() {
+        return Err(
+            "Actor operation rejected or uncertain; refresh registration to reconcile".into(),
+        );
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| "Actor reply interrupted; refresh registration to reconcile")?
+    {
+        if bytes.len() + chunk.len() > 2048 {
+            return Err("Actor reply exceeds limit".into());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    let reply: avesra_contracts::actors::Reply =
+        serde_json::from_slice(&bytes).map_err(|_| "Invalid actor reply")?;
+    reply
+        .validate(request, record.device_id)
+        .map_err(|_| "Stale actor reply")?;
+    Ok(reply)
+}
+pub async fn actor_cancel(
+    record: &PairingRecord,
+    request: &avesra_contracts::actors::Cancel,
+) -> Result<(), String> {
+    request
+        .validate()
+        .map_err(|_| "Invalid withdrawal request")?;
+    let response = actor_client(record, 3)?
+        .post(
+            endpoint(&record.url)?
+                .join("actors/cancel")
+                .map_err(|_| "Invalid withdrawal endpoint")?,
+        )
+        .bearer_auth(&record.credential)
+        .json(request)
+        .send()
+        .await
+        .map_err(|_| "Withdrawal unavailable")?;
+    if response.status() != reqwest::StatusCode::NO_CONTENT {
+        return Err("Withdrawal unconfirmed".into());
+    }
+    Ok(())
 }
 #[derive(Serialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
@@ -336,6 +421,13 @@ pub(crate) async fn voice_socket(
     Ok(socket)
 }
 impl PairingRecord {
+    pub(crate) fn server_fingerprint(&self) -> Result<String, String> {
+        self.validate()?;
+        Ok(format!(
+            "{:x}",
+            Sha256::digest(certificate(&self.certificate)?)
+        ))
+    }
     fn validate(&self) -> Result<(), String> {
         if self.version != 1
             || self.device_id.is_nil()
@@ -609,6 +701,7 @@ pub async fn run(
     {
         return Err("Unexpected Spark session".into());
     }
+    let server_fingerprint: [u8; 32] = Sha256::digest(certificate(&record.certificate)?).into();
     let mut sequence = 1u64;
     let mut mode = modes.borrow().clone();
     let make = |sequence, mode: &ModeSnapshot, message| Envelope {
@@ -658,7 +751,7 @@ pub async fn run(
           if state.connection_generation.load(std::sync::atomic::Ordering::SeqCst)!=generation{return Err("Session replaced".into());}
           if local.capture_epoch==reply.capture_epoch&&local.playback_epoch==reply.playback_epoch&&local.action_epoch==reply.action_epoch {
             if !local.connected {local.connected=true;local.refresh();state.publish(&local);let _=app.emit("runtime-state",local.clone());}
-            if let Ok(mut session)=state.acknowledged_session.lock(){*session=Some(SessionIdentity{id:hello.session_id,epoch:reply.capture_epoch,playback_epoch:reply.playback_epoch,action_epoch:reply.action_epoch,generation});}
+            if let Ok(mut session)=state.acknowledged_session.lock(){*session=Some(SessionIdentity{device:record.device_id,server_fingerprint,id:hello.session_id,epoch:reply.capture_epoch,playback_epoch:reply.playback_epoch,action_epoch:reply.action_epoch,generation});}
           }continue;
          }
         };

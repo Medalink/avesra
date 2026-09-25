@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import ActorRegistration from "./ActorRegistration.svelte";
   import { command, native, type Runtime } from "./runtime";
   let { runtime }: { runtime: Runtime | null } = $props();
   type Status = { enrollment: string; completed_segments: number; next_segment: string | null; reason: string };
@@ -83,6 +84,7 @@
       {#if owner?.state === "missing"}<button class="av-btn av-btn-primary av-btn-sm" disabled={busy || !runtime?.connected || runtime.locked} onclick={createOwner}>Create owner</button>{/if}
       <button class="av-btn av-btn-ghost av-btn-sm" disabled={busy || !native} onclick={() => refreshOwner().catch(e => error = String(e))}>Refresh owner status</button>
     </div>
+    <ActorRegistration {runtime} ownerReady={owner?.state === "configured"} parentBusy={busy} />
     <p class="av-hint">Owner creation uses the one-use Windows verification above. It grants no voice readiness. Enrollment collects prompted phrases, natural speech and separate held-out phrases; verify again before preparing it.</p>
     <button class="av-btn av-btn-primary self-start" disabled={owner?.state !== "configured" || busy || !runtime?.connected || !runtime.settings.microphone || runtime.settings.explicit_mute || !!status} onclick={prepare}>Prepare owner enrollment</button>
     {#if runtime?.settings.explicit_mute}<p class="av-hint">Deliberate microphone mute is on. Unmute in Audio & Voice before verifying and preparing enrollment.</p>{/if}
