@@ -4,7 +4,7 @@ Avesra means **A Very Effective Smart Reasoning Assistant**.
 
 Repository: https://github.com/Medalink/avesra
 
-Planning baseline: `eb0189ff64b276b4f1e2d850ab3cff6979189ad9` on `main`, inspected on 2026-09-24; at that baseline the repository contained only an MIT `LICENSE`. The owner subsequently requested publication of these planning documents. `E:\Dev\Avesra` is now the repository checkout; no application source has been implemented.
+Planning baseline: `eb0189ff64b276b4f1e2d850ab3cff6979189ad9` on `main`, inspected on 2026-09-24; at that baseline the repository contained only an MIT `LICENSE`. The owner subsequently requested publication of these planning documents and then execution. The primary checkout is `E:\Dev\Avesra`; implementation is isolated in the worktree identified below.
 
 Model provisioning evidence and remaining serving gaps: [Spark2 setup record](spark2-model-setup.md). Approved UI direction and interactive mockups: [design](../design/README.md) (simulated prototype, not application code). The main plan includes the owner's later requests for optional client GPU acceleration and instrumentation throughout the pipeline.
 
@@ -22,19 +22,23 @@ These are mandatory live end-to-end outcomes. A model server, overlay, passing u
 
 | Plan | Outcome | Priority | Effort | Dependencies | Status |
 | --- | --- | --- | --- | --- | --- |
-| [001](001-single-spark-assistant.md) | Build and verify Avesra on Spark2 with Local Studio, a Windows companion, optional client GPU acceleration and per-stage metrics | P1 | L, multiple milestones | Hardware/app preflight in M0 | M0 in progress; application not implemented |
+| [001](001-single-spark-assistant.md) | Build and verify Avesra on Spark2 with Local Studio, a Windows companion, optional client GPU acceleration and per-stage metrics | P1 | L, multiple milestones | Hardware/app preflight in M0 | IN PROGRESS on `codex/avesra-plan-001`; foundations and initial native UI built, authenticated transport under implementation |
 
 Read the entire plan before implementation. Execute its milestones in order, retain verification evidence, and update this index only when the corresponding evidence exists. Planning does not authorize deployment, account access, production changes, or publication by itself.
+
+Execution instructions, 2026-09-24: the owner requested `/improve execute 001`, emphasized matching the approved designs, and then instructed "no tests here either, just specs and code!" The plan records this override: no automated tests or test harnesses; use build/static checks and direct inspection, and report unverified live behavior explicitly. Work is isolated from `main` in `C:\Users\medal\.codex\worktrees\avesra-plan-001\Avesra`.
+
+The owner subsequently prohibited Computer Use until they explicitly finish gaming. Background source/spec work continues; native/browser interaction and further visual inspection are deferred. A general "continue" does not lift that restriction.
 
 ## Milestone checkpoints
 
 | Milestone | Deliverable | Depends on | Status |
 | --- | --- | --- | --- |
 | M0 | Verify hardware, app surfaces, model feasibility, and setup facts | — | PARTIAL — six models downloaded/hash checked; two reasoning recipes passed initial probes; speech/app/concurrency proof remains |
-| M1 | Establish workspace, contracts, test harness, and configuration | M0 | TODO |
-| M2 | Pair PC/Spark; implement task policy, persistence, and cancellation | M1 | TODO |
-| M3 | Prove local speech, speaker enrollment, intent gating, and playback | M2 | TODO |
-| M4 | Ship overlay, settings, onboarding, and volume/app launch slice | M3 | TODO |
+| M1 | Establish workspace, contracts, build/static gates, and configuration (no tests per owner override) | M0 | PARTIAL — full Windows Static and bundled-asset release Build passed for `553a69b` source; Spark ARM64 Static independently passed at `c68b9fd`, with executor release Build confirmed in its log; remaining contracts/telemetry incomplete |
+| M2 | Pair PC/Spark; implement task policy, persistence, and cancellation | M1 | PARTIAL — TLS control, ordered ledger, exact approvals/cancellation/reconciliation, pairing recovery and session-bound speaker/ASR analysis route through `c68b9fd`; actual PC pairing, full controller/media wiring and live effect/recovery proof remain incomplete |
+| M3 | Prove local speech, speaker enrollment, intent gating, and playback | M2 | IN PROGRESS — speaker/ASR supervisors loaded but unqualified; final TTS load observed then stopped; protected candidate selection, recording/paired inference, stable endpoint binding and typed device-rate playback through `553a69b` remain uninvoked; streaming, identity activation and live voice proof incomplete |
+| M4 | Ship overlay, settings, onboarding, and volume/app launch slice | M3 | PARTIAL — approved design port, native settings/tray/local controls inspected; measured signals, local authentication/enrollment, session-lock handling and authenticated Models metadata through `553a69b` remain uninvoked; onboarding, hotkeys and action slice incomplete |
 | M5 | Control Chrome/Brave and desktop/CLI prompt inputs | M4 | TODO |
 | M6 | Learn app mappings and routines, maintain memory, explain chimes | M5 | TODO |
 | M7 | Diagnose PC issues and operate the existing VPN client | M5, M6 | TODO |
@@ -59,4 +63,4 @@ Specific home-light integration, multiple-Spark distribution, additional desktop
 
 ## Completion boundary
 
-The plan is written; the application is not implemented or deployed. The owner authorized model setup through Local Studio on `ssh spark2`; that target is reachable, all six selected model packages are downloaded and hash checked, and reasoning recipe verification is recorded in the setup evidence. The earlier failed `spark` alias is superseded. The owner chose dedicated local speech/speaker drivers alongside Local Studio. No Avesra microphone, enrollment, desktop-automation, or end-to-end performance proof exists. Downloads and inference probes alone cannot satisfy the owner workflows.
+Implementation is in progress, with intermediate source/build/native UI evidence recorded in [the execution review](001-execution-review.md). A functioning voice assistant has not been demonstrated or deployed. The owner authorized model setup through Local Studio on `ssh spark2`; that target is reachable, all six selected model packages are downloaded and hash checked, and earlier reasoning recipe verification is recorded in the setup evidence. The earlier failed `spark` alias is superseded. The owner chose dedicated local speech/speaker drivers alongside Local Studio. No Avesra microphone, enrollment, desktop-automation, or end-to-end performance proof exists. Downloads, build checks and static UI inspection cannot satisfy the owner workflows.

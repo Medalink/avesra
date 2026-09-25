@@ -1,6 +1,6 @@
 # Plan 001: Build Avesra on one Spark with a persistent Windows companion
 
-> **Executor instructions:** This is a greenfield implementation contract. Read it in full. Establish the tests and command harness described below, execute milestones in order, and record actual results. Never replace live-device evidence with mocks. Report missing hardware, model incompatibility, inaccessible application surfaces, and unmet latency/recognition targets explicitly. Do not silently weaken the product requirements.
+> **Executor instructions:** This is a greenfield implementation contract. Read it in full, including the execution overrides below. Implement specs and code without automated tests, fixtures or acceptance harnesses, execute reachable milestones in order, and record actual build/static/direct-inspection results. Never replace live-device evidence with mocks. Report missing hardware, model incompatibility, inaccessible application surfaces, and unmet latency/recognition targets explicitly. Do not silently weaken the product requirements.
 >
 > **Drift check:** The planning baseline is remote `main` at `eb0189ff64b276b4f1e2d850ab3cff6979189ad9`. Run `git status --short`, `git rev-parse HEAD`, and `git diff --stat eb0189ff64b276b4f1e2d850ab3cff6979189ad9..HEAD`. At the baseline only `LICENSE` exists; the owner subsequently authorized publishing these plans. Inspect any newer source, instructions, or plans before proceeding; reconcile overlapping work instead of overwriting it.
 
@@ -9,6 +9,8 @@
 ### Execution override: specs and code only
 
 On 2026-09-24, during execution, the owner instructed: "no tests here either, just specs and code!" This overrides every instruction below to add or run tests, test fixtures, acceptance runners/report verifiers, or a test-first workflow. Do not create test infrastructure or run automated test suites. Implement the specifications and application code, using compilation, formatting/lint/type checks, and direct runtime/UI inspection for validation. Commands and milestone requirements below that refer to automated tests describe the original plan and are superseded for this execution. Missing automated tests do not block independent implementation work. Actual unavailable hardware, service, or application capabilities still limit the affected integration; do not claim live behavior from static checks. The approved designs remain mandatory for UI work, and the owner workflows and live performance requirements remain product requirements whose unverified status must be reported honestly.
+
+The owner subsequently instructed: "I am about to game, do not use computer use until I am done and tell you." Until explicitly lifted, do not use Computer Use, automate browsers/native windows, launch or focus desktop applications, or perform interactive setup/visual checks. Continue background specs/code work and bounded build/static checks. The later "continue" does not lift this restriction.
 
 - Priority: P1.
 - Category: product/architecture implementation.
