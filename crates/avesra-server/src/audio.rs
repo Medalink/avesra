@@ -20,6 +20,8 @@ use uuid::Uuid;
 const MAX_PACKET: usize = 2_000_000;
 #[path = "audio_stream.rs"]
 pub mod streaming;
+#[path = "audio_tts.rs"]
+pub mod synthesis;
 fn valid_pcm(encoded: &str, min_bytes: usize, max_bytes: usize) -> bool {
     if encoded.len() > max_bytes.div_ceil(3) * 4 {
         return false;
