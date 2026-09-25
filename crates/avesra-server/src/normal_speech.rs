@@ -186,11 +186,16 @@ enum Piece {
     Audio(Vec<i16>),
     End { samples: usize, outcome: Completion },
 }
-async fn produce(
+async fn produce<F, Fut>(
     lane: Arc<AudioClient>,
     request: &speech::Request,
     tx: mpsc::Sender<Piece>,
-) -> Result<(), ErrorCode> {
+    authorize: F,
+) -> Result<(), ErrorCode>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<(), ErrorCode>>,
+{
     // Private request/session/epoch stays independent from the paired context.
     // synthesize/next validate private deployment, exact voice and every reply.
     let mut source = lane
@@ -199,6 +204,7 @@ async fn produce(
             request.request,
             &request.voice,
             request.source.response.text(),
+            authorize,
         )
         .await?;
     loop {
@@ -243,9 +249,14 @@ async fn stream(
     let (tx, rx) = mpsc::channel(64);
     let synth_deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     let producer = async {
-        tokio::time::timeout_at(synth_deadline, produce(lane, request, tx))
-            .await
-            .map_err(|_| ErrorCode::Expired)?
+        tokio::time::timeout_at(
+            synth_deadline,
+            produce(lane, request, tx, || {
+                inspect(auth, context, inspector, deadline)
+            }),
+        )
+        .await
+        .map_err(|_| ErrorCode::Expired)?
     };
     let consumer = consume(socket, context, rx);
     tokio::try_join!(producer, consumer)?;

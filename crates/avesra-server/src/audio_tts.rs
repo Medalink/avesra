@@ -101,13 +101,18 @@ pub struct TtsStream {
     voice: VoiceIdentity,
 }
 impl AudioClient {
-    pub async fn synthesize(
+    pub async fn synthesize<F, Fut>(
         self: &Arc<Self>,
         epoch: u64,
         utterance_id: Uuid,
         voice: &VoiceIdentity,
         text: &str,
-    ) -> Result<TtsStream, ErrorCode> {
+        authorize: F,
+    ) -> Result<TtsStream, ErrorCode>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<(), ErrorCode>>,
+    {
         voice.validate()?;
         if utterance_id.is_nil() || epoch != self.epoch.load(Ordering::SeqCst) {
             return Err(ErrorCode::Stale);
@@ -176,6 +181,9 @@ impl AudioClient {
             if socket.peer_cred().map_err(|_| ErrorCode::Denied)?.uid() != self.uid {
                 return Err(ErrorCode::Denied);
             }
+            // The caller's exact source/device/actor/output check follows all
+            // preparation/peer awaits and immediately precedes request send.
+            authorize().await?;
             stream.current()?;
             stream.sent = true;
             socket
