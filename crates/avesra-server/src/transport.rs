@@ -27,6 +27,8 @@ struct ServerState {
     #[cfg(unix)]
     speaker: Option<Arc<avesra_server::audio::AudioClient>>,
     #[cfg(unix)]
+    asr: Option<Arc<avesra_server::audio::AudioClient>>,
+    #[cfg(unix)]
     speaker_admission: Arc<Semaphore>,
     #[cfg(unix)]
     speaker_health_admission: Arc<Semaphore>,
@@ -74,13 +76,16 @@ struct SessionReply {
 }
 pub fn router(auth: AuthStore, directory: &std::path::Path) -> Result<Router, String> {
     #[cfg(unix)]
-    let speaker = speaker_client(directory)?;
+    let speaker = audio_client(directory, "speaker")?;
+    #[cfg(unix)]
+    let asr = audio_client(directory, "asr")?;
     #[cfg(not(unix))]
     let _ = directory;
     let router = Router::new()
         .route("/pair", post(pair))
         .route("/control", get(control))
         .route("/speaker", get(speaker_health).post(speaker_infer))
+        .route("/voice-analysis", post(voice_analysis))
         .layer(DefaultBodyLimit::max(1024))
         .with_state(Arc::new(ServerState {
             auth: Mutex::new(auth),
@@ -88,6 +93,8 @@ pub fn router(auth: AuthStore, directory: &std::path::Path) -> Result<Router, St
             connections: Arc::new(Semaphore::new(4)),
             #[cfg(unix)]
             speaker,
+            #[cfg(unix)]
+            asr,
             #[cfg(unix)]
             speaker_admission: Arc::new(Semaphore::new(1)),
             #[cfg(unix)]
@@ -99,8 +106,9 @@ pub fn router(auth: AuthStore, directory: &std::path::Path) -> Result<Router, St
 }
 
 #[cfg(unix)]
-fn speaker_client(
+fn audio_client(
     directory: &std::path::Path,
+    lane: &str,
 ) -> Result<Option<Arc<avesra_server::audio::AudioClient>>, String> {
     use std::io::Read;
     #[derive(Deserialize)]
@@ -109,7 +117,7 @@ fn speaker_client(
         socket: std::path::PathBuf,
         model_revision: String,
     }
-    let file = match std::fs::File::open(directory.join("speaker-deployment.json")) {
+    let file = match std::fs::File::open(directory.join(format!("{lane}-deployment.json"))) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(_) => return Err("Speaker deployment cannot be read".into()),
@@ -125,7 +133,7 @@ fn speaker_client(
         serde_json::from_slice(&bytes).map_err(|_| "Invalid speaker deployment")?;
     let client = avesra_server::audio::AudioClient::for_deployment(
         &config.socket,
-        "speaker",
+        lane,
         &config.model_revision,
     )
     .map_err(|_| "Speaker deployment is unavailable")?;
@@ -185,6 +193,19 @@ async fn speaker_infer(
     State(auth): State<Shared>,
     request: axum::extract::Request,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    analyze(auth, request, false).await
+}
+async fn voice_analysis(
+    State(auth): State<Shared>,
+    request: axum::extract::Request,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    analyze(auth, request, true).await
+}
+async fn analyze(
+    auth: Shared,
+    request: axum::extract::Request,
+    transcribe: bool,
+) -> Result<Json<serde_json::Value>, StatusCode> {
     let device = authenticate_headers(auth.clone(), request.headers()).await?;
     #[cfg(unix)]
     {
@@ -194,6 +215,16 @@ async fn speaker_infer(
             .as_ref()
             .ok_or(StatusCode::SERVICE_UNAVAILABLE)?
             .clone();
+        let asr = if transcribe {
+            Some(
+                auth.asr
+                    .as_ref()
+                    .ok_or(StatusCode::SERVICE_UNAVAILABLE)?
+                    .clone(),
+            )
+        } else {
+            None
+        };
         let _speaker_permit = auth
             .speaker_admission
             .clone()
@@ -291,6 +322,13 @@ async fn speaker_infer(
             id: worker_id,
             complete: false,
         };
+        let asr_worker_id = Uuid::new_v4();
+        let mut cancel_asr = asr.as_ref().map(|client| Cancel {
+            client: client.clone(),
+            id: asr_worker_id,
+            complete: false,
+        });
+        let asr_pcm = asr.as_ref().map(|_| input.pcm_s16le.clone());
         let inference = client.infer_with_budget(
             worker_id,
             1,
@@ -300,17 +338,64 @@ async fn speaker_infer(
             },
             Duration::from_secs(15),
         );
-        let result = tokio::select! {
+        let transcription = async {
+            match (asr.as_ref(), asr_pcm) {
+                (Some(client), Some(pcm_s16le)) => client
+                    .infer_with_budget(
+                        asr_worker_id,
+                        1,
+                        input.request_id,
+                        AudioInput::Pcm { pcm_s16le },
+                        Duration::from_secs(15),
+                    )
+                    .await
+                    .map(Some),
+                _ => Ok(None),
+            }
+        };
+        let (result, transcript) = tokio::select! {
             biased;
             _=permission.changed()=>return Err(StatusCode::UNAUTHORIZED),
-            result=inference=>result.map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?,
+            result=async {tokio::try_join!(inference, transcription)}=>result.map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?,
         };
         cancel.complete = true;
+        if let Some(cancel) = cancel_asr.as_mut() {
+            cancel.complete = true;
+        }
         if !session_current(&auth, device, input.session_id, input.capture_epoch)
             || !active(auth.clone(), device).await
             || !session_current(&auth, device, input.session_id, input.capture_epoch)
         {
             return Err(StatusCode::UNAUTHORIZED);
+        }
+        if transcribe {
+            let Some(transcript) = transcript else {
+                return Err(StatusCode::SERVICE_UNAVAILABLE);
+            };
+            // Final lane data is still transient speculation. A valid transcript
+            // and embedding alone create no accepted turn, identity or tool rights.
+            let AudioOutput::Transcript {
+                text,
+                r#final: true,
+            } = transcript.output
+            else {
+                return Err(StatusCode::UNPROCESSABLE_ENTITY);
+            };
+            let (embedding, reason) = match result.output {
+                AudioOutput::Embedding { embedding, .. } => (
+                    Some(embedding),
+                    "owner_overlap_directness_qualification_required",
+                ),
+                AudioOutput::Insufficient { .. } => (None, "insufficient_speech"),
+                _ => return Err(StatusCode::UNPROCESSABLE_ENTITY),
+            };
+            return Ok(Json(
+                serde_json::json!({"version":1,"request_id":input.request_id,"session_id":input.session_id,
+                "capture_epoch":input.capture_epoch,"speaker_revision":client.configured_revision(),
+                "asr_revision":asr.as_ref().and_then(|client| client.configured_revision()),
+                "transcript":text,"embedding":embedding,"outcome":"abstain","reason":reason,
+                "accepted_turn":false}),
+            ));
         }
         match result.output {
             AudioOutput::Embedding { embedding, .. } => Ok(Json(
@@ -321,7 +406,7 @@ async fn speaker_infer(
     }
     #[cfg(not(unix))]
     {
-        let _ = device;
+        let _ = (device, transcribe);
         Err(StatusCode::SERVICE_UNAVAILABLE)
     }
 }
