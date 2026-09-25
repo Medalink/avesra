@@ -504,11 +504,12 @@ impl Admission {
         }
         Ok(())
     }
-    pub fn challenge(
+    pub(crate) fn challenge_from_pipe(
         self,
         hello: browser::Hello,
         configured_extension: &str,
         generation: u64,
+        receive_owner: uuid::Uuid,
     ) -> Result<Pending, ErrorCode> {
         self.current(generation)?;
         hello.validate()?;
@@ -530,6 +531,7 @@ impl Admission {
         };
         self.current(generation)?;
         Ok(Pending {
+            receive_owner,
             admission: self,
             hello,
             challenge,
@@ -537,6 +539,7 @@ impl Admission {
     }
 }
 pub struct Pending {
+    receive_owner: uuid::Uuid,
     admission: Admission,
     hello: browser::Hello,
     challenge: browser::Challenge,
@@ -666,10 +669,11 @@ impl Pending {
     pub fn authenticate(
         self,
         saved: &Saved,
-        reply: browser::Authenticate,
+        received: crate::browser_receive::Authentication,
         generation: u64,
-    ) -> Result<browser::Authenticated, ErrorCode> {
+    ) -> Result<crate::browser_receive::Authenticated, ErrorCode> {
         self.admission.current(generation)?;
+        let reply = received.consume(self.receive_owner)?;
         if reply.version != browser::VERSION
             || reply.session != self.challenge.session
             || reply.challenge != self.challenge.challenge
@@ -682,13 +686,18 @@ impl Pending {
         let transcript = browser::transcript(&self.hello, &self.challenge, reply.pairing)?;
         saved.credential.verify(&transcript, &reply.proof)?;
         self.admission.current(generation)?;
-        Ok(browser::Authenticated {
-            version: browser::VERSION,
-            session: self.challenge.session,
-            installation: self.hello.installation,
-            connection: self.hello.connection,
-            pairing: reply.pairing,
-            generation,
-        })
+        Ok(crate::browser_receive::Authenticated::verified(
+            self.receive_owner,
+            self.challenge.challenge,
+            browser::Authenticated {
+                version: browser::VERSION,
+                session: self.challenge.session,
+                installation: self.hello.installation,
+                connection: self.hello.connection,
+                pairing: reply.pairing,
+                generation,
+            },
+            self.admission.started + Duration::from_secs(browser::HANDSHAKE_SECONDS),
+        ))
     }
 }

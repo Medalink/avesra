@@ -724,16 +724,17 @@ async fn run(
         Ok(())
     })?;
     // Do not drop peer inspection on cancellation: it owns blocking native work.
-    let mut pipe = listener.accept().await?;
+    let pipe = listener.accept().await?;
     admission.current(generation)?;
     with_attempt(app, id, generation, |_, _, _| Ok(()))?;
-    let Client::Hello(hello) = browser::decode(&pipe.receive().await?)? else {
-        return Err(ErrorCode::Malformed);
-    };
-    if expected_pairing.is_some() && hello.pairing != expected_pairing {
+    let (native, mut pipe) = avesra_windows::browser_receive::ReceiveOwner::open(
+        pipe, admission, &extension, generation,
+    )
+    .await?;
+    if expected_pairing.is_some() && native.challenge().pairing != expected_pairing {
         return Err(ErrorCode::Unauthenticated);
     }
-    let mut pending = Some(admission.challenge(hello, &extension, generation)?);
+    let mut pending = Some(native);
     let challenge = pending
         .as_ref()
         .ok_or(ErrorCode::Stale)?
@@ -789,8 +790,38 @@ async fn run(
                 }
                 Ok(())
             })?;
-            let message: Client = browser::decode(&pipe.receive().await?)?;
+            let incoming = pipe.receive().await?;
             with_attempt(app, id, generation, |_, _, _| Ok(()))?;
+            let message = match incoming {
+                avesra_windows::browser_receive::Incoming::Message(message) => message,
+                avesra_windows::browser_receive::Incoming::Authentication(received) => {
+                    if authenticated || job.is_some() {
+                        return Err(ErrorCode::Malformed);
+                    }
+                    let native = pending.take().ok_or(ErrorCode::Stale)?;
+                    let record = saved.as_ref().ok_or(ErrorCode::Unauthenticated)?;
+                    let response = with_attempt(app, id, generation, |_, _, attempt| {
+                        let seal = native.authenticate(record, received, generation)?;
+                        let response = pipe.install(seal)?;
+                        attempt.state = "authenticated_no_scopes";
+                        attempt.pending = None;
+                        attempt.selection = selected_revision;
+                        attempt.session = Some(response.session);
+                        attempt.pairing = Some(response.pairing);
+                        attempt.actor = Some(actor);
+                        Ok(response)
+                    })?;
+                    pipe.send(
+                        &serde_json::to_vec(
+                            &serde_json::json!({"type":"authenticated","body":response}),
+                        )
+                        .map_err(|_| ErrorCode::Malformed)?,
+                    )
+                    .await?;
+                    authenticated = true;
+                    continue;
+                }
+            };
             let revision = match &message {
                 Client::Poll {
                     session,
@@ -1000,28 +1031,6 @@ async fn run(
                             .map_err(|_| ErrorCode::Malformed)?,
                     )
                     .await?;
-                }
-                Client::Authenticate(reply) if !authenticated && job.is_none() => {
-                    let native = pending.take().ok_or(ErrorCode::Stale)?;
-                    let record = saved.as_ref().ok_or(ErrorCode::Unauthenticated)?;
-                    let response = with_attempt(app, id, generation, |_, _, attempt| {
-                        let response = native.authenticate(record, reply, generation)?;
-                        attempt.state = "authenticated_no_scopes";
-                        attempt.pending = None;
-                        attempt.selection = selected_revision;
-                        attempt.session = Some(response.session);
-                        attempt.pairing = Some(response.pairing);
-                        attempt.actor = Some(actor);
-                        Ok(response)
-                    })?;
-                    pipe.send(
-                        &serde_json::to_vec(
-                            &serde_json::json!({"type":"authenticated","body":response}),
-                        )
-                        .map_err(|_| ErrorCode::Malformed)?,
-                    )
-                    .await?;
-                    authenticated = true;
                 }
                 _ => return Err(ErrorCode::Malformed),
             }
