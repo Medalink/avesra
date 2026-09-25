@@ -1,6 +1,14 @@
 use avesra_contracts::{ErrorCode, Profile};
 use serde::{Deserialize, Serialize};
 
+/// Interface sizes, in percent. Every Avesra window is zoomed uniformly, so the
+/// approved reference geometry (drawn at 100%) keeps its proportions.
+pub const INTERFACE_SCALES: [u16; 5] = [100, 110, 125, 150, 175];
+pub const DEFAULT_INTERFACE_SCALE: u16 = 125;
+fn default_interface_scale() -> u16 {
+    DEFAULT_INTERFACE_SCALE
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Settings {
@@ -12,6 +20,8 @@ pub struct Settings {
     pub speaker: Option<String>,
     pub profile: Profile,
     pub always_on_top: bool,
+    #[serde(default = "default_interface_scale")]
+    pub interface_scale: u16,
     pub learning_chime: bool,
     pub action_chime: bool,
     pub chime_volume: u8,
@@ -30,6 +40,7 @@ impl Default for Settings {
             speaker: None,
             profile: Profile::SingleSpark,
             always_on_top: true,
+            interface_scale: DEFAULT_INTERFACE_SCALE,
             learning_chime: false,
             action_chime: false,
             chime_volume: 15,
@@ -48,6 +59,7 @@ impl Settings {
             || self.chime_volume > 100
             || self.speech_volume > 100
             || !(50..=200).contains(&self.speech_rate)
+            || !INTERFACE_SCALES.contains(&self.interface_scale)
         {
             return Err(ErrorCode::Malformed);
         }

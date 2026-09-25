@@ -141,6 +141,7 @@
   ];
   const meta = $derived(sections.find((s) => s[0] === section)!);
   const s = $derived(runtime?.settings);
+  const interfaceScales = [100, 110, 125, 150, 175];
 </script>
 
 <div
@@ -414,6 +415,27 @@
             <span class="av-kicker">Machines</span>
             <Pairing connected={!!runtime?.connected} />
             <BrowserSetup {runtime} />
+          </section>
+          <section class="section">
+            <span class="av-kicker">Display</span>
+            <div class="row">
+              <div>
+                <h2>Interface size</h2>
+                <p class="av-hint">
+                  Scales text and controls in every Avesra window on this PC.
+                </p>
+              </div>
+              <div class="av-seg" role="group" aria-label="Interface size">
+                {#each interfaceScales as scale}<button
+                    type="button"
+                    class="av-seg-btn"
+                    aria-pressed={s?.interface_scale === scale}
+                    disabled={!s || saving}
+                    onclick={() => update({ interface_scale: scale })}
+                    >{scale}%</button
+                  >{/each}
+              </div>
+            </div>
           </section>
           <section class="section">
             <span class="av-kicker">Overlay</span>

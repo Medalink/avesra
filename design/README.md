@@ -18,6 +18,14 @@ This is a **design prototype, not application code**. Every state, measurement a
 
 The `.dc.html` files are Design Component pages. They need the design canvas runtime (`support.js`, supplied by the canvas and not in this repo) to render. The markup, Tailwind classes and component logic are ordinary HTML and JavaScript you can read and port.
 
+## Size and scale
+
+The boards are drawn at **100%**: one CSS pixel is one screen pixel at 100% Windows display scaling. The design canvas zooms boards to fit your browser, often 1.5–2× on a 3440-pixel-wide display, so they look larger there than the app does at the same settings.
+
+- To judge real size, set the canvas zoom to 100%, or to the interface size you use.
+- The app's **Interface size** setting (Profiles & Machines → Display) zooms every Avesra window uniformly with WebView2 zoom and scales the window sizes to match: 100, 110, 125 (default), 150 or 175%. The reference geometry stays exact at every size.
+- Compare the app with the mockups using screenshots at the same scale, never against a canvas that's zoomed to fit.
+
 ## Rebuilding the stylesheet
 
 ```sh
