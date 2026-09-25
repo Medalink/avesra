@@ -148,7 +148,7 @@ class Service:
                 "last_inference_ms": self.last_inference_ms,
             }
         fields = {"version", "operation", "request_id", "session_id", "capture_epoch", "sequence", "issued_at_ms", "expires_at_ms"}
-        voice_operations = {"create_voice", "voice_status", "select_voice", "clear_voice", "discard_voice"}
+        voice_operations = {"create_voice", "voice_status", "select_voice", "clear_voice", "discard_voice", "preview_voice"}
         if operation in {"infer", "stream", "tts_stream"} | voice_operations:
             fields |= {"payload"}
         if operation == "stream":

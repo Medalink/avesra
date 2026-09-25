@@ -142,6 +142,9 @@ class Driver:
             result["active_voice"] = self.selected_voice
             result["active_state"] = "available" if self.selected_voice is not None and result["selection_state"] == "available" and result["selected"] == self.selected_voice else "unavailable"
             return result
+        if operation == "preview_voice" and set(payload) == {"identity"}:
+            metadata, pcm = self.voices.candidate(payload["identity"])
+            return {"voice": metadata["identity"], "pcm_s16le": base64.b64encode(pcm).decode("ascii"), "sample_rate": 24000}
         if operation == "select_voice" and set(payload) == {"identity", "selection_revision"}:
             prompt, selected = self.prepare_voice(payload["identity"])
             self.voices.select(selected, payload["selection_revision"])
@@ -157,7 +160,7 @@ class Driver:
         raise ValueError("invalid_voice_operation")
 
     def request(self, envelope, emit):
-        if envelope["operation"] in {"create_voice", "voice_status", "select_voice", "clear_voice", "discard_voice"}:
+        if envelope["operation"] in {"create_voice", "voice_status", "select_voice", "clear_voice", "discard_voice", "preview_voice"}:
             return self.voice_request(envelope["operation"], envelope["payload"])
         if self.lane == "tts" and self.voices is not None:
             selected, _ = self.voices.selection()

@@ -21,6 +21,9 @@ use std::{
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use uuid::Uuid;
 #[cfg(unix)]
+#[path = "voice_setup.rs"]
+mod voice_setup;
+#[cfg(unix)]
 #[path = "voice_stream.rs"]
 mod voice_stream;
 struct ServerState {
@@ -31,6 +34,12 @@ struct ServerState {
     speaker: Option<Arc<avesra_server::audio::AudioClient>>,
     #[cfg(unix)]
     asr: Option<Arc<avesra_server::audio::AudioClient>>,
+    #[cfg(unix)]
+    tts: Option<Arc<avesra_server::audio::AudioClient>>,
+    #[cfg(unix)]
+    voice_design: Option<Arc<avesra_server::audio::AudioClient>>,
+    #[cfg(unix)]
+    voice_admission: Arc<Semaphore>,
     #[cfg(unix)]
     speaker_admission: Arc<Semaphore>,
     #[cfg(unix)]
@@ -43,6 +52,8 @@ struct LiveSession {
     device: Uuid,
     epoch: u64,
     enabled: bool,
+    output_enabled: bool,
+    output_permission: tokio::sync::watch::Sender<(u64, bool)>,
     permission: tokio::sync::watch::Sender<(u64, bool)>,
     updated: std::time::Instant,
     seen: std::collections::VecDeque<(Uuid, std::time::Instant)>,
@@ -82,6 +93,10 @@ pub fn router(auth: AuthStore, directory: &std::path::Path) -> Result<Router, St
     let speaker = audio_client(directory, "speaker")?;
     #[cfg(unix)]
     let asr = audio_client(directory, "asr")?;
+    #[cfg(unix)]
+    let tts = audio_client(directory, "tts")?;
+    #[cfg(unix)]
+    let voice_design = audio_client(directory, "voice-design")?;
     #[cfg(not(unix))]
     let _ = directory;
     let router = Router::new()
@@ -90,6 +105,10 @@ pub fn router(auth: AuthStore, directory: &std::path::Path) -> Result<Router, St
         .route("/speaker", get(speaker_health).post(speaker_infer))
         .route("/voice-analysis", post(voice_analysis))
         .route("/voice-stream", get(voice_stream_upgrade))
+        .route(
+            "/voices",
+            post(voice_operations).layer(DefaultBodyLimit::max(4096)),
+        )
         .layer(DefaultBodyLimit::max(1024))
         .with_state(Arc::new(ServerState {
             auth: Mutex::new(auth),
@@ -100,6 +119,12 @@ pub fn router(auth: AuthStore, directory: &std::path::Path) -> Result<Router, St
             #[cfg(unix)]
             asr,
             #[cfg(unix)]
+            tts,
+            #[cfg(unix)]
+            voice_design,
+            #[cfg(unix)]
+            voice_admission: Arc::new(Semaphore::new(1)),
+            #[cfg(unix)]
             speaker_admission: Arc::new(Semaphore::new(1)),
             #[cfg(unix)]
             speaker_health_admission: Arc::new(Semaphore::new(2)),
@@ -107,6 +132,21 @@ pub fn router(auth: AuthStore, directory: &std::path::Path) -> Result<Router, St
             sessions: Mutex::new(std::collections::HashMap::new()),
         }));
     Ok(router)
+}
+async fn voice_operations(
+    State(auth): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    #[cfg(unix)]
+    {
+        voice_setup::operation(auth, headers, body).await.map(Json)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (auth, headers, body);
+        Err(StatusCode::SERVICE_UNAVAILABLE)
+    }
 }
 async fn voice_stream_upgrade(
     State(auth): State<Shared>,
@@ -640,6 +680,12 @@ async fn session(
                 device: device_id,
                 epoch: envelope.capture_epoch,
                 enabled: !mode.0 && !mode.1 && !mode.2,
+                output_enabled: !mode.1 && !mode.2,
+                output_permission: tokio::sync::watch::channel((
+                    envelope.capture_epoch,
+                    !mode.1 && !mode.2,
+                ))
+                .0,
                 permission: tokio::sync::watch::channel((
                     envelope.capture_epoch,
                     !mode.0 && !mode.1 && !mode.2,
@@ -650,6 +696,16 @@ async fn session(
             });
             live.epoch = envelope.capture_epoch;
             live.enabled = !mode.0 && !mode.1 && !mode.2;
+            live.output_enabled = !mode.1 && !mode.2;
+            live.output_permission.send_if_modified(|permission| {
+                let next = (live.epoch, live.output_enabled);
+                if *permission == next {
+                    false
+                } else {
+                    *permission = next;
+                    true
+                }
+            });
             live.permission.send_if_modified(|permission| {
                 let next = (live.epoch, live.enabled);
                 if *permission == next {
