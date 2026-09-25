@@ -794,6 +794,20 @@ async fn run(
             with_attempt(app, id, generation, |_, _, _| Ok(()))?;
             let message = match incoming {
                 avesra_windows::browser_receive::Incoming::Message(message) => message,
+                avesra_windows::browser_receive::Incoming::Settlement {
+                    session,
+                    sequence,
+                    observation_revision,
+                    proof: _,
+                } => {
+                    // No native read channel is admitted yet. Consume the valid
+                    // envelope without claiming retirement or minting an ack.
+                    Client::Poll {
+                        session,
+                        sequence,
+                        observation_revision,
+                    }
+                }
                 avesra_windows::browser_receive::Incoming::Authentication(received) => {
                     if authenticated || job.is_some() {
                         return Err(ErrorCode::Malformed);
@@ -827,6 +841,12 @@ async fn run(
                     session,
                     sequence,
                     observation_revision,
+                }
+                | Client::ReadResult {
+                    session,
+                    sequence,
+                    observation_revision,
+                    ..
                 } => Some((*session, *sequence, *observation_revision)),
                 Client::ScopeResult {
                     session,
@@ -863,6 +883,21 @@ async fn run(
                 })?;
             }
             let message = match message {
+                Client::ReadResult {
+                    session,
+                    sequence,
+                    observation_revision,
+                    reply,
+                } => {
+                    // A well-formed unsolicited/withdrawn result cannot create
+                    // native ownership. There is no active read publication yet.
+                    reply.context.validate()?;
+                    Client::Poll {
+                        session,
+                        sequence,
+                        observation_revision,
+                    }
+                }
                 Client::DocumentResult {
                     session,
                     sequence: next,
@@ -989,6 +1024,8 @@ async fn run(
                     let status = with_attempt(app, id, generation, |state, local, attempt| {
                         let value = browser::StatusReply {
                             version: browser::VERSION,
+                            read: None,
+                            read_ack: None,
                             session: challenge.session,
                             generation,
                             sequence,

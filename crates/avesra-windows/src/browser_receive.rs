@@ -52,9 +52,26 @@ impl Authenticated {
         }
     }
 }
+/// Actual authenticated transport assertion, not proof of content success.
+/// Only this receive owner constructs it; the ledger worker must still match
+/// the entire retained marker and commit retirement before acknowledging it.
+pub struct Settlement {
+    context: browser::reading::Context,
+}
+impl Settlement {
+    pub fn context(&self) -> &browser::reading::Context {
+        &self.context
+    }
+}
 pub enum Incoming {
     Message(Client),
     Authentication(Authentication),
+    Settlement {
+        session: Id,
+        sequence: u64,
+        observation_revision: u64,
+        proof: Settlement,
+    },
 }
 /// Cannot be reconstructed from a session ID, caller bytes or a status frame.
 pub struct ReceiveOwner {
@@ -153,6 +170,18 @@ impl ReceiveOwner {
                 sequence,
                 observation_revision,
                 ..
+            }
+            | Client::ReadResult {
+                session,
+                sequence,
+                observation_revision,
+                ..
+            }
+            | Client::ReadSettlement {
+                session,
+                sequence,
+                observation_revision,
+                ..
             } => Some((*session, *sequence, *observation_revision)),
             Client::DocumentResult {
                 session,
@@ -188,9 +217,39 @@ impl ReceiveOwner {
                     reply,
                 })
             }
-            Client::Poll { .. } | Client::ScopeResult { .. } | Client::DocumentResult { .. } => {
-                Incoming::Message(message)
+            Client::ReadSettlement {
+                session,
+                sequence,
+                observation_revision,
+                settlement,
+            } => {
+                settlement.validate()?;
+                let authenticated = self
+                    .authenticated
+                    .as_ref()
+                    .ok_or(ErrorCode::Unauthenticated)?;
+                let (actor, app) = self
+                    .authenticated_binding
+                    .ok_or(ErrorCode::Unauthenticated)?;
+                if settlement.context.pairing != authenticated.pairing
+                    || settlement.context.actor != actor
+                    || settlement.context.browser_app != app
+                {
+                    return Err(ErrorCode::Unauthenticated);
+                }
+                Incoming::Settlement {
+                    session,
+                    sequence,
+                    observation_revision,
+                    proof: Settlement {
+                        context: settlement.context,
+                    },
+                }
             }
+            Client::Poll { .. }
+            | Client::ScopeResult { .. }
+            | Client::DocumentResult { .. }
+            | Client::ReadResult { .. } => Incoming::Message(message),
             Client::Disconnect { session } if session == self.session => {
                 // Terminal message: no subsequent send/receive may reuse the owner.
                 return Ok(Incoming::Message(message));

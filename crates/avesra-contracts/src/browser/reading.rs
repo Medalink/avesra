@@ -186,7 +186,7 @@ fn encoded_bound(value: &impl Serialize) -> Result<(), ErrorCode> {
     Ok(())
 }
 
-/// Future v6 wire claim only. Parsing does not prove authenticated settlement.
+/// V6 wire claim only. Parsing does not prove authenticated settlement.
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SettlementKind {

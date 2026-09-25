@@ -148,7 +148,18 @@ mod host {
         loop {
             watchdog.phase(5, false)?;
             let request = read(&mut input)?;
+            // The shared v6 enum also strictly decodes read result/settlement
+            // envelopes. This relay forwards bytes; only ReceiveOwner can mint
+            // an authenticated native settlement proof.
             let message: Client = browser::decode(&request)?;
+            if !authenticated
+                && matches!(
+                    message,
+                    Client::ReadResult { .. } | Client::ReadSettlement { .. }
+                )
+            {
+                return Err(ErrorCode::Unauthenticated);
+            }
             if matches!(message, Client::Hello(_)) {
                 return Err(ErrorCode::Malformed);
             }

@@ -5,7 +5,7 @@ use uuid::Uuid;
 pub mod documents;
 pub mod reading;
 
-pub const VERSION: u16 = 5;
+pub const VERSION: u16 = 6;
 pub const MAX_MESSAGE: usize = 65536;
 pub const HANDSHAKE_SECONDS: u64 = 45;
 
@@ -280,6 +280,10 @@ pub struct StatusReply {
     pub scope: Option<ScopeStatus>,
     #[serde(deserialize_with = "required_nullable")]
     pub document: Option<documents::Request>,
+    #[serde(deserialize_with = "required_nullable")]
+    pub read: Option<reading::Request>,
+    #[serde(deserialize_with = "required_nullable")]
+    pub read_ack: Option<reading::Context>,
 }
 fn required_nullable<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
@@ -316,6 +320,33 @@ impl StatusReply {
             }
             document.validate()?;
         }
+        if let Some(read) = &self.read {
+            let authority = self.authority.ok_or(ErrorCode::Malformed)?;
+            read.validate()?;
+            if self.state != Phase::AuthenticatedNoScopes
+                || self.document.is_some()
+                || !authority.mode_allowed
+                || read.context.browser_session != self.session
+                || read.context.browser_generation != self.generation
+                || read.context.selection != authority.selection
+                || read.context.source.action_epoch != authority.action_epoch
+            {
+                return Err(ErrorCode::Stale);
+            }
+        }
+        if let Some(ack) = &self.read_ack {
+            if self.state != Phase::AuthenticatedNoScopes {
+                return Err(ErrorCode::Unauthenticated);
+            }
+            ack.validate()?;
+        }
+        if serde_json::to_vec(self)
+            .map_err(|_| ErrorCode::Malformed)?
+            .len()
+            > MAX_MESSAGE - 128
+        {
+            return Err(ErrorCode::TooLarge);
+        }
         Ok(())
     }
 }
@@ -347,6 +378,18 @@ pub enum Client {
         sequence: u64,
         reply: documents::Reply,
     },
+    ReadResult {
+        session: Id,
+        sequence: u64,
+        observation_revision: u64,
+        reply: reading::Reply,
+    },
+    ReadSettlement {
+        session: Id,
+        sequence: u64,
+        observation_revision: u64,
+        settlement: reading::Settlement,
+    },
     Disconnect {
         session: Id,
     },
@@ -359,7 +402,7 @@ pub fn comparison_transcript(challenge: &Challenge) -> Result<Vec<u8>, ErrorCode
         return Err(ErrorCode::Unsupported);
     }
     Ok(format!(
-        "AVESRA-BROWSER-COMPARE-5\n{}\n{}\n{}\n{}\n{}\n",
+        "AVESRA-BROWSER-COMPARE-6\n{}\n{}\n{}\n{}\n{}\n",
         challenge.installation.uuid(),
         challenge.connection.uuid(),
         challenge.session.uuid(),
@@ -386,7 +429,7 @@ pub fn transcript(
         return Err(ErrorCode::Stale);
     }
     Ok(format!(
-        "AVESRA-BROWSER-AUTH-5\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n",
+        "AVESRA-BROWSER-AUTH-6\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n",
         pairing.id.uuid(),
         pairing.revision.uuid(),
         hello.installation.uuid(),
