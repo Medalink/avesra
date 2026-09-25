@@ -5,6 +5,7 @@ mod catalog;
 mod connection;
 mod media;
 mod owner;
+pub mod planner;
 mod preview;
 mod profiles;
 mod setup;
@@ -55,6 +56,7 @@ struct Runtime {
     browser: browser::BrowserSetup,
     catalog: catalog::CatalogSetup,
     turns: Mutex<avesra_core::voice::TurnGate>,
+    planner: planner::NativePlanner,
     acknowledged_session: Mutex<Option<connection::SessionIdentity>>,
     setup: setup::Setup,
     media: media::MediaWorker,
@@ -500,6 +502,7 @@ fn main() {
                 voice_panel: Mutex::new(None),
                 hotkeys: Mutex::new(None),
                 shortcut_edit: tokio::sync::Mutex::new(()),
+                planner: planner::NativePlanner::default(),
                 owner_setup: std::sync::Arc::new(tokio::sync::Mutex::new(())),
                 shortcut_recording: Mutex::new(None),
                 shortcut_focus_generation: std::sync::atomic::AtomicU64::new(1),

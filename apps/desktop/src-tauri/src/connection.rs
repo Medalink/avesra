@@ -109,6 +109,78 @@ pub async fn actor_cancel(
     }
     Ok(())
 }
+pub(crate) async fn planner_operation(
+    record: &PairingRecord,
+    request: &avesra_contracts::planner::Request,
+) -> Result<avesra_contracts::planner::Reply, String> {
+    use avesra_contracts::planner;
+    request.validate().map_err(|_| "Invalid planner request")?;
+    if request.context.device != record.device_id {
+        return Err("Planner device changed".into());
+    }
+    let body = serde_json::to_vec(request).map_err(|_| "Invalid planner request")?;
+    if body.len() > planner::MAX_REQUEST_BYTES {
+        return Err("Planner request exceeds limit".into());
+    }
+    let mut response = actor_client(record, 30)?
+        .post(
+            endpoint(&record.url)?
+                .join("planner")
+                .map_err(|_| "Invalid planner endpoint")?,
+        )
+        .bearer_auth(&record.credential)
+        .header("Content-Type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .map_err(|_| "Planner request interrupted")?;
+    if !response.status().is_success() {
+        return Err("Planner unavailable or request withdrawn".into());
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| "Planner response interrupted")?
+    {
+        if bytes.len() + chunk.len() > planner::MAX_REQUEST_BYTES {
+            return Err("Planner reply exceeds limit".into());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    let reply: planner::Reply =
+        serde_json::from_slice(&bytes).map_err(|_| "Invalid planner reply")?;
+    reply
+        .validate(&request.context)
+        .map_err(|_| "Planner context changed")?;
+    Ok(reply)
+}
+pub(crate) async fn planner_cancel(
+    record: &PairingRecord,
+    request: &avesra_contracts::planner::Cancel,
+) -> Result<(), String> {
+    request
+        .validate()
+        .map_err(|_| "Invalid planner withdrawal")?;
+    if request.context.device != record.device_id {
+        return Err("Planner device changed".into());
+    }
+    let response = actor_client(record, 3)?
+        .post(
+            endpoint(&record.url)?
+                .join("planner/cancel")
+                .map_err(|_| "Invalid planner endpoint")?,
+        )
+        .bearer_auth(&record.credential)
+        .json(request)
+        .send()
+        .await
+        .map_err(|_| "Planner withdrawal unavailable")?;
+    if response.status() != reqwest::StatusCode::NO_CONTENT {
+        return Err("Planner withdrawal unconfirmed".into());
+    }
+    Ok(())
+}
 #[derive(Serialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum VoiceResult {

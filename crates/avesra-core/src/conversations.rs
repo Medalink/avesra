@@ -11,8 +11,8 @@ mod planner;
 mod tasks;
 pub(crate) use planner::{PLAN_SCHEMA, REPLY_SCHEMA};
 pub use planner::{
-    PlannerAuthority, PlannerCancellation, PlannerClaim, PlannerRequest, PlannerSummary,
-    StoredReply,
+    PlannerAuthority, PlannerCancellation, PlannerClaim, PlannerRequest, PlannerRetirement,
+    PlannerSummary, StoredReply,
 };
 pub use tasks::{AppTaskRequest, LinkedTask, TaskAuthority, TaskResolution};
 pub(crate) use tasks::{SCHEMA as TASK_SCHEMA, validate_dispatch as validate_linked_dispatch};

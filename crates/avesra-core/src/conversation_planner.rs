@@ -193,15 +193,38 @@ pub struct PlannerAuthority<'a> {
     pub context: &'a planner::Context,
     pub binding: &'a Binding,
 }
+/// Withdrawal bookkeeping only; cannot reconstruct a claim or authorize a send.
+#[derive(Clone)]
+pub struct PlannerRetirement {
+    plan: Plan,
+}
+impl PlannerRetirement {
+    pub fn target(&self) -> super::CancellationTarget {
+        let c = &self.plan.request.context;
+        super::CancellationTarget {
+            actor: c.actor,
+            source: super::Source {
+                device: c.device,
+                session: c.session,
+                utterance: c.utterance,
+            },
+            id: c.turn,
+            revision: c.turn_revision,
+        }
+    }
+}
 /// No Deserialize/Clone; original Instant survives transport and worker queues.
 pub struct PlannerClaim {
+    completed: bool,
     plan: Plan,
     started: Instant,
     cancellation: PlannerCancellation,
 }
 impl Drop for PlannerClaim {
     fn drop(&mut self) {
-        self.cancellation.cancel();
+        if !self.completed {
+            self.cancellation.cancel();
+        }
     }
 }
 impl PlannerClaim {
@@ -219,11 +242,25 @@ impl PlannerClaim {
         }
     }
 
+    pub fn retirement(&self) -> PlannerRetirement {
+        PlannerRetirement {
+            plan: self.plan.clone(),
+        }
+    }
     pub fn transport(&self) -> Result<planner::Request, ErrorCode> {
-        self.cancellation.check()?;
         let mut value = self.plan.request.clone();
-        value.remaining_ms = remaining(self.started)?;
+        value.remaining_ms = self.remaining_ms()?;
         Ok(value)
+    }
+    pub fn remaining_ms(&self) -> Result<u64, ErrorCode> {
+        self.cancellation.check()?;
+        remaining(self.started)
+    }
+    pub fn cancellation(&self) -> PlannerCancellation {
+        self.cancellation.clone()
+    }
+    pub fn binding(&self) -> &Binding {
+        &self.plan.binding
     }
     pub fn context(&self) -> &planner::Context {
         &self.plan.request.context
@@ -237,10 +274,20 @@ struct ReplyRecord {
 }
 /// Only a successful current ledger commit constructs this normal-output source.
 pub struct StoredReply {
+    publication: PlannerCancellation,
     revision: Uuid,
     reply: planner::Reply,
 }
+impl Drop for StoredReply {
+    fn drop(&mut self) {
+        self.publication.cancel();
+    }
+}
 impl StoredReply {
+    pub fn publication_current(&self) -> bool {
+        !self.publication.cancelled()
+    }
+
     pub fn revision(&self) -> Uuid {
         self.revision
     }
@@ -415,17 +462,73 @@ impl Store {
         request.cancellation.check()?;
         remaining(request.started)?;
         tx.commit().map_err(|_| ErrorCode::Storage)?;
-        request.cancellation.check()?;
-        remaining(request.started)?;
+        if let Err(error) = request
+            .cancellation
+            .check()
+            .and_then(|_| remaining(request.started).map(|_| ()))
+        {
+            self.retire_planner(PlannerRetirement { plan })?;
+            return Err(error);
+        }
         Ok(PlannerClaim {
+            completed: false,
             plan,
             started: request.started,
             cancellation: request.cancellation,
         })
     }
+    pub fn retire_planner(&mut self, retirement: PlannerRetirement) -> Result<(), ErrorCode> {
+        retirement.plan.validate()?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| ErrorCode::Storage)?;
+        let (record, state) = super::tasks::read_record(&tx, retirement.plan.request.context.turn)?;
+        let (plan, plan_state) = read_plan(&tx, &record)?.ok_or(ErrorCode::Stale)?;
+        if plan != retirement.plan {
+            return Err(ErrorCode::Stale);
+        }
+        let reply = read_reply(&tx, &plan)?;
+        if plan_state == "replied" && reply.is_some() {
+            return Ok(());
+        }
+        if reply.is_some() {
+            return Err(ErrorCode::Malformed);
+        }
+        if matches!(plan_state.as_str(), "cancelled" | "suspended") {
+            return Ok(());
+        }
+        if plan_state != "pending" || state != "planning" {
+            return Err(ErrorCode::Stale);
+        }
+        if tx.execute("UPDATE conversation_plans SET state='suspended' WHERE turn=?1 AND state='pending'",[record.id.to_string()]).map_err(|_|ErrorCode::Storage)? != 1
+            || tx.execute("UPDATE accepted_conversations SET state='suspended' WHERE id=?1 AND state='planning'",[record.id.to_string()]).map_err(|_|ErrorCode::Storage)? != 1 {
+            return Err(ErrorCode::Stale);
+        }
+        if read_plan(&tx, &record)?.as_ref() != Some(&(plan, "suspended".to_owned()))
+            || super::tasks::read_record(&tx, record.id)?.1 != "suspended"
+        {
+            return Err(ErrorCode::Malformed);
+        }
+        tx.commit().map_err(|_| ErrorCode::Storage)
+    }
     pub fn finish_planner(
         &mut self,
-        claim: PlannerClaim,
+        mut claim: PlannerClaim,
+        reply: planner::Reply,
+        authorize: &mut dyn FnMut(&PlannerAuthority<'_>) -> Result<(), ErrorCode>,
+    ) -> Result<StoredReply, ErrorCode> {
+        let result = self.finish_planner_inner(&claim, reply, authorize);
+        if result.is_err() {
+            self.retire_planner(claim.retirement())?;
+        } else {
+            claim.completed = true;
+        }
+        result
+    }
+    fn finish_planner_inner(
+        &mut self,
+        claim: &PlannerClaim,
         reply: planner::Reply,
         authorize: &mut dyn FnMut(&PlannerAuthority<'_>) -> Result<(), ErrorCode>,
     ) -> Result<StoredReply, ErrorCode> {
@@ -490,6 +593,7 @@ impl Store {
         claim.cancellation.check()?;
         remaining(claim.started)?;
         Ok(StoredReply {
+            publication: claim.cancellation.clone(),
             revision: result.revision,
             reply: result.reply,
         })

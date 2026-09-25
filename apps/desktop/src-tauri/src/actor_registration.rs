@@ -156,6 +156,7 @@ async fn run(
             Operation::Status => actors::Command::Status,
             Operation::Revoke(registration_revision) => {
                 if registration_revision.is_nil() { return Err("Invalid registration revision".into()); }
+                app.state::<Runtime>().planner.revoke(identity.actor, registration_revision);
                 actors::Command::Revoke { actor: identity.actor, registration_revision }
             }
             Operation::Register => {

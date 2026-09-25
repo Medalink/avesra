@@ -4,7 +4,7 @@ use avesra_contracts::{Action, ActionPayload, ErrorCode, Outcome};
 use avesra_core::{
     conversations::{
         AppTaskRequest, CancellationTarget, DurableTurn, PlannerAuthority, PlannerCancellation,
-        PlannerClaim, PlannerRequest, Source as ConversationSource, StoredReply,
+        PlannerClaim, PlannerRequest, PlannerRetirement, Source as ConversationSource, StoredReply,
         Summary as ConversationSummary, TaskAuthority, TaskResolution,
     },
     execution::{
@@ -69,13 +69,17 @@ impl Management {
     }
 }
 enum Command {
+    RetirePlanner {
+        retirement: PlannerRetirement,
+        reply: SyncSender<Result<(), ErrorCode>>,
+    },
     ClaimPlanner {
         request: PlannerRequest,
         authorize: PlannerAuthorization,
         reply: SyncSender<Result<PlannerClaim, ErrorCode>>,
     },
     FinishPlanner {
-        claim: PlannerClaim,
+        claim: Box<PlannerClaim>,
         result: avesra_contracts::planner::Reply,
         authorize: PlannerAuthorization,
         reply: SyncSender<Result<StoredReply, ErrorCode>>,
@@ -341,6 +345,15 @@ impl NativeEffects {
                 };
                 while let Ok(command) = receive.recv() {
                     let job = match command {
+                        Command::RetirePlanner { retirement, reply } => {
+                            let target = retirement.target();
+                            let result = controller.management().retire_planner(retirement);
+                            if let Ok(mut state) = owned.lock() {
+                                state.planners.retain(|(t, _)| *t != target);
+                            }
+                            let _ = reply.try_send(result);
+                            continue;
+                        }
                         Command::ClaimPlanner {
                             request,
                             mut authorize,
@@ -361,7 +374,16 @@ impl NativeEffects {
                             {
                                 state.planners.retain(|(t, _)| *t != target);
                             }
-                            let _ = reply.try_send(result);
+                            if let Err(
+                                mpsc::TrySendError::Full(Ok(claim))
+                                | mpsc::TrySendError::Disconnected(Ok(claim)),
+                            ) = reply.try_send(result)
+                            {
+                                let _ = controller.management().retire_planner(claim.retirement());
+                                if let Ok(mut state) = owned.lock() {
+                                    state.planners.retain(|(t, _)| *t != target);
+                                }
+                            }
                             continue;
                         }
                         Command::FinishPlanner {
@@ -373,7 +395,7 @@ impl NativeEffects {
                             let target = claim.target();
                             let epoch = claim.context().action_epoch;
                             let result = controller.management().finish_planner(
-                                claim,
+                                *claim,
                                 result,
                                 &mut |authority| {
                                     planner_current(&owned, target, epoch)?;
@@ -381,7 +403,9 @@ impl NativeEffects {
                                     planner_current(&owned, target, epoch)
                                 },
                             );
-                            if let Ok(mut state) = owned.lock() {
+                            if result.is_err()
+                                && let Ok(mut state) = owned.lock()
+                            {
                                 state.planners.retain(|(t, _)| *t != target);
                             }
                             let _ = reply.try_send(result);
@@ -549,6 +573,54 @@ impl NativeEffects {
         }
     }
     /// Same durable owner; no transcript or accepted-boolean frontend ingress.
+    pub fn retire_planner(
+        &self,
+        retirement: PlannerRetirement,
+    ) -> Result<Receiver<Result<(), ErrorCode>>, ErrorCode> {
+        let target = retirement.target();
+        {
+            let state = self.state.lock().map_err(|_| ErrorCode::Unavailable)?;
+            for (owned, signal) in &state.planners {
+                if *owned == target {
+                    signal.cancel();
+                }
+            }
+        }
+        let (reply, receive) = mpsc::sync_channel(1);
+        self.send
+            .try_send(Command::RetirePlanner { retirement, reply })
+            .map_err(|_| ErrorCode::Unavailable)?;
+        Ok(receive)
+    }
+    /// Final native publication linearization; consumes the only stored handle.
+    /// Call under current Runtime.local ownership after exact session validation.
+    pub fn publish_planner(&self, reply: StoredReply) -> Result<StoredReply, ErrorCode> {
+        let c = reply.context();
+        let target = CancellationTarget {
+            actor: c.actor,
+            source: ConversationSource {
+                device: c.device,
+                session: c.session,
+                utterance: c.utterance,
+            },
+            id: c.turn,
+            revision: c.turn_revision,
+        };
+        let mut state = self.state.lock().map_err(|_| ErrorCode::Unavailable)?;
+        if !reply.publication_current()
+            || !state.allowed
+            || state.action_epoch != c.action_epoch
+            || state.pending_cancellations.contains(&target)
+            || !state
+                .planners
+                .iter()
+                .any(|(t, signal)| *t == target && !signal.cancelled())
+        {
+            return Err(ErrorCode::Stale);
+        }
+        state.planners.retain(|(t, _)| *t != target);
+        Ok(reply)
+    }
     pub fn claim_planner(
         &self,
         request: PlannerRequest,
@@ -594,7 +666,7 @@ impl NativeEffects {
         let (reply, receive) = mpsc::sync_channel(1);
         self.send
             .try_send(Command::FinishPlanner {
-                claim,
+                claim: Box::new(claim),
                 result,
                 authorize,
                 reply,

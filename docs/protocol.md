@@ -70,3 +70,6 @@ Schema 7 adds exact checked conversation-planner and immutable reply tables. One
 
 
 The planner-v1 /planner route accepts at most MAX_REQUEST_BYTES (32768) encoded bytes, covering the existing8192-byte decoded text and JSON escaping. A separate strict /planner/cancel carries only the exact original context and version. Both require the live paired session; authority uses the exact active actor-registration/action context, while cancellation uses the session's withdrawal-only digest. Retained replay bounds and unavailable qualification behavior are defined in [planner ingress](planner-ingress.md). No operation was invoked during source checks.
+
+
+The native opaque-claim transport and same-worker finalization/publication are now source-integrated as described in [native planner ownership](native-planner.md). Pending-only retirement makes failed/unavailable requests suspended where cleanup commits, preserving all immutable answered/waiting_input replies. Successful native handoff preserves its signal, and exact cancellation remains effective until that handoff. There is still no qualified acceptance producer or configured qualified model, and no normal TTS caller.
