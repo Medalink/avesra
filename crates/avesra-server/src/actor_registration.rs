@@ -82,7 +82,7 @@ pub(super) async fn operation(
     let job = tokio::task::spawn_blocking(move || {
         let _admission = admission;
         let mut store = owned.auth.lock().map_err(|_| ErrorCode::Unavailable)?;
-        store.actor_operation(device, &command, &mut || {
+        let result = store.actor_operation(device, &command, &mut || {
             if !live.load(Ordering::SeqCst)
                 || started.elapsed() >= Duration::from_secs(5)
                 || !current(&owned, device, &command)
@@ -90,7 +90,14 @@ pub(super) async fn operation(
                 return Err(ErrorCode::Stale);
             }
             Ok(())
-        })
+        });
+        // Notification belongs to the actual committed writer, not its HTTP waiter.
+        if let Ok(Some(binding)) = &result {
+            if binding.revoked {
+                super::planner_ingress::revoked(&owned, device, binding);
+            }
+        }
+        result
     });
     let remaining = Duration::from_secs(5).saturating_sub(started.elapsed());
     let result = tokio::select! {

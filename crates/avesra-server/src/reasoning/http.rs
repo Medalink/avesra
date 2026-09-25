@@ -19,6 +19,18 @@ use std::{
 };
 use tokio::sync::{Mutex, Semaphore};
 use zeroize::Zeroizing;
+/// Native paired authority; called on an owned blocking job, never supplied by
+/// model text or wire data. Deployment qualification remains independently required.
+pub type Authorization = Arc<dyn Fn() -> Result<(), ErrorCode> + Send + Sync>;
+async fn authorize(check: &Authorization, deadline: Instant) -> Result<(), ErrorCode> {
+    left(deadline)?;
+    let owned = check.clone();
+    tokio::task::spawn_blocking(move || owned())
+        .await
+        .map_err(|_| ErrorCode::Unavailable)??;
+    left(deadline)?;
+    Ok(())
+}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Config {
@@ -277,9 +289,10 @@ impl Driver {
     /// constructor. Wire request validation alone never produces qualification.
     pub async fn answer(
         self: &Arc<Self>,
-        qualification: QualifiedDeployment,
+        qualification: Arc<QualifiedDeployment>,
         request: planner::Request,
         admitted: Instant,
+        authority: Authorization,
     ) -> Result<planner::Response, ErrorCode> {
         request.validate()?;
         if admitted > Instant::now() || !qualification.valid(self) {
@@ -297,13 +310,13 @@ impl Driver {
         let caller = Caller(Arc::new(AtomicBool::new(true)));
         let present = caller.0.clone();
         let driver = self.clone();
-        let qualification = Arc::new(qualification);
         let result = tokio::spawn(async move {
             let _permit = permit;
             left(deadline)?;
             if !present.load(Ordering::SeqCst) || !qualification.valid(&driver) {
                 return Err(ErrorCode::Stale);
             }
+            authorize(&authority, deadline).await?;
             let path = driver.config.credential_file.clone();
             let key = tokio::task::spawn_blocking(move || credential(&path))
                 .await
@@ -344,7 +357,9 @@ impl Driver {
             let (mut jobs, lease) = job;
             // Persisted ownership precedes the first possible model send. Any
             // subsequent early exit conservatively retains the blocking row.
-            let stream = if qualification.valid(&driver)
+            let authorized = authorize(&authority, deadline).await;
+            let stream = if authorized.is_ok()
+                && qualification.valid(&driver)
                 && present.load(Ordering::SeqCst)
                 && left(deadline).is_ok()
             {
@@ -370,6 +385,10 @@ impl Driver {
                 || !qualification.valid(&driver)
                 || !present.load(Ordering::SeqCst)
             {
+                return Err(ErrorCode::Stale);
+            }
+            authorize(&authority, deadline).await?;
+            if !present.load(Ordering::SeqCst) || !qualification.valid(&driver) {
                 return Err(ErrorCode::Stale);
             }
             left(deadline)?;

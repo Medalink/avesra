@@ -24,6 +24,9 @@ use uuid::Uuid;
 #[path = "actor_registration.rs"]
 mod actor_registration;
 #[cfg(unix)]
+#[path = "planner_ingress.rs"]
+mod planner_ingress;
+#[cfg(unix)]
 #[path = "voice_preview.rs"]
 mod voice_preview;
 #[cfg(unix)]
@@ -33,6 +36,15 @@ mod voice_setup;
 #[path = "voice_stream.rs"]
 mod voice_stream;
 struct ServerState {
+    #[cfg(unix)]
+    planner_admission: Arc<Semaphore>,
+    #[cfg(unix)]
+    planner_cancellations: Arc<Semaphore>,
+    #[cfg(unix)]
+    reasoning: Option<(
+        Arc<crate::reasoning::http::Driver>,
+        Arc<crate::reasoning::http::QualifiedDeployment>,
+    )>,
     auth: Mutex<AuthStore>,
     admission: Arc<Semaphore>,
     connections: Arc<Semaphore>,
@@ -67,6 +79,7 @@ struct LiveSession {
     action_enabled: bool,
     action_permission: tokio::sync::watch::Sender<(u64, bool)>,
     actor_attempts: std::collections::HashMap<Uuid, (u64, bool)>,
+    planner_requests: std::collections::HashMap<Uuid, planner_ingress::Entry>,
     enabled: bool,
     output_enabled: bool,
     output_permission: tokio::sync::watch::Sender<(u64, bool)>,
@@ -120,6 +133,13 @@ pub fn router(auth: AuthStore, directory: &std::path::Path) -> Result<Router, St
         .route("/control", get(control))
         .route("/actors", post(actors))
         .route("/actors/cancel", post(cancel_actor))
+        .route(
+            "/planner",
+            post(planner).layer(DefaultBodyLimit::max(
+                avesra_contracts::planner::MAX_REQUEST_BYTES,
+            )),
+        )
+        .route("/planner/cancel", post(cancel_planner))
         .route("/speaker", get(speaker_health).post(speaker_infer))
         .route("/voice-analysis", post(voice_analysis))
         .route("/voice-stream", get(voice_stream_upgrade))
@@ -131,6 +151,13 @@ pub fn router(auth: AuthStore, directory: &std::path::Path) -> Result<Router, St
         .layer(DefaultBodyLimit::max(1024))
         .with_state(Arc::new(ServerState {
             auth: Mutex::new(auth),
+            #[cfg(unix)]
+            planner_admission: Arc::new(Semaphore::new(2)),
+            #[cfg(unix)]
+            planner_cancellations: Arc::new(Semaphore::new(2)),
+            // No loaded-artifact/routing/terminal/context-capacity qualifier exists.
+            #[cfg(unix)]
+            reasoning: None,
             admission: Arc::new(Semaphore::new(8)),
             connections: Arc::new(Semaphore::new(4)),
             #[cfg(unix)]
@@ -155,6 +182,39 @@ pub fn router(auth: AuthStore, directory: &std::path::Path) -> Result<Router, St
             actor_cancellations: Arc::new(Semaphore::new(2)),
         }));
     Ok(router)
+}
+async fn planner(
+    State(auth): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<avesra_contracts::planner::Request>,
+) -> Result<Json<avesra_contracts::planner::Reply>, StatusCode> {
+    #[cfg(unix)]
+    {
+        planner_ingress::operation(auth, headers, body)
+            .await
+            .map(Json)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (auth, headers, body);
+        Err(StatusCode::SERVICE_UNAVAILABLE)
+    }
+}
+async fn cancel_planner(
+    State(auth): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<avesra_contracts::planner::Cancel>,
+) -> Result<StatusCode, StatusCode> {
+    #[cfg(unix)]
+    {
+        planner_ingress::cancel(auth, headers, body)?;
+        Ok(StatusCode::NO_CONTENT)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (auth, headers, body);
+        Err(StatusCode::SERVICE_UNAVAILABLE)
+    }
 }
 async fn actors(
     State(auth): State<Shared>,
@@ -645,7 +705,11 @@ async fn session(
     impl Drop for SessionLease {
         fn drop(&mut self) {
             if let Ok(mut sessions) = self.auth.sessions.lock() {
-                sessions.remove(&self.id);
+                if let Some(session) = sessions.remove(&self.id) {
+                    for entry in session.planner_requests.values() {
+                        entry.withdraw();
+                    }
+                }
             }
         }
     }
@@ -764,6 +828,7 @@ async fn session(
                 action_enabled: !mode.2,
                 action_permission: tokio::sync::watch::channel((envelope.action_epoch, !mode.2)).0,
                 actor_attempts: std::collections::HashMap::new(),
+                planner_requests: std::collections::HashMap::new(),
                 enabled: !mode.0 && !mode.1 && !mode.2,
                 output_enabled: !mode.1 && !mode.2,
                 output_permission: tokio::sync::watch::channel((
@@ -781,6 +846,11 @@ async fn session(
             });
             live.epoch = envelope.capture_epoch;
             live.output_epoch = envelope.playback_epoch;
+            if live.action_epoch != envelope.action_epoch || mode.2 {
+                for entry in live.planner_requests.values() {
+                    entry.withdraw();
+                }
+            }
             live.action_epoch = envelope.action_epoch;
             live.action_enabled = !mode.2;
             live.action_permission.send_if_modified(|permission| {

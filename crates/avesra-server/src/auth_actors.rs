@@ -134,6 +134,30 @@ fn read(db: &Connection, device: Uuid) -> Result<Option<Binding>, ErrorCode> {
 }
 #[cfg(unix)]
 impl AuthStore {
+    pub fn planner_binding(
+        &self,
+        context: &avesra_contracts::planner::Context,
+    ) -> Result<(), ErrorCode> {
+        context.validate()?;
+        let binding = read(&self.connection, context.device)?.ok_or(ErrorCode::Denied)?;
+        if binding.revoked
+            || binding.actor != context.actor
+            || binding.registration_revision != context.registration_revision
+        {
+            return Err(ErrorCode::Denied);
+        }
+        // A single final SQL snapshot binds the active device and complete
+        // strictly decoded actor row, including an out-of-process revocation.
+        let current: bool = self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM devices d JOIN actors a ON a.device=d.id WHERE d.id=?1 AND d.revoked=0 AND a.revoked=0 AND a.actor=?2 AND a.registration_revision=?3 AND a.owner_revision=?4 AND a.registered_by=?5)",
+            params![context.device.to_string(),binding.actor.to_string(),binding.registration_revision.to_string(),binding.owner_revision.to_string(),binding.registered_by.to_string()],
+            |r| r.get(0),
+        ).map_err(|_| ErrorCode::Storage)?;
+        if !current {
+            return Err(ErrorCode::Denied);
+        }
+        Ok(())
+    }
     pub fn actor_operation(
         &mut self,
         device: Uuid,

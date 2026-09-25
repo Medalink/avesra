@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 pub const VERSION: u16 = 1;
 pub const MAX_BUDGET_MS: u64 = 30_000;
+pub const MAX_REQUEST_BYTES: usize = 32_768;
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Context {
@@ -66,6 +67,20 @@ impl Request {
             return Err(ErrorCode::Malformed);
         }
         Ok(())
+    }
+}
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Cancel {
+    pub version: u16,
+    pub context: Context,
+}
+impl Cancel {
+    pub fn validate(&self) -> Result<(), ErrorCode> {
+        if self.version != VERSION {
+            return Err(ErrorCode::Version);
+        }
+        self.context.validate()
     }
 }
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
