@@ -67,6 +67,14 @@
     const value = await command<Candidate>("choose_app_folder", { panel, candidate: candidate.id });
     if (mounted && current === generation && scan) scan = { ...scan, candidates: scan.candidates.map(v => v.id === value.id ? value : v) };
   }); }
+  function executable() { return run(async current => {
+    const active = await open(current); if (!active) return;
+    const value = await command<Candidate>("choose_app_executable", { panel: active });
+    if (mounted && current === generation) {
+      scan = scan ? { ...scan, candidates: [...scan.candidates, value] } : { candidates: [value], skipped: 0, truncated: false, unavailable_sources: [] };
+      selected = value.id;
+    }
+  }); }
   function observeWindows() { return run(async current => {
     if (!panel || !candidate) return;
     const value = await command<Candidate>("observe_app_windows", { panel, candidate: candidate.id });
@@ -130,7 +138,8 @@
   <div class="av-card flex flex-col gap-3 p-3.5">
     <div class="flex items-center justify-between gap-3">
       <span class="text-[12.5px] text-zinc-100">Choose an application</span>
-      <button class="av-btn av-btn-secondary av-btn-sm" disabled={!enabled || busy} onclick={discover}>{busy ? "Working…" : "Find applications"}</button>
+      <div class="flex items-center gap-1.5"><button class="av-btn av-btn-ghost av-btn-sm" disabled={!enabled || busy} onclick={executable}>Choose executable</button>
+      <button class="av-btn av-btn-secondary av-btn-sm" disabled={!enabled || busy} onclick={discover}>{busy ? "Working…" : "Find applications"}</button></div>
     </div>
     {#if scan}
       <label class="flex flex-col gap-1.5"><span class="av-hint">Native application entry</span>

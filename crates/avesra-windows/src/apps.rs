@@ -67,11 +67,15 @@ fn path_of(file: &File) -> Result<String, ErrorCode> {
     }
     Ok(path)
 }
-fn identity(
-    file: &mut File,
-    arguments: String,
-    working_directory: String,
-) -> Result<ExecutableIdentity, ErrorCode> {
+#[derive(Clone, PartialEq, Eq)]
+struct FileFingerprint {
+    path: String,
+    sha256: String,
+    bytes: u64,
+    volume: u32,
+    file_index: u64,
+}
+fn fingerprint(file: &mut File) -> Result<FileFingerprint, ErrorCode> {
     let metadata = file.metadata().map_err(|_| ErrorCode::Unavailable)?;
     if !metadata.is_file() || metadata.len() == 0 || metadata.len() > 1_073_741_824 {
         return Err(ErrorCode::TooLarge);
@@ -98,15 +102,103 @@ fn identity(
     if total != metadata.len() {
         return Err(ErrorCode::Stale);
     }
-    Ok(ExecutableIdentity {
+    Ok(FileFingerprint {
         path: path_of(file)?,
-        arguments,
-        working_directory,
         sha256: format!("{:x}", hash.finalize()),
         bytes: total,
         volume: info.dwVolumeSerialNumber,
         file_index: (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
     })
+}
+fn identity(
+    file: &mut File,
+    arguments: String,
+    working_directory: String,
+) -> Result<ExecutableIdentity, ErrorCode> {
+    let value = fingerprint(file)?;
+    Ok(ExecutableIdentity {
+        path: value.path,
+        arguments,
+        working_directory,
+        sha256: value.sha256,
+        bytes: value.bytes,
+        volume: value.volume,
+        file_index: value.file_index,
+    })
+}
+/// Native picker evidence only; no cwd, action authority or frontend constructor.
+#[derive(Clone)]
+pub struct ExplicitExecutable {
+    name: String,
+    fingerprint: FileFingerprint,
+}
+impl ExplicitExecutable {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+    pub fn path(&self) -> &str {
+        &self.fingerprint.path
+    }
+    pub(crate) fn inspect(path: &Path) -> Result<Self, ErrorCode> {
+        let path = path
+            .to_str()
+            .filter(|v| local_path(v) && v.to_ascii_lowercase().ends_with(".exe"))
+            .ok_or(ErrorCode::Malformed)?;
+        // The final component is opened without following a reparse point.
+        // Ancestor junctions are not claimed absent; canonical handle identity
+        // is what is frozen and later compared.
+        let mut file = OpenOptions::new()
+            .read(true)
+            .share_mode(1)
+            .custom_flags(0x00200000)
+            .open(path)
+            .map_err(|_| ErrorCode::Unavailable)?;
+        let mut info = BY_HANDLE_FILE_INFORMATION::default();
+        unsafe { GetFileInformationByHandle(HANDLE(file.as_raw_handle()), &mut info) }
+            .map_err(|_| ErrorCode::Unavailable)?;
+        if info.dwFileAttributes & 0x400 != 0 {
+            return Err(ErrorCode::Unsupported);
+        }
+        let fingerprint = fingerprint(&mut file)?;
+        if !fingerprint.path.to_ascii_lowercase().ends_with(".exe") {
+            return Err(ErrorCode::Malformed);
+        }
+        let name = Path::new(&fingerprint.path)
+            .file_stem()
+            .and_then(|v| v.to_str())
+            .filter(|v| !v.is_empty() && v.len() <= 256 && !v.chars().any(char::is_control))
+            .ok_or(ErrorCode::Malformed)?
+            .into();
+        Ok(Self { name, fingerprint })
+    }
+    pub fn revalidate(&self) -> Result<(), ErrorCode> {
+        if Self::inspect(Path::new(self.path()))?.fingerprint != self.fingerprint {
+            return Err(ErrorCode::Stale);
+        }
+        Ok(())
+    }
+    pub fn select(&self, owner: Uuid, cwd: &Path) -> Result<AppRecord, ErrorCode> {
+        self.revalidate()?;
+        let record = select_executable(
+            owner,
+            self.name.clone(),
+            Path::new(self.path()),
+            String::new(),
+            cwd,
+        )?;
+        let LaunchIdentity::Executable(ref value) = record.launch else {
+            return Err(ErrorCode::Malformed);
+        };
+        if value.path != self.fingerprint.path
+            || value.sha256 != self.fingerprint.sha256
+            || value.bytes != self.fingerprint.bytes
+            || value.volume != self.fingerprint.volume
+            || value.file_index != self.fingerprint.file_index
+        {
+            return Err(ErrorCode::Stale);
+        }
+        Ok(record)
+    }
 }
 fn open_executable(path: &str) -> Result<File, ErrorCode> {
     if !local_path(path) || !path.to_ascii_lowercase().ends_with(".exe") {
@@ -847,6 +939,7 @@ fn activate_package(
         unsafe { manager.ActivateApplication(PCWSTR(app.as_ptr()), PCWSTR::null(), AO_NOERRORUI) }
             .ok()
             .filter(|v| *v != 0);
+    let started = Instant::now();
     let mut matched = false;
     let mut observed = None;
     let mut process_created = None;
@@ -855,7 +948,6 @@ fn activate_package(
     {
         matched = true;
         process_created = Some(created);
-        let started = Instant::now();
         while started.elapsed() < Duration::from_secs(3) {
             if unsafe { WaitForSingleObject(process.0, 0) } != WAIT_TIMEOUT {
                 break;

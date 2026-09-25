@@ -34,6 +34,7 @@ struct Choice {
 }
 #[derive(Clone)]
 enum NativeCandidate {
+    Explicit(avesra_windows::apps::ExplicitExecutable),
     Executable(avesra_windows::discovery::Candidate),
     Packaged(avesra_windows::packages::Candidate),
 }
@@ -44,6 +45,7 @@ impl NativeCandidate {
         cwd: Option<&std::path::Path>,
     ) -> Result<avesra_core::apps::AppRecord, ErrorCode> {
         match self {
+            Self::Explicit(value) => value.select(actor, cwd.ok_or(ErrorCode::Malformed)?),
             Self::Executable(value) => value.select(actor, cwd.ok_or(ErrorCode::Malformed)?),
             Self::Packaged(value) if cwd.is_none() => value.select(actor),
             Self::Packaged(_) => Err(ErrorCode::Malformed),
@@ -77,6 +79,13 @@ pub struct CandidateView {
 impl Choice {
     fn view(&self) -> CandidateView {
         let (name, source, detail, arguments, selectable) = match &self.native {
+            NativeCandidate::Explicit(value) => (
+                value.name().into(),
+                avesra_core::apps::AppSource::ExplicitExecutable,
+                value.path().into(),
+                String::new(),
+                true,
+            ),
             NativeCandidate::Executable(value) => (
                 value.name.clone(),
                 value.source.clone(),
@@ -342,6 +351,59 @@ pub async fn scan_app_catalog(
     .map_err(|_| "Discovery coordinator stopped")?
 }
 #[tauri::command]
+pub async fn choose_app_executable(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    panel: Uuid,
+) -> Result<CandidateView, String> {
+    visible(&window)?;
+    let hwnd = window.hwnd().map_err(|_| "Settings handle unavailable")?.0 as isize;
+    let owner = app
+        .state::<Runtime>()
+        .catalog
+        .work
+        .clone()
+        .try_lock_owned()
+        .map_err(|_| "Application setup is busy")?;
+    with_panel(&app, panel, |p| {
+        if p.candidates.len() >= 768 {
+            return Err("Candidate limit reached; scan again before choosing a file".into());
+        }
+        Ok(())
+    })?;
+    tauri::async_runtime::spawn(async move {
+        let _owner = owner;
+        let picker_app = app.clone();
+        let native = tokio::task::spawn_blocking(move || {
+            avesra_windows::discovery::choose_executable(hwnd, &mut || {
+                with_panel(&picker_app, panel, |_| Ok(())).map_err(|_| ErrorCode::Stale)
+            })
+        })
+        .await
+        .map_err(|_| "Executable picker stopped")?
+        .map_err(|_| "Executable choice cancelled or unavailable")?;
+        with_panel(&app, panel, |p| {
+            if p.candidates.len() >= 768 {
+                return Err("Candidate limit reached".into());
+            }
+            let choice = Choice {
+                id: Uuid::new_v4(),
+                native: NativeCandidate::Explicit(native),
+                cwd: None,
+                discovered: Instant::now(),
+                hints: vec![],
+                selected_hint: None,
+                hints_complete: false,
+            };
+            let result = choice.view();
+            p.candidates.push(choice);
+            Ok(result)
+        })
+    })
+    .await
+    .map_err(|_| "Executable picker coordinator stopped")?
+}
+#[tauri::command]
 pub async fn choose_app_folder(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
@@ -357,7 +419,8 @@ pub async fn choose_app_folder(
             .find(|v| v.id == candidate)
             .ok_or("Candidate unavailable")?;
         if choice.discovered.elapsed() >= Duration::from_secs(120)
-            || !matches!(&choice.native, NativeCandidate::Executable(value) if value.working_directory.is_none() && value.selectable)
+            || !(matches!(&choice.native, NativeCandidate::Explicit(_))
+                || matches!(&choice.native, NativeCandidate::Executable(value) if value.working_directory.is_none() && value.selectable))
         {
             return Err("Candidate changed or does not need a folder".into());
         }
@@ -609,11 +672,14 @@ pub async fn remember_app(
                     if discovered.elapsed() >= Duration::from_secs(120) {
                         return Err(ErrorCode::Expired);
                     }
-                    if let Some(hint) = &hint {
-                        avesra_windows::apps::bind_window_hint(&mut confirmed_record, hint)?;
-                    }
                     if let NativeCandidate::Packaged(value) = &final_candidate {
                         value.revalidate()?;
+                    }
+                    if let NativeCandidate::Explicit(value) = &final_candidate {
+                        value.revalidate()?;
+                    }
+                    if let Some(hint) = &hint {
+                        avesra_windows::apps::bind_window_hint(&mut confirmed_record, hint)?;
                     }
                     authorize()
                 }),

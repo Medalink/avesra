@@ -620,6 +620,7 @@ fn main() {
             catalog::close_app_catalog,
             catalog::scan_app_catalog,
             catalog::choose_app_folder,
+            catalog::choose_app_executable,
             catalog::observe_app_windows,
             catalog::choose_app_window,
             catalog::app_aliases,

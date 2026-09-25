@@ -24,8 +24,9 @@ use windows::{
             },
         },
         UI::Shell::{
-            FOLDERID_CommonPrograms, FOLDERID_Programs, FOS_DONTADDTORECENT, FOS_FORCEFILESYSTEM,
-            FOS_NODEREFERENCELINKS, FOS_PICKFOLDERS, FileOpenDialog, IFileOpenDialog, IShellLinkW,
+            Common::COMDLG_FILTERSPEC, FOLDERID_CommonPrograms, FOLDERID_Programs,
+            FOS_DONTADDTORECENT, FOS_FILEMUSTEXIST, FOS_FORCEFILESYSTEM, FOS_NODEREFERENCELINKS,
+            FOS_PATHMUSTEXIST, FOS_PICKFOLDERS, FileOpenDialog, IFileOpenDialog, IShellLinkW,
             KF_FLAG_DONT_VERIFY, SHGetKnownFolderPath, SIGDN_FILESYSPATH, SLGP_RAWPATH, ShellLink,
         },
     },
@@ -107,6 +108,21 @@ pub fn choose_working_directory(
     owner: isize,
     authorize: &mut dyn FnMut() -> Result<(), ErrorCode>,
 ) -> Result<PathBuf, ErrorCode> {
+    choose_path(owner, true, authorize)
+}
+pub fn choose_executable(
+    owner: isize,
+    authorize: &mut dyn FnMut() -> Result<(), ErrorCode>,
+) -> Result<crate::apps::ExplicitExecutable, ErrorCode> {
+    let path = choose_path(owner, false, authorize)?;
+    authorize()?;
+    crate::apps::ExplicitExecutable::inspect(&path)
+}
+fn choose_path(
+    owner: isize,
+    folder: bool,
+    authorize: &mut dyn FnMut() -> Result<(), ErrorCode>,
+) -> Result<PathBuf, ErrorCode> {
     if owner == 0 {
         return Err(ErrorCode::Malformed);
     }
@@ -118,16 +134,28 @@ pub fn choose_working_directory(
         unsafe { CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER) }
             .map_err(|_| ErrorCode::Unavailable)?;
     unsafe {
-        let options = dialog.GetOptions().map_err(|_| ErrorCode::Unavailable)?;
+        let mut options = dialog.GetOptions().map_err(|_| ErrorCode::Unavailable)?;
+        options |=
+            FOS_FORCEFILESYSTEM | FOS_NODEREFERENCELINKS | FOS_DONTADDTORECENT | FOS_PATHMUSTEXIST;
+        if folder {
+            options |= FOS_PICKFOLDERS;
+        } else {
+            options |= FOS_FILEMUSTEXIST;
+        }
         dialog
-            .SetOptions(
-                options
-                    | FOS_PICKFOLDERS
-                    | FOS_FORCEFILESYSTEM
-                    | FOS_NODEREFERENCELINKS
-                    | FOS_DONTADDTORECENT,
-            )
+            .SetOptions(options)
             .map_err(|_| ErrorCode::Unavailable)?;
+        if !folder {
+            dialog
+                .SetFileTypes(&[COMDLG_FILTERSPEC {
+                    pszName: windows::core::w!("Windows executables"),
+                    pszSpec: windows::core::w!("*.exe"),
+                }])
+                .map_err(|_| ErrorCode::Unavailable)?;
+            dialog
+                .SetTitle(windows::core::w!("Choose an application for Avesra"))
+                .map_err(|_| ErrorCode::Unavailable)?;
+        }
         authorize()?;
         dialog
             .Show(Some(HWND(owner as *mut _)))
