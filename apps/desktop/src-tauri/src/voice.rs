@@ -60,7 +60,6 @@ pub fn spawn(app: tauri::AppHandle, record: PairingRecord, generation: u64) -> W
                 {
                     local.voice_ready = false;
                     local.capture_epoch = local.capture_epoch.saturating_add(1);
-                    local.action_epoch = local.action_epoch.saturating_add(1);
                     local.refresh();
                     state.publish(&local);
                     let _ = app.emit("runtime-state", local.clone());
