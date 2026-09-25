@@ -138,7 +138,7 @@ impl AudioHealth {
                 "unavailable" | "loading" | "loaded_unqualified" | "termination_pending"
             )
             || self.permission_authority
-            || (self.streaming && self.lane != "asr")
+            || (self.streaming && !matches!(self.lane.as_str(), "asr" | "tts"))
             || self.cancellation != "terminate_process"
             || self
                 .last_inference_ms

@@ -1,6 +1,7 @@
 """Bounded same-UID Unix socket supervisor; one warm, cancellable lane process."""
 import argparse
 import asyncio
+import base64
 import contextlib
 import json
 import multiprocessing as mp
@@ -29,7 +30,7 @@ def child(pipe, config):
             while True:
                 payload = pipe.recv()
                 try:
-                    result = driver.request(payload)
+                    result = driver.request(payload, lambda chunk: pipe.send({"chunk": chunk}))
                     payload = None
                     pipe.send({"result": result})
                 except Exception:
@@ -133,7 +134,7 @@ class Service:
             await asyncio.sleep(0.02)
         raise ValueError("deadline_exceeded")
 
-    async def dispatch(self, request):
+    async def dispatch(self, request, on_chunk=None):
         if not isinstance(request, dict) or type(request.get("version")) is not int or request["version"] != 1:
             return {"error": "invalid_request"}
         operation = request.get("operation")
@@ -141,18 +142,20 @@ class Service:
             return {
                 "version": 1, "lane": self.config["lane"],
                 "model_revision": self.config["model_revision"], "state": self.state,
-                "streaming": self.config.get("asr_streaming", False), "cancellation": "terminate_process",
+                "streaming": self.config.get("asr_streaming", False) or self.config.get("tts_streaming", False), "cancellation": "terminate_process",
                 "permission_authority": False, "busy": self.active is not None or self.stream is not None,
                 "successful_inferences": self.successful_inferences,
                 "last_inference_ms": self.last_inference_ms,
             }
         fields = {"version", "operation", "request_id", "session_id", "capture_epoch", "sequence", "issued_at_ms", "expires_at_ms"}
-        if operation in {"infer", "stream"}:
+        if operation in {"infer", "stream", "tts_stream"}:
             fields |= {"payload"}
         if operation == "stream":
             fields |= {"chunk_sequence", "final"}
-        if set(request) != fields or operation not in {"load", "infer", "cancel", "stream"}:
+        if set(request) != fields or operation not in {"load", "infer", "cancel", "stream", "tts_stream"}:
             return {"error": "invalid_request"}
+        if operation == "tts_stream" and (not self.config.get("tts_streaming", False) or on_chunk is None):
+            return {"error": "streaming_unsupported"}
         try:
             for name in ("request_id", "session_id"):
                 value = request[name]
@@ -200,11 +203,13 @@ class Service:
         first = operation == "stream" and self.stream is None
         if first and request["chunk_sequence"] != 1:
             return {"error": "stream_sequence"}
-        if first:
+        if first or operation == "tts_stream":
             self.streams_recent = {k: until for k, until in self.streams_recent.items() if until > time.monotonic()}
             identity = (key, request["request_id"])
             if identity in self.streams_recent or len(self.streams_recent) >= 128:
                 return {"error": "stream_replay_or_capacity"}
+            if operation == "tts_stream":
+                self.streams_recent[identity] = time.monotonic() + 31
         final = request.get("final", False)
         if operation == "stream":
             if self.state != "loaded_unqualified":
@@ -244,8 +249,33 @@ class Service:
             result = await self.receive(generation, deadline)
             if not self.current(generation, key, epoch, deadline):
                 raise ValueError("stale_reply")
+            chunk_count = 0
+            while "chunk" in result:
+                chunk = result["chunk"]
+                if operation != "tts_stream" or not isinstance(chunk, dict) or set(chunk) != {"pcm_s16le", "sample_rate", "sequence", "samples"}:
+                    raise ValueError("invalid_stream_reply")
+                if type(chunk["sequence"]) is not int or chunk["sequence"] != chunk_count + 1 or chunk_count >= 375 or type(chunk["sample_rate"]) is not int or chunk["sample_rate"] != 24000 or type(chunk["samples"]) is not int or chunk["samples"] != 1920:
+                    raise ValueError("invalid_stream_reply")
+                encoded = chunk["pcm_s16le"]
+                if not isinstance(encoded, str) or len(encoded) != 5120 or len(base64.b64decode(encoded, validate=True)) != 3840:
+                    raise ValueError("invalid_stream_reply")
+                chunk_count += 1
+                result.update(lane=self.config["lane"], model_revision=self.config["model_revision"], request_id=owner[1], session_id=key, capture_epoch=epoch)
+                await asyncio.wait_for(on_chunk(result), max(0.001, min(0.5, deadline - time.monotonic())))
+                chunk = encoded = result = None
+                if not self.current(generation, key, epoch, deadline):
+                    raise ValueError("stale_reply")
+                result = await self.receive(generation, deadline)
+                if not self.current(generation, key, epoch, deadline):
+                    raise ValueError("stale_reply")
+            if operation == "tts_stream" and "result" in result:
+                terminal = result["result"]
+                if not isinstance(terminal, dict) or set(terminal) != {"outcome", "chunks", "samples", "sample_rate"} or terminal["outcome"] not in {"complete", "truncated"} or type(terminal["chunks"]) is not int or terminal["chunks"] != chunk_count or chunk_count == 0 or type(terminal["samples"]) is not int or terminal["samples"] != chunk_count * 1920 or type(terminal["sample_rate"]) is not int or terminal["sample_rate"] != 24000:
+                    raise ValueError("invalid_stream_terminal")
+                result.update(request_id=owner[1], session_id=key, capture_epoch=epoch)
             if "result" in result:
-                self.successful_inferences += int(operation != "stream" or final)
+                successful = terminal["outcome"] == "complete" if operation == "tts_stream" else operation != "stream" or final
+                self.successful_inferences += int(successful)
                 self.last_inference_ms = round((time.monotonic() - started) * 1000, 3)
                 result["lane"] = self.config["lane"]
                 result["model_revision"] = self.config["model_revision"]
@@ -257,7 +287,7 @@ class Service:
                         self.clear_stream()
                     else:
                         self.arm_stream(generation)
-            elif operation == "stream":
+            elif operation in {"stream", "tts_stream"}:
                 await self.stop(generation)
             return result
         except (Exception, asyncio.CancelledError):
@@ -267,6 +297,7 @@ class Service:
         finally:
             payload = None
             envelope = None
+            chunk = encoded = terminal = None
             if self.active == owner:
                 self.active = None
 
@@ -287,7 +318,13 @@ class Service:
                 body = await asyncio.wait_for(reader.readexactly(length), 3)
                 request = json.loads(body)
                 body = None
-                operation = asyncio.create_task(self.dispatch(request))
+                async def on_chunk(value):
+                    encoded = json.dumps(value, allow_nan=False, separators=(",", ":")).encode()
+                    if len(encoded) > 16384:
+                        raise ValueError("stream_output_too_large")
+                    writer.write(struct.pack("!I", len(encoded)) + encoded)
+                    await writer.drain()
+                operation = asyncio.create_task(self.dispatch(request, on_chunk))
                 request = None
                 reply = await operation
                 operation = None
@@ -311,7 +348,7 @@ async def serve(config_path, socket_path):
     from .drivers import REVISIONS
 
     config = json.loads(Path(config_path).read_text())
-    if set(config) - {"lane", "model_path", "model_revision", "cache_path", "voice_preset", "asr_streaming", "asr_right_context"}:
+    if set(config) - {"lane", "model_path", "model_revision", "cache_path", "voice_preset", "asr_streaming", "asr_right_context", "tts_streaming"}:
         raise ValueError("Unknown configuration field")
     if config.get("lane") not in REVISIONS or config.get("model_revision") != REVISIONS[config["lane"]]:
         raise ValueError("Unsupported model revision")
@@ -319,6 +356,8 @@ async def serve(config_path, socket_path):
         raise ValueError("Invalid streaming configuration")
     if "asr_right_context" in config and (not config.get("asr_streaming", False) or type(config["asr_right_context"]) is not int or config["asr_right_context"] not in {0, 1, 6, 13}):
         raise ValueError("Invalid streaming context")
+    if type(config.get("tts_streaming", False)) is not bool or (config.get("tts_streaming", False) and config["lane"] != "tts"):
+        raise ValueError("Invalid TTS streaming configuration")
     path = Path(socket_path)
     parent = path.parent.stat()
     if parent.st_uid != os.getuid() or stat.S_IMODE(parent.st_mode) & 0o077:

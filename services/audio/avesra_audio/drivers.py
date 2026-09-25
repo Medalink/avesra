@@ -96,7 +96,12 @@ class Driver:
                     ref_audio=(wave, rate), ref_text=text(metadata.get("text"), 2048),
                 )
 
-    def request(self, envelope):
+    def request(self, envelope, emit):
+        if envelope["operation"] == "tts_stream":
+            if self.lane != "tts" or self.prompt is None or set(envelope["payload"]) != {"text"}:
+                raise ValueError("selected_voice_required")
+            from .streaming_tts import synthesize
+            return synthesize(self.model, self.prompt, self.torch, text(envelope["payload"]["text"], 512), envelope["deadline"], emit)
         if envelope["operation"] != "stream":
             if self.stream is not None:
                 raise ValueError("stream_active")
