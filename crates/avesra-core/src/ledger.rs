@@ -130,6 +130,8 @@ impl Store {
         ))?;
         let task_next = if cancelled {
             TaskState::Cancelled
+        } else if next != TaskState::Succeeded {
+            next
         } else if remaining {
             TaskState::Suspended
         } else {
@@ -413,6 +415,18 @@ impl Store {
             != decode::<Vec<ActionPayload>>(&payloads)?.len()
         {
             return Err(ErrorCode::InvalidTransition);
+        }
+        let actual = {
+            let mut statement=sql(tx.prepare("SELECT a.body FROM steps s JOIN action_heads h ON h.step_id=s.id JOIN action_revisions a ON a.revision=h.revision WHERE s.task_id=?1 ORDER BY s.rowid"))?;
+            let rows = sql(statement.query_map([task.to_string()], |r| r.get::<_, String>(0)))?;
+            let mut values = Vec::new();
+            for row in rows {
+                values.push(decode::<Action>(&sql(row)?)?.payload);
+            }
+            values
+        };
+        if actual != decode::<Vec<ActionPayload>>(&payloads)? {
+            return Err(ErrorCode::Denied);
         }
         sql(tx.execute(
             "UPDATE accepted_intents SET sealed=1 WHERE task_id=?1",
