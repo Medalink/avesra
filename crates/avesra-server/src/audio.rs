@@ -18,6 +18,8 @@ use tokio::{
 };
 use uuid::Uuid;
 const MAX_PACKET: usize = 2_000_000;
+#[path = "audio_stream.rs"]
+pub mod streaming;
 fn valid_pcm(encoded: &str, min_bytes: usize, max_bytes: usize) -> bool {
     if encoded.len() > max_bytes.div_ceil(3) * 4 {
         return false;
@@ -155,6 +157,7 @@ pub struct AudioClient {
     epoch: AtomicU64,
     admission: Arc<Semaphore>,
     deployment: Option<(String, String)>,
+    recent_streams: std::sync::Mutex<std::collections::HashMap<Uuid, std::time::Instant>>,
 }
 impl AudioClient {
     pub fn new(socket: &Path) -> Result<Self, ErrorCode> {
@@ -182,6 +185,7 @@ impl AudioClient {
             epoch: AtomicU64::new(1),
             admission: Arc::new(Semaphore::new(1)),
             deployment: None,
+            recent_streams: std::sync::Mutex::new(std::collections::HashMap::new()),
         })
     }
     pub fn for_deployment(socket: &Path, lane: &str, revision: &str) -> Result<Self, ErrorCode> {
