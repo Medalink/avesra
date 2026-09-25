@@ -18,6 +18,8 @@ pub struct AudioFrame {
     pub epoch: u64,
     pub sequence: u64,
     pub captured: Instant,
+    /// Hardware stream clock of the first sample, for later echo alignment.
+    pub device_time: Option<cpal::StreamInstant>,
     pub samples: [i16; FRAME_SAMPLES],
     pub rms: f32,
     pub peak: f32,
@@ -105,14 +107,42 @@ fn selected(name: &str, input: bool) -> Result<cpal::Device, ErrorCode> {
     found.ok_or(ErrorCode::Unavailable)
 }
 fn config_valid(config: &StreamConfig) -> bool {
-    (1..=8).contains(&config.channels) && (8000..=192000).contains(&config.sample_rate)
+    (1..=8).contains(&config.channels) && config.sample_rate == 16000
+}
+fn native_config(
+    device: &cpal::Device,
+    input: bool,
+) -> Result<cpal::SupportedStreamConfig, ErrorCode> {
+    let configs: Vec<_> = if input {
+        device
+            .supported_input_configs()
+            .map_err(|_| ErrorCode::Unavailable)?
+            .collect()
+    } else {
+        device
+            .supported_output_configs()
+            .map_err(|_| ErrorCode::Unavailable)?
+            .collect()
+    };
+    configs
+        .into_iter()
+        .filter(|config| {
+            config.min_sample_rate() <= 16000
+                && config.max_sample_rate() >= 16000
+                && (1..=8).contains(&config.channels())
+                && matches!(
+                    config.sample_format(),
+                    cpal::SampleFormat::F32 | cpal::SampleFormat::I16 | cpal::SampleFormat::U16
+                )
+        })
+        .min_by_key(|config| config.channels())
+        .map(|config| config.with_sample_rate(16000))
+        .ok_or(ErrorCode::Unsupported)
 }
 impl Capture {
     pub fn open(selected_name: &str) -> Result<Self, ErrorCode> {
         let device = selected(selected_name, true)?;
-        let supported = device
-            .default_input_config()
-            .map_err(|_| ErrorCode::Unavailable)?;
+        let supported = native_config(&device, true)?;
         let config = supported.config();
         if !config_valid(&config) {
             return Err(ErrorCode::Unsupported);
@@ -149,31 +179,40 @@ where
     f32: FromSample<T>,
 {
     let channels = usize::from(config.channels);
-    let ratio = f64::from(config.sample_rate) / 16000.0;
     let error_gate = gate.clone();
     let mut samples = [0i16; FRAME_SAMPLES];
     let mut count = 0usize;
     let mut epoch = 0;
     let mut sequence = 0u64;
-    let mut phase = 0.0f64;
-    let mut previous = 0.0f32;
+    let mut device_time = None;
     device
         .build_input_stream(
             config,
-            move |input: &[T], _| {
+            move |input: &[T], info: &cpal::InputCallbackInfo| {
                 let current = gate.epoch.load(Ordering::SeqCst);
                 if current != epoch || !gate.current(current) {
                     samples.fill(0);
                     count = 0;
-                    phase = 0.0;
-                    previous = 0.0;
+                    device_time = None;
                     epoch = current;
                     sequence = 0;
                 }
                 if !gate.current(epoch) {
                     return;
                 }
-                for frame in input.chunks_exact(channels) {
+                for (offset, frame) in input.chunks_exact(channels).enumerate() {
+                    if !gate.current(epoch) {
+                        samples.fill(0);
+                        count = 0;
+                        device_time = None;
+                        return;
+                    }
+                    if count == 0 {
+                        device_time = info
+                            .timestamp()
+                            .capture
+                            .add(std::time::Duration::from_secs_f64(offset as f64 / 16000.0));
+                    }
                     let mono = frame
                         .iter()
                         .map(|value| f32::from_sample(*value))
@@ -184,11 +223,9 @@ where
                     } else {
                         0.0
                     };
-                    while phase < 1.0 {
-                        let value = previous + (mono - previous) * phase as f32;
-                        samples[count] = (value * 32767.0).round() as i16;
+                    {
+                        samples[count] = (mono * 32767.0).round() as i16;
                         count += 1;
-                        phase += ratio;
                         if count == FRAME_SAMPLES {
                             let (sum, peak) =
                                 samples.iter().fold((0.0f32, 0.0f32), |(sum, peak), value| {
@@ -205,6 +242,7 @@ where
                                 epoch,
                                 sequence,
                                 captured: Instant::now(),
+                                device_time,
                                 samples,
                                 rms: (sum / FRAME_SAMPLES as f32).sqrt(),
                                 peak,
@@ -216,8 +254,6 @@ where
                             count = 0;
                         }
                     }
-                    phase -= 1.0;
-                    previous = mono;
                 }
             },
             move |_| error_gate.fail(),
@@ -228,9 +264,7 @@ where
 impl Playback {
     pub fn open(selected_name: &str) -> Result<Self, ErrorCode> {
         let device = selected(selected_name, false)?;
-        let supported = device
-            .default_output_config()
-            .map_err(|_| ErrorCode::Unavailable)?;
+        let supported = native_config(&device, false)?;
         let config = supported.config();
         if !config_valid(&config) {
             return Err(ErrorCode::Unsupported);
@@ -267,22 +301,19 @@ fn playback_stream<T: Sample + SizedSample + FromSample<f32>>(
     gate: Arc<MediaGate>,
 ) -> Result<Stream, ErrorCode> {
     let channels = usize::from(config.channels);
-    let ratio = 16000.0 / f64::from(config.sample_rate);
     let error_gate = gate.clone();
     let mut current: Option<AudioFrame> = None;
     let mut index = 0usize;
-    let mut phase = 0.0f64;
     let mut last_sequence = 0u64;
     let mut epoch = 0u64;
     device
         .build_output_stream(
             config,
-            move |output: &mut [T], _| {
+            move |output: &mut [T], info: &cpal::OutputCallbackInfo| {
                 let now_epoch = gate.epoch.load(Ordering::SeqCst);
                 if now_epoch != epoch || !gate.current(now_epoch) {
                     current = None;
                     index = 0;
-                    phase = 0.0;
                     last_sequence = 0;
                     epoch = now_epoch;
                 }
@@ -294,12 +325,12 @@ fn playback_stream<T: Sample + SizedSample + FromSample<f32>>(
                     }
                 }
                 let mut drain_budget = MAX_AUDIO_QUEUE;
-                for frame in output.chunks_exact_mut(channels) {
+                for (offset, frame) in output.chunks_exact_mut(channels).enumerate() {
                     if current.is_none() && gate.current(epoch) {
                         // A bounded stale drain prevents callback work scaling without limit.
                         while drain_budget > 0 {
                             drain_budget -= 1;
-                            let Ok(packet) = receiver.try_recv() else {
+                            let Ok(mut packet) = receiver.try_recv() else {
                                 break;
                             };
                             if packet.epoch == epoch
@@ -307,6 +338,9 @@ fn playback_stream<T: Sample + SizedSample + FromSample<f32>>(
                                 && packet.captured.elapsed().as_secs_f32() < 1.0
                             {
                                 last_sequence = packet.sequence;
+                                packet.device_time = info.timestamp().playback.add(
+                                    std::time::Duration::from_secs_f64(offset as f64 / 16000.0),
+                                );
                                 current = Some(packet);
                                 index = 0;
                                 break;
@@ -324,20 +358,15 @@ fn playback_stream<T: Sample + SizedSample + FromSample<f32>>(
                         *channel = T::from_sample(value);
                     }
                     if current.is_some() {
-                        phase += ratio;
-                        while phase >= 1.0 {
-                            phase -= 1.0;
-                            index += 1;
-                            if index == FRAME_SAMPLES {
-                                if let Some(mut packet) = current.take() {
-                                    packet.captured = Instant::now();
-                                    if gate.current(epoch) && reference.try_send(packet).is_err() {
-                                        gate.dropped.fetch_add(1, Ordering::Relaxed);
-                                    }
+                        index += 1;
+                        if index == FRAME_SAMPLES {
+                            if let Some(mut packet) = current.take() {
+                                packet.captured = Instant::now();
+                                if gate.current(epoch) && reference.try_send(packet).is_err() {
+                                    gate.dropped.fetch_add(1, Ordering::Relaxed);
                                 }
-                                index = 0;
-                                break;
                             }
+                            index = 0;
                         }
                     }
                 }
