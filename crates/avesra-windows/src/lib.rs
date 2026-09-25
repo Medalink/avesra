@@ -6,6 +6,8 @@ pub mod audio;
 pub mod authentication;
 pub mod credentials;
 #[cfg(windows)]
+mod playback;
+#[cfg(windows)]
 mod resampling;
 #[cfg(windows)]
 pub mod session;

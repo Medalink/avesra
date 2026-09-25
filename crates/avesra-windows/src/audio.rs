@@ -63,8 +63,20 @@ impl PlaybackFrame {
             && self.valid_samples <= self.rate.frame_samples()
             && (self.final_frame || self.valid_samples == self.rate.frame_samples())
             && self.captured.elapsed() < std::time::Duration::from_millis(500)
+            && self.deadline.saturating_duration_since(self.captured)
+                <= std::time::Duration::from_secs(30)
             && Instant::now() < self.deadline
     }
+}
+/// Submitted device-rate mono samples, before identical channel replication.
+pub struct PlaybackReference {
+    pub epoch: u64,
+    pub utterance: uuid::Uuid,
+    pub submitted: Instant,
+    pub device_time: Option<cpal::StreamInstant>,
+    pub sample_rate: u32,
+    pub samples: [f32; 3840],
+    pub valid_samples: usize,
 }
 /// Shared local invalidation gate; only trusted native state should publish it.
 pub struct MediaGate {
@@ -93,6 +105,9 @@ impl Default for MediaGate {
     }
 }
 impl MediaGate {
+    pub(crate) fn epoch(&self) -> u64 {
+        self.permission.epoch.load(Ordering::SeqCst)
+    }
     /// Every device attempt gets independent failure state and an immutable epoch.
     /// A still-opening old device can never adopt a replacement device's epoch.
     pub fn new_attempt(&self, epoch: u64) -> Arc<Self> {
@@ -147,7 +162,7 @@ pub struct Playback {
     _stream: Stream,
     pub frames: SyncSender<PlaybackFrame>,
     /// Actual submitted playback samples are the future echo-reference input.
-    pub reference: Receiver<PlaybackFrame>,
+    pub reference: Receiver<PlaybackReference>,
     pub gate: Arc<MediaGate>,
 }
 fn selected(name: &str, input: bool) -> Result<cpal::Device, ErrorCode> {
@@ -472,9 +487,13 @@ impl Playback {
         rate: PlaybackRate,
     ) -> Result<Self, ErrorCode> {
         let device = selected(selected_name, false)?;
-        let supported = native_config(&device, false, rate.hz())?;
+        let supported = native_config(&device, false, rate.hz()).or_else(|_| {
+            device
+                .default_output_config()
+                .map_err(|_| ErrorCode::Unavailable)
+        })?;
         let config = supported.config();
-        if !(1..=8).contains(&config.channels) || config.sample_rate != rate.hz() {
+        if !(1..=8).contains(&config.channels) || !(8000..=192000).contains(&config.sample_rate) {
             return Err(ErrorCode::Unsupported);
         }
         let (frames, receiver) = sync_channel(MAX_AUDIO_QUEUE);
@@ -520,112 +539,11 @@ fn playback_stream<T: Sample + SizedSample + FromSample<f32>>(
     config: &StreamConfig,
     rate: PlaybackRate,
     receiver: Receiver<PlaybackFrame>,
-    reference: SyncSender<PlaybackFrame>,
+    reference: SyncSender<PlaybackReference>,
     gate: Arc<MediaGate>,
-) -> Result<Stream, ErrorCode> {
-    let channels = usize::from(config.channels);
-    let error_gate = gate.clone();
-    let mut current: Option<PlaybackFrame> = None;
-    let mut index = 0usize;
-    let mut last_sequence = 0u64;
-    let mut utterance = None;
-    let mut ended = true;
-    let mut epoch = 0u64;
-    device
-        .build_output_stream(
-            config,
-            move |output: &mut [T], info: &cpal::OutputCallbackInfo| {
-                let now_epoch = gate.permission.epoch.load(Ordering::SeqCst);
-                if now_epoch != epoch || !gate.current(now_epoch) {
-                    current = None;
-                    index = 0;
-                    last_sequence = 0;
-                    utterance = None;
-                    ended = true;
-                    epoch = now_epoch;
-                }
-                if !gate.current(epoch) {
-                    for _ in 0..MAX_AUDIO_QUEUE {
-                        if receiver.try_recv().is_err() {
-                            break;
-                        }
-                    }
-                }
-                let mut drain_budget = MAX_AUDIO_QUEUE;
-                for (offset, frame) in output.chunks_exact_mut(channels).enumerate() {
-                    if current.is_none() && gate.current(epoch) {
-                        // A bounded stale drain prevents callback work scaling without limit.
-                        while drain_budget > 0 {
-                            drain_budget -= 1;
-                            let Ok(mut packet) = receiver.try_recv() else {
-                                if !ended {
-                                    gate.fail();
-                                }
-                                break;
-                            };
-                            if packet.epoch != epoch {
-                                continue;
-                            }
-                            let continuation = utterance == Some(packet.utterance)
-                                && !ended
-                                && last_sequence.checked_add(1) == Some(packet.sequence);
-                            let start = ended
-                                && utterance != Some(packet.utterance)
-                                && packet.sequence == 1;
-                            if packet.valid() && packet.rate == rate && (continuation || start) {
-                                last_sequence = packet.sequence;
-                                utterance = Some(packet.utterance);
-                                ended = false;
-                                packet.device_time = info.timestamp().playback.add(
-                                    std::time::Duration::from_secs_f64(
-                                        offset as f64 / f64::from(rate.hz()),
-                                    ),
-                                );
-                                current = Some(packet);
-                                index = 0;
-                                break;
-                            } else {
-                                gate.fail();
-                                break;
-                            }
-                        }
-                    }
-                    if current
-                        .as_ref()
-                        .is_some_and(|packet| Instant::now() >= packet.deadline)
-                    {
-                        gate.fail();
-                    }
-                    let value = if gate.current(epoch) {
-                        current
-                            .as_ref()
-                            .map_or(0.0, |packet| f32::from(packet.samples[index]) / 32768.0)
-                    } else {
-                        0.0
-                    };
-                    for channel in frame {
-                        *channel = T::from_sample(value);
-                    }
-                    if current.is_some() {
-                        index += 1;
-                        if current
-                            .as_ref()
-                            .is_some_and(|packet| index == packet.valid_samples)
-                        {
-                            if let Some(mut packet) = current.take() {
-                                ended = packet.final_frame;
-                                packet.captured = Instant::now();
-                                if gate.current(epoch) && reference.try_send(packet).is_err() {
-                                    gate.fail();
-                                }
-                            }
-                            index = 0;
-                        }
-                    }
-                }
-            },
-            move |_| error_gate.fail(),
-            None,
-        )
-        .map_err(|_| ErrorCode::Unavailable)
+) -> Result<Stream, ErrorCode>
+where
+    f32: FromSample<T>,
+{
+    crate::playback::output_stream(device, config, rate, receiver, reference, gate)
 }

@@ -9,14 +9,19 @@ pub struct CaptureResampler {
     output: Vec<Vec<f32>>,
     used: usize,
     skip: usize,
+    output_frames: usize,
 }
 impl CaptureResampler {
     pub fn new(rate: u32) -> Result<Self, ErrorCode> {
-        if !(8000..=192000).contains(&rate) {
+        Self::between(rate, 16000)
+    }
+    pub fn between(input_rate: u32, output_rate: u32) -> Result<Self, ErrorCode> {
+        if !(8000..=192000).contains(&input_rate) || !(8000..=192000).contains(&output_rate) {
             return Err(ErrorCode::Unsupported);
         }
+        let output_frames = output_rate as usize / 50;
         let filter = SincFixedOut::<f32>::new(
-            16000.0 / f64::from(rate),
+            f64::from(output_rate) / f64::from(input_rate),
             1.0,
             SincInterpolationParameters {
                 sinc_len: 256,
@@ -25,11 +30,11 @@ impl CaptureResampler {
                 oversampling_factor: 128,
                 window: WindowFunction::BlackmanHarris2,
             },
-            320,
+            output_frames,
             1,
         )
         .map_err(|_| ErrorCode::Unavailable)?;
-        if filter.input_frames_max() > 8192 || filter.output_frames_max() != 320 {
+        if filter.input_frames_max() > 8192 || filter.output_frames_max() != output_frames {
             return Err(ErrorCode::Unsupported);
         }
         let input = filter.input_buffer_allocate(true);
@@ -41,6 +46,7 @@ impl CaptureResampler {
             output,
             used: 0,
             skip,
+            output_frames,
         })
     }
     pub fn reset(&mut self) {
@@ -63,7 +69,7 @@ impl CaptureResampler {
             .filter
             .process_into_buffer(&self.input, &mut self.output, None)
             .map_err(|_| ErrorCode::Unavailable)?;
-        if read != self.used || written != 320 {
+        if read != self.used || written != self.output_frames {
             return Err(ErrorCode::Malformed);
         }
         self.used = 0;
