@@ -787,6 +787,7 @@ fn focus(
                         && crate::principal::same_process_context(process.0).unwrap_or(false)
                         && unsafe { GetForegroundWindow() } == window
                         && matches_window(window, hint.pid, &record.window_class));
+                focused &= started.elapsed() < Duration::from_millis(500);
                 break;
             }
             std::thread::sleep(Duration::from_millis(20));
@@ -878,6 +879,7 @@ fn activate_package(
                     && matches!(identity_process(pid, &record.launch), Ok(Some((_, current))) if current == created)
                     && unsafe { WaitForSingleObject(process.0, 0) } == WAIT_TIMEOUT
                     && matches_window(HWND(*window as usize as *mut _), pid, &record.window_class)
+                    && started.elapsed() < Duration::from_secs(3)
                 {
                     observed = Some(*window);
                 }
