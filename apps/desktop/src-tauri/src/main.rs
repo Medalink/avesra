@@ -517,6 +517,8 @@ fn main() {
             setup::finish_enrollment,
             setup::speaker_candidates,
             setup::delete_speaker_candidate,
+            setup::select_speaker_candidate,
+            setup::clear_speaker_selection,
             setup::record_enrollment,
             runtime_snapshot,
             audio_devices,

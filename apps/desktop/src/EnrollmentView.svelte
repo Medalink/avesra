@@ -47,6 +47,12 @@
     catch (e) { error = String(e); }
     finally { busy = false; }
   }
+  async function select(candidate: Candidate | null) {
+    busy = true; error = "";
+    try { await command(candidate ? "select_speaker_candidate" : "clear_speaker_selection", candidate ? {id: candidate.id, revision: candidate.revision} : undefined); await refresh(); }
+    catch (e) { error = String(e); }
+    finally { busy = false; }
+  }
   onMount(() => { if (native) void refresh().catch(e => error = String(e)); return () => { generation++; }; });
 </script>
 
@@ -73,10 +79,13 @@
   {/if}
   {#each candidates as candidate (candidate.revision)}
     <div class="av-card flex flex-col gap-2.5 p-3.5">
-      <span class="text-[12.5px] font-medium">Protected voice candidate · {candidate.state === "unreadable_candidate" ? "unreadable" : "quality unqualified"}</span>
+      <span class="text-[12.5px] font-medium">Protected voice candidate · {candidate.state === "unreadable_candidate" ? "unreadable" : candidate.state === "selected_quality_unqualified" ? "selected, unqualified" : candidate.state === "selection_unavailable" ? "selection unavailable" : "quality unqualified"}</span>
       <p class="av-hint">{candidate.segments ?? "Unknown"} segments · model revision {candidate.model_revision?.slice(0, 7) ?? "unavailable"}. This candidate grants no listening or action rights. Unreadable candidates may be removed after verification.</p>
       <button class="av-btn av-btn-ghost av-btn-sm self-start" disabled={busy} onclick={() => remove(candidate)}>Delete candidate · Windows verification required</button>
+      <button class="av-btn av-btn-secondary av-btn-sm self-start" disabled={busy || candidate.state !== "candidate_quality_unqualified"} onclick={() => select(candidate)}>Select for validation · Windows verification required</button>
     </div>
   {/each}
+  <button class="av-btn av-btn-ghost av-btn-sm self-start" disabled={busy} onclick={() => select(null)}>Clear profile selection · Windows verification required</button>
+  <p class="av-hint">Selecting a candidate preserves the chosen revision for validation. It does not enable listening or grant owner rights. Clear selection also recovers an unreadable selection record.</p>
   {#if error}<p class="av-hint text-amber-200" role="status">{error}</p>{/if}
 </section>

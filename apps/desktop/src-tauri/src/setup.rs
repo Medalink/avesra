@@ -575,6 +575,65 @@ pub async fn delete_speaker_candidate(
     .await
     .map_err(|_| "Profile writer stopped")?
 }
+fn authorize_profile_selection(
+    window: &tauri::WebviewWindow,
+    app: &tauri::AppHandle,
+) -> Result<Option<String>, String> {
+    settings_only(window)?;
+    if !window.is_visible().map_err(|_| "Settings unavailable")? {
+        return Err("Open Settings to manage profile selection".into());
+    }
+    let state = app.state::<Runtime>();
+    let mut local = state.local.lock().map_err(|_| "Local state unavailable")?;
+    state
+        .setup
+        .consume_proof(&local, state.connection_generation.load(Ordering::SeqCst))?;
+    let microphone = local.settings.microphone.clone();
+    local.enrollment_capture = false;
+    local.voice_ready = false;
+    local.enrolled = false;
+    local.capture_epoch = local.capture_epoch.saturating_add(1);
+    local.action_epoch = local.action_epoch.saturating_add(1);
+    local.refresh();
+    state.publish(&local);
+    let snapshot = local.clone();
+    drop(local);
+    let _ = app.emit("runtime-state", snapshot);
+    Ok(microphone)
+}
+#[tauri::command]
+pub async fn select_speaker_candidate(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    id: uuid::Uuid,
+    revision: uuid::Uuid,
+) -> Result<(), String> {
+    let microphone = authorize_profile_selection(&window, &app)?
+        .ok_or("Select the enrollment microphone first")?;
+    let directory = app
+        .path()
+        .app_data_dir()
+        .map_err(|_| "Profile directory unavailable")?;
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::profiles::select_candidate(&directory, id, revision, &microphone)
+    })
+    .await
+    .map_err(|_| "Profile writer stopped")?
+}
+#[tauri::command]
+pub async fn clear_speaker_selection(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    authorize_profile_selection(&window, &app)?;
+    let directory = app
+        .path()
+        .app_data_dir()
+        .map_err(|_| "Profile directory unavailable")?;
+    tauri::async_runtime::spawn_blocking(move || crate::profiles::clear_selection(&directory))
+        .await
+        .map_err(|_| "Profile writer stopped")?
+}
 #[tauri::command]
 pub async fn verify_setup(
     window: tauri::WebviewWindow,
