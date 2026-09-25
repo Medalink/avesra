@@ -2,7 +2,10 @@
 use crate::volume::{self, VolumeOutcome, VolumeTarget};
 use avesra_contracts::{Action, ActionPayload, ErrorCode, Outcome};
 use avesra_core::{
-    conversations::{DurableTurn, Source as ConversationSource, Summary as ConversationSummary},
+    conversations::{
+        AppTaskRequest, CancellationTarget, DurableTurn, Source as ConversationSource,
+        Summary as ConversationSummary, TaskAuthority, TaskResolution,
+    },
     execution::{
         Cancellation, EffectAdapter, EffectObservation, EffectResult, ExecutionController,
         ExecutionReceipt, VolumeLevel,
@@ -65,6 +68,11 @@ impl Management {
     }
 }
 enum Command {
+    AcceptAppTask {
+        request: AppTaskRequest,
+        authorize: TaskAuthorization,
+        reply: SyncSender<Result<TaskResolution, ErrorCode>>,
+    },
     AcceptConversation {
         conversation: Conversation,
         authorize: ConversationAuthorization,
@@ -81,7 +89,7 @@ enum Command {
         id: Uuid,
         revision: Uuid,
         authorize: CatalogAuthorization,
-        reply: SyncSender<Result<(), ErrorCode>>,
+        reply: SyncSender<Result<Vec<Uuid>, ErrorCode>>,
     },
     Execute(Job),
     Manage(Management, SyncSender<Result<(), ErrorCode>>),
@@ -112,6 +120,7 @@ pub type CatalogAuthorization = Box<dyn FnMut() -> Result<(), ErrorCode> + Send>
 /// Must recheck the original qualified native profile/context at commit. A
 /// successful arbitrary closure is not a substitute for that runtime adapter.
 pub type ConversationAuthorization = Box<dyn FnMut(&Conversation) -> Result<(), ErrorCode> + Send>;
+pub type TaskAuthorization = Box<dyn FnMut(&TaskAuthority<'_>) -> Result<(), ErrorCode> + Send>;
 /// Native-owned setup commands. Neither an alias nor registration grants effects.
 pub enum CatalogCommand {
     List,
@@ -246,7 +255,13 @@ struct Job {
 struct State {
     action_epoch: u64,
     allowed: bool,
-    active: Option<Cancellation>,
+    active: Option<Active>,
+    pending_cancellations: Vec<CancellationTarget>,
+}
+struct Active {
+    step: Uuid,
+    cancellation: Cancellation,
+    conversation: Option<CancellationTarget>,
 }
 /// Thread lifetime owns admission, including after receiver timeout/drop. Target
 /// records are immutable for its lifetime; replacement requires a new worker.
@@ -271,6 +286,7 @@ impl NativeEffects {
             action_epoch: 0,
             allowed: false,
             active: None,
+            pending_cancellations: Vec::new(),
         }));
         let owned = state.clone();
         std::thread::Builder::new()
@@ -291,6 +307,18 @@ impl NativeEffects {
                 };
                 while let Ok(command) = receive.recv() {
                     let job = match command {
+                        Command::AcceptAppTask {
+                            request,
+                            mut authorize,
+                            reply,
+                        } => {
+                            let _ = reply.try_send(controller.management().accept_app_task(
+                                request,
+                                &adapter.apps,
+                                &mut authorize,
+                            ));
+                            continue;
+                        }
                         Command::AcceptConversation {
                             conversation,
                             mut authorize,
@@ -321,13 +349,25 @@ impl NativeEffects {
                             mut authorize,
                             reply,
                         } => {
-                            let _ = reply.try_send(controller.management().cancel_conversation(
+                            let result = controller.management().cancel_conversation(
                                 actor,
                                 source,
                                 id,
                                 revision,
                                 &mut authorize,
-                            ));
+                            );
+                            if let Ok(mut state) = owned.lock() {
+                                state.pending_cancellations.retain(|value| {
+                                    *value
+                                        != CancellationTarget {
+                                            actor,
+                                            source,
+                                            id,
+                                            revision,
+                                        }
+                                });
+                            }
+                            let _ = reply.try_send(result);
                             continue;
                         }
                         Command::Execute(job) => job,
@@ -375,8 +415,27 @@ impl NativeEffects {
                             continue;
                         }
                     };
-                    let result =
-                        controller.execute(job.step, &job.session, &job.cancellation, &mut adapter);
+                    let binding = controller
+                        .management()
+                        .conversation_for_step(job.step)
+                        .and_then(|conversation| {
+                            let mut state = owned.lock().map_err(|_| ErrorCode::Unavailable)?;
+                            let cancelled = conversation
+                                .is_some_and(|value| state.pending_cancellations.contains(&value));
+                            let active = state
+                                .active
+                                .as_mut()
+                                .filter(|active| active.step == job.step)
+                                .ok_or(ErrorCode::Stale)?;
+                            active.conversation = conversation;
+                            if cancelled {
+                                active.cancellation.cancel();
+                            }
+                            Ok(())
+                        });
+                    let result = binding.and_then(|()| {
+                        controller.execute(job.step, &job.session, &job.cancellation, &mut adapter)
+                    });
                     // Ownership ends only after native calls AND durable finalization
                     // have returned. A dropped receiver cannot overlap another job.
                     if let Ok(mut state) = owned.lock() {
@@ -398,7 +457,7 @@ impl NativeEffects {
             if (action_epoch != state.action_epoch || !allowed)
                 && let Some(active) = &state.active
             {
-                active.cancel();
+                active.cancellation.cancel();
             }
             state.action_epoch = action_epoch;
             state.allowed = allowed;
@@ -448,15 +507,70 @@ impl NativeEffects {
         source: ConversationSource,
         id: Uuid,
         revision: Uuid,
-        authorize: CatalogAuthorization,
-    ) -> Result<Receiver<Result<(), ErrorCode>>, ErrorCode> {
+        mut authorize: CatalogAuthorization,
+    ) -> Result<Receiver<Result<Vec<Uuid>, ErrorCode>>, ErrorCode> {
+        if [
+            actor,
+            source.device,
+            source.session,
+            source.utterance,
+            id,
+            revision,
+        ]
+        .iter()
+        .any(Uuid::is_nil)
+        {
+            return Err(ErrorCode::Malformed);
+        }
+        // Original authenticated native cancellation is rechecked here before
+        // signalling and again before durable commit, never consumed anew.
+        authorize()?;
+        let target = CancellationTarget {
+            actor,
+            source,
+            id,
+            revision,
+        };
+        let mut state = self.state.lock().map_err(|_| ErrorCode::Unavailable)?;
+        if state.pending_cancellations.len() >= 16 || state.pending_cancellations.contains(&target)
+        {
+            return Err(ErrorCode::Unavailable);
+        }
+        state.pending_cancellations.push(target);
+        if let Some(active) = &state.active
+            && active.conversation == Some(target)
+        {
+            active.cancellation.cancel();
+        }
         let (reply, receive) = mpsc::sync_channel(1);
-        self.send
+        if self
+            .send
             .try_send(Command::CancelConversation {
                 actor,
                 source,
                 id,
                 revision,
+                authorize,
+                reply,
+            })
+            .is_err()
+        {
+            state.pending_cancellations.retain(|value| *value != target);
+            return Err(ErrorCode::Unavailable);
+        }
+        Ok(receive)
+    }
+    /// Exact native resolver only. This never dispatches an effect or grants
+    /// permission; the source's stored record and grant decide the one payload.
+    pub fn accept_app_task(
+        &self,
+        request: AppTaskRequest,
+        authorize: TaskAuthorization,
+    ) -> Result<Receiver<Result<TaskResolution, ErrorCode>>, ErrorCode> {
+        let (reply, receive) = mpsc::sync_channel(1);
+        self.send
+            .try_send(Command::AcceptAppTask {
+                request,
                 authorize,
                 reply,
             })
@@ -483,7 +597,11 @@ impl NativeEffects {
         }
         let cancellation = Cancellation::default();
         let (reply, receive) = mpsc::sync_channel(1);
-        state.active = Some(cancellation.clone());
+        state.active = Some(Active {
+            step,
+            cancellation: cancellation.clone(),
+            conversation: None,
+        });
         if self
             .send
             .try_send(Command::Execute(Job {
@@ -508,7 +626,7 @@ impl NativeEffects {
     ) -> Result<Receiver<Result<(), ErrorCode>>, ErrorCode> {
         let state = self.state.lock().map_err(|_| ErrorCode::Unavailable)?;
         if let Some(active) = &state.active {
-            active.cancel();
+            active.cancellation.cancel();
         }
         let (reply, receive) = mpsc::sync_channel(1);
         self.send

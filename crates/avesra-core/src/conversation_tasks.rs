@@ -1,0 +1,490 @@
+//! One exact native resolver; no model payload can become accepted authority.
+use super::{DurableTurn, Record, Store};
+use crate::{
+    apps::AppCatalog,
+    ledger::DispatchSession,
+    policy::{Grant, PolicyContext},
+};
+use avesra_contracts::{Action, ActionPayload, ErrorCode, TaskState};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use serde::{Deserialize, Serialize};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use uuid::Uuid;
+
+pub(crate) const SCHEMA: &str = "CREATE TABLE conversation_tasks(turn TEXT PRIMARY KEY NOT NULL REFERENCES accepted_conversations(id),task TEXT UNIQUE NOT NULL REFERENCES tasks(id),actor TEXT NOT NULL,body TEXT NOT NULL CHECK(length(CAST(body AS BLOB))<=16384))";
+
+pub(super) fn check_schema(db: &Connection, version: u64) -> Result<(), ErrorCode> {
+    let objects: i64=db.query_row("SELECT COUNT(*) FROM sqlite_master WHERE name='conversation_tasks' OR tbl_name='conversation_tasks'",[],|r|r.get(0)).map_err(|_|ErrorCode::Malformed)?;
+    if version < 6 {
+        return if objects == 0 {
+            Ok(())
+        } else {
+            Err(ErrorCode::Malformed)
+        };
+    }
+    if objects != 3 {
+        return Err(ErrorCode::Malformed);
+    }
+    let sql:String=db.query_row("SELECT substr(sql,1,2049) FROM sqlite_master WHERE type='table' AND name='conversation_tasks'",[],|r|r.get(0)).map_err(|_|ErrorCode::Malformed)?;
+    if sql != SCHEMA {
+        return Err(ErrorCode::Malformed);
+    }
+    let mut statement = db
+        .prepare("PRAGMA index_list('conversation_tasks')")
+        .map_err(|_| ErrorCode::Malformed)?;
+    let mut rows = statement.query([]).map_err(|_| ErrorCode::Malformed)?;
+    let mut seen = [false; 2];
+    while let Some(row) = rows.next().map_err(|_| ErrorCode::Malformed)? {
+        let name: String = row.get(1).map_err(|_| ErrorCode::Malformed)?;
+        let unique: i64 = row.get(2).map_err(|_| ErrorCode::Malformed)?;
+        let origin: String = row.get(3).map_err(|_| ErrorCode::Malformed)?;
+        let partial: i64 = row.get(4).map_err(|_| ErrorCode::Malformed)?;
+        let index = match (name.as_str(), origin.as_str()) {
+            ("sqlite_autoindex_conversation_tasks_1", "pk") => 0,
+            ("sqlite_autoindex_conversation_tasks_2", "u") => 1,
+            _ => return Err(ErrorCode::Malformed),
+        };
+        if seen[index] || unique != 1 || partial != 0 {
+            return Err(ErrorCode::Malformed);
+        }
+        seen[index] = true;
+    }
+    if seen != [true; 2] {
+        return Err(ErrorCode::Malformed);
+    }
+    for (query, expected) in [
+        (
+            "PRAGMA index_info('sqlite_autoindex_conversation_tasks_1')",
+            (0i64, 0i64, "turn"),
+        ),
+        (
+            "PRAGMA index_info('sqlite_autoindex_conversation_tasks_2')",
+            (0, 1, "task"),
+        ),
+    ] {
+        let mut statement = db.prepare(query).map_err(|_| ErrorCode::Malformed)?;
+        let mut rows = statement.query([]).map_err(|_| ErrorCode::Malformed)?;
+        let row = rows
+            .next()
+            .map_err(|_| ErrorCode::Malformed)?
+            .ok_or(ErrorCode::Malformed)?;
+        let actual: (i64, i64, String) = (
+            row.get(0).map_err(|_| ErrorCode::Malformed)?,
+            row.get(1).map_err(|_| ErrorCode::Malformed)?,
+            row.get(2).map_err(|_| ErrorCode::Malformed)?,
+        );
+        if actual != (expected.0, expected.1, expected.2.to_owned())
+            || rows.next().map_err(|_| ErrorCode::Malformed)?.is_some()
+        {
+            return Err(ErrorCode::Malformed);
+        }
+    }
+    Ok(())
+}
+
+/// Opaque queue request carries an actual accepted handle and native session.
+pub struct AppTaskRequest {
+    turn: DurableTurn,
+    session: DispatchSession,
+    grant: Uuid,
+    started: Instant,
+}
+impl AppTaskRequest {
+    pub fn new(
+        turn: DurableTurn,
+        session: DispatchSession,
+        grant: Uuid,
+    ) -> Result<Self, ErrorCode> {
+        if grant.is_nil()
+            || !session.active
+            || session.actor_id != turn.actor
+            || session.device_id != turn.source.device
+            || session.session_id != turn.source.session
+            || session.capture_epoch == 0
+            || session.action_epoch == 0
+        {
+            return Err(ErrorCode::Stale);
+        }
+        Ok(Self {
+            turn,
+            session,
+            grant,
+            started: Instant::now(),
+        })
+    }
+    fn current(&self) -> Result<(), ErrorCode> {
+        if self.started.elapsed() < Duration::from_secs(5) {
+            Ok(())
+        } else {
+            Err(ErrorCode::Expired)
+        }
+    }
+}
+/// Read-only values for the real native current-action admission callback.
+pub struct TaskAuthority<'a> {
+    pub session: &'a DispatchSession,
+    pub action: &'a Action,
+    pub turn: Uuid,
+    pub turn_revision: Uuid,
+    pub app_revision: Uuid,
+    pub alias: Uuid,
+    pub alias_revision: Uuid,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Link {
+    turn: Uuid,
+    turn_revision: Uuid,
+    actor: Uuid,
+    alias: Uuid,
+    alias_revision: Uuid,
+    app_revision: Uuid,
+    action: Action,
+}
+/// Native-only result retains unresolved authority for an explicit planner or clarification.
+pub enum TaskResolution {
+    Linked(LinkedTask),
+    NeedsInput(DurableTurn),
+}
+#[derive(Serialize)]
+pub struct LinkedTask {
+    pub turn: Uuid,
+    pub task: Uuid,
+    pub step: Uuid,
+    pub action_revision: Uuid,
+    pub app: Uuid,
+    pub app_revision: Uuid,
+    pub state: TaskState,
+}
+
+pub(super) fn wall_time() -> Result<u64, ErrorCode> {
+    u64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| ErrorCode::Expired)?
+            .as_millis(),
+    )
+    .map_err(|_| ErrorCode::Expired)
+}
+fn encode(value: &impl Serialize) -> Result<String, ErrorCode> {
+    serde_json::to_string(value).map_err(|_| ErrorCode::Malformed)
+}
+fn read_record(db: &Connection, turn: Uuid) -> Result<(Record, String), ErrorCode> {
+    let (body,state,revision,actor,device,session,utterance):(Vec<u8>,String,String,String,String,String,String)=db.query_row("SELECT substr(CAST(body AS BLOB),1,65537),substr(state,1,32),substr(revision,1,37),substr(actor,1,37),substr(device,1,37),substr(session,1,37),substr(utterance,1,37) FROM accepted_conversations WHERE id=?1",[turn.to_string()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?))).map_err(|_|ErrorCode::Stale)?;
+    if body.len() > super::MAX_BODY {
+        return Err(ErrorCode::Malformed);
+    }
+    let record: Record = serde_json::from_slice(&body).map_err(|_| ErrorCode::Malformed)?;
+    record.validate()?;
+    if record.id != turn
+        || record.revision.to_string() != revision
+        || record.actor.to_string() != actor
+        || record.source.device.to_string() != device
+        || record.source.session.to_string() != session
+        || record.source.utterance.to_string() != utterance
+    {
+        return Err(ErrorCode::Malformed);
+    }
+    Ok((record, state))
+}
+fn read_link(db: &Connection, turn: Uuid) -> Result<Option<Link>, ErrorCode> {
+    let row:Option<(String,String,Vec<u8>)>=db.query_row("SELECT substr(task,1,37),substr(actor,1,37),substr(CAST(body AS BLOB),1,16385) FROM conversation_tasks WHERE turn=?1",[turn.to_string()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional().map_err(|_|ErrorCode::Storage)?;
+    let Some((task, actor, body)) = row else {
+        return Ok(None);
+    };
+    if body.len() > 16384 {
+        return Err(ErrorCode::Malformed);
+    }
+    let link: Link = serde_json::from_slice(&body).map_err(|_| ErrorCode::Malformed)?;
+    link.action.validate(link.action.issued_at_ms)?;
+    if link.turn != turn
+        || [
+            link.turn,
+            link.turn_revision,
+            link.actor,
+            link.alias,
+            link.alias_revision,
+            link.app_revision,
+        ]
+        .iter()
+        .any(Uuid::is_nil)
+        || link.actor != link.action.actor_id
+        || task != link.action.task_id.to_string()
+        || actor != link.actor.to_string()
+        || !matches!(link.action.payload,ActionPayload::LaunchApp{app_id} if app_id==link.action.target_id)
+    {
+        return Err(ErrorCode::Malformed);
+    }
+    Ok(Some(link))
+}
+pub(super) fn linked(db: &Connection, record: &Record) -> Result<Option<LinkedTask>, ErrorCode> {
+    let Some(link) = read_link(db, record.id)? else {
+        return Ok(None);
+    };
+    if link.turn_revision != record.revision || link.actor != record.actor {
+        return Err(ErrorCode::Malformed);
+    }
+    let (state, actor): (String, String) = db
+        .query_row(
+            "SELECT substr(state,1,64),substr(actor_id,1,37) FROM tasks WHERE id=?1",
+            [link.action.task_id.to_string()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(|_| ErrorCode::Malformed)?;
+    if actor != record.actor.to_string() {
+        return Err(ErrorCode::Malformed);
+    }
+    Ok(Some(LinkedTask {
+        turn: record.id,
+        task: link.action.task_id,
+        step: link.action.step_id,
+        action_revision: link.action.revision,
+        app: link.action.target_id,
+        app_revision: link.app_revision,
+        state: serde_json::from_str(&state).map_err(|_| ErrorCode::Malformed)?,
+    }))
+}
+/// New linked tasks must retain original accepted provenance at every claim and
+/// pre-effect recheck. Legacy native management remains a separate trusted API.
+pub(crate) fn validate_dispatch(
+    db: &Connection,
+    action: &Action,
+    session: &DispatchSession,
+) -> Result<(), ErrorCode> {
+    let turn: Option<String> = db
+        .query_row(
+            "SELECT substr(turn,1,37) FROM conversation_tasks WHERE task=?1",
+            [action.task_id.to_string()],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|_| ErrorCode::Storage)?;
+    let Some(turn) = turn else {
+        return Ok(());
+    };
+    let turn = Uuid::parse_str(&turn).map_err(|_| ErrorCode::Malformed)?;
+    let (record, state) = read_record(db, turn)?;
+    let link = read_link(db, turn)?.ok_or(ErrorCode::Malformed)?;
+    if link.action != *action
+        || link.turn_revision != record.revision
+        || link.actor != record.actor
+        || state != "planning"
+        || !session.active
+        || record.actor != session.actor_id
+        || record.source.device != session.device_id
+        || record.source.session != session.session_id
+        || record.capture_epoch != session.capture_epoch
+        || record.action_epoch != session.action_epoch
+    {
+        return Err(ErrorCode::Stale);
+    }
+    Ok(())
+}
+fn phrase(text: &str) -> Result<String, ErrorCode> {
+    if text
+        .chars()
+        .any(|v| v.is_control() || (v.is_whitespace() && v != ' '))
+    {
+        return Err(ErrorCode::Unsupported);
+    }
+    let text = text.trim_matches(' ').to_lowercase();
+    let text = text
+        .strip_prefix("avesra, ")
+        .or_else(|| text.strip_prefix("avesra "))
+        .unwrap_or(&text);
+    let remainder = text
+        .strip_prefix("open ")
+        .or_else(|| text.strip_prefix("launch "))
+        .ok_or(ErrorCode::Unsupported)?;
+    let phrase = crate::apps::alias_phrase(remainder).map_err(|_| ErrorCode::Unsupported)?;
+    if phrase.split(' ').any(|v| {
+        matches!(
+            v,
+            "not"
+                | "no"
+                | "never"
+                | "don't"
+                | "dont"
+                | "and"
+                | "or"
+                | "then"
+                | "but"
+                | "unless"
+                | "except"
+                | "instead"
+                | "please"
+                | "avesra"
+        )
+    }) {
+        return Err(ErrorCode::Unsupported);
+    }
+    Ok(phrase)
+}
+impl Store {
+    pub fn conversation_for_step(
+        &self,
+        step: Uuid,
+    ) -> Result<Option<super::CancellationTarget>, ErrorCode> {
+        if step.is_nil() {
+            return Err(ErrorCode::Malformed);
+        }
+        let turn:Option<String>=self.connection.query_row("SELECT substr(c.turn,1,37) FROM conversation_tasks c JOIN steps s ON s.task_id=c.task WHERE s.id=?1",[step.to_string()],|r|r.get(0)).optional().map_err(|_|ErrorCode::Storage)?;
+        let Some(turn) = turn else {
+            return Ok(None);
+        };
+        let turn = Uuid::parse_str(&turn).map_err(|_| ErrorCode::Malformed)?;
+        let (record, _) = read_record(&self.connection, turn)?;
+        let link = read_link(&self.connection, turn)?.ok_or(ErrorCode::Malformed)?;
+        if link.action.step_id != step
+            || link.turn_revision != record.revision
+            || link.actor != record.actor
+        {
+            return Err(ErrorCode::Malformed);
+        }
+        Ok(Some(super::CancellationTarget {
+            actor: record.actor,
+            source: record.source,
+            id: record.id,
+            revision: record.revision,
+        }))
+    }
+    pub fn accept_app_task(
+        &mut self,
+        request: AppTaskRequest,
+        apps: &AppCatalog,
+        authorize: &mut dyn FnMut(&TaskAuthority<'_>) -> Result<(), ErrorCode>,
+    ) -> Result<TaskResolution, ErrorCode> {
+        request.current()?;
+        let (record, state) = read_record(&self.connection, request.turn.id)?;
+        if state != "accepted"
+            || record.revision != request.turn.revision
+            || record.actor != request.turn.actor
+            || record.source != request.turn.source
+            || record.capture_epoch != request.session.capture_epoch
+            || record.action_epoch != request.session.action_epoch
+        {
+            return Err(ErrorCode::Stale);
+        }
+        let phrase = match phrase(&record.text) {
+            Ok(value) => value,
+            Err(ErrorCode::Unsupported) => return Ok(TaskResolution::NeedsInput(request.turn)),
+            Err(error) => return Err(error),
+        };
+        let resolved = match apps.resolve(record.actor, &phrase) {
+            Ok(value) => value,
+            Err(ErrorCode::Denied) => return Ok(TaskResolution::NeedsInput(request.turn)),
+            Err(error) => return Err(error),
+        };
+        let now = wall_time()?;
+        let sql_now = i64::try_from(now).map_err(|_| ErrorCode::Expired)?;
+        let action = Action {
+            task_id: Uuid::new_v4(),
+            step_id: Uuid::new_v4(),
+            actor_id: record.actor,
+            target_id: resolved.record.id,
+            grant_id: request.grant,
+            revision: Uuid::new_v4(),
+            intent_revision: Uuid::new_v4(),
+            payload: ActionPayload::LaunchApp {
+                app_id: resolved.record.id,
+            },
+            approval_id: None,
+            issued_at_ms: now,
+            expires_at_ms: now
+                .checked_add(avesra_contracts::MAX_ACTION_AGE_MS)
+                .ok_or(ErrorCode::Expired)?,
+        };
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| ErrorCode::Storage)?;
+        let (body,revoked):(Vec<u8>,bool)=tx.query_row("SELECT substr(CAST(body AS BLOB),1,8193),revoked FROM ledger_grants WHERE id=?1 AND actor_id=?2",params![request.grant.to_string(),record.actor.to_string()],|r|Ok((r.get(0)?,r.get(1)?))).map_err(|_|ErrorCode::Denied)?;
+        if body.len() > 8192 {
+            return Err(ErrorCode::Malformed);
+        }
+        let mut grant: Grant = serde_json::from_slice(&body).map_err(|_| ErrorCode::Malformed)?;
+        grant.revoked |= revoked;
+        PolicyContext {
+            actor_id: record.actor,
+            accepted_task_id: action.task_id,
+            intent_revision: action.intent_revision,
+            permitted_payloads: std::slice::from_ref(&action.payload),
+            now_ms: now,
+            grant: &grant,
+            approval: None,
+            explicit_submit: false,
+            session_active: request.session.active,
+        }
+        .authorize(&action)?;
+        if tx.execute("UPDATE accepted_conversations SET state='planning' WHERE id=?1 AND revision=?2 AND actor=?3 AND state='accepted'",params![record.id.to_string(),record.revision.to_string(),record.actor.to_string()]).map_err(|_|ErrorCode::Storage)?!=1{return Err(ErrorCode::Stale);}
+        let queued = encode(&TaskState::Queued)?;
+        tx.execute(
+            "INSERT INTO tasks(id,actor_id,state,updated_ms) VALUES(?1,?2,?3,?4)",
+            params![
+                action.task_id.to_string(),
+                record.actor.to_string(),
+                queued,
+                sql_now
+            ],
+        )
+        .map_err(|_| ErrorCode::Storage)?;
+        tx.execute("INSERT INTO accepted_intents(task_id,actor_id,revision,payloads,explicit_submit,sealed) VALUES(?1,?2,?3,?4,0,1)",params![action.task_id.to_string(),record.actor.to_string(),action.intent_revision.to_string(),encode(&vec![&action.payload])?]).map_err(|_|ErrorCode::Storage)?;
+        tx.execute("INSERT INTO steps(id,task_id,state,target_id,operation,updated_ms) VALUES(?1,?2,?3,?4,?5,?6)",params![action.step_id.to_string(),action.task_id.to_string(),queued,action.target_id.to_string(),encode(&action.payload.operation())?,sql_now]).map_err(|_|ErrorCode::Storage)?;
+        tx.execute(
+            "INSERT INTO action_revisions(revision,step_id,body) VALUES(?1,?2,?3)",
+            params![
+                action.revision.to_string(),
+                action.step_id.to_string(),
+                encode(&action)?
+            ],
+        )
+        .map_err(|_| ErrorCode::Storage)?;
+        tx.execute(
+            "INSERT INTO action_heads(step_id,revision) VALUES(?1,?2)",
+            params![action.step_id.to_string(), action.revision.to_string()],
+        )
+        .map_err(|_| ErrorCode::Storage)?;
+        tx.execute("INSERT INTO ledger_events(task_id,step_id,kind,at_ms) VALUES(?1,?2,'accepted_exact_app',?3)",params![action.task_id.to_string(),action.step_id.to_string(),sql_now]).map_err(|_|ErrorCode::Storage)?;
+        let link = Link {
+            turn: record.id,
+            turn_revision: record.revision,
+            actor: record.actor,
+            alias: resolved.alias_id,
+            alias_revision: resolved.alias_revision,
+            app_revision: resolved.record.revision,
+            action,
+        };
+        tx.execute(
+            "INSERT INTO conversation_tasks(turn,task,actor,body) VALUES(?1,?2,?3,?4)",
+            params![
+                record.id.to_string(),
+                link.action.task_id.to_string(),
+                record.actor.to_string(),
+                encode(&link)?
+            ],
+        )
+        .map_err(|_| ErrorCode::Storage)?;
+        let result = linked(&tx, &record)?.ok_or(ErrorCode::Malformed)?;
+        let current = apps.resolve(record.actor, &phrase)?;
+        if current.alias_id != resolved.alias_id
+            || current.alias_revision != resolved.alias_revision
+            || current.record != resolved.record
+        {
+            return Err(ErrorCode::Stale);
+        }
+        request.current()?;
+        authorize(&TaskAuthority {
+            session: &request.session,
+            action: &link.action,
+            turn: record.id,
+            turn_revision: record.revision,
+            app_revision: resolved.record.revision,
+            alias: resolved.alias_id,
+            alias_revision: resolved.alias_revision,
+        })?;
+        request.current()?;
+        link.action.validate(wall_time()?)?;
+        tx.commit().map_err(|_| ErrorCode::Storage)?;
+        Ok(TaskResolution::Linked(result))
+    }
+}

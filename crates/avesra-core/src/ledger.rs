@@ -128,6 +128,7 @@ impl Store {
         session: &DispatchSession,
         now_ms: u64,
     ) -> Result<(), ErrorCode> {
+        crate::conversations::validate_linked_dispatch(&self.connection, &permit.action, session)?;
         if !session.active
             || session.actor_id != permit.action.actor_id
             || session.device_id != permit.device_id
@@ -566,6 +567,7 @@ impl Store {
             return Err(ErrorCode::InvalidTransition);
         }
         let action: Action = decode(&body)?;
+        crate::conversations::validate_linked_dispatch(&tx, &action, session)?;
         let task_state: String = sql(tx.query_row(
             "SELECT state FROM tasks WHERE id=?1",
             [action.task_id.to_string()],
@@ -816,58 +818,69 @@ impl Store {
         now_ms: u64,
     ) -> Result<Vec<Uuid>, ErrorCode> {
         let tx = sql(self.connection.transaction())?;
-        let owner: String = sql(tx.query_row(
-            "SELECT actor_id FROM tasks WHERE id=?1",
-            [task.to_string()],
-            |r| r.get(0),
+        let dispatches = cancel_task_in(&tx, task, actor, now_ms)?;
+        sql(tx.commit())?;
+        Ok(dispatches)
+    }
+}
+
+/// Shared transaction primitive for source-turn cancellation; never commits independently.
+pub(crate) fn cancel_task_in(
+    tx: &Transaction<'_>,
+    task: Uuid,
+    actor: Uuid,
+    now_ms: u64,
+) -> Result<Vec<Uuid>, ErrorCode> {
+    let owner: String = sql(tx.query_row(
+        "SELECT actor_id FROM tasks WHERE id=?1",
+        [task.to_string()],
+        |r| r.get(0),
+    ))?;
+    if actor.is_nil() || owner != actor.to_string() {
+        return Err(ErrorCode::Denied);
+    }
+    sql(tx.execute(
+        "UPDATE accepted_intents SET cancel_requested=1 WHERE task_id=?1",
+        [task.to_string()],
+    ))?;
+    let dispatches = {
+        let mut statement=sql(tx.prepare("SELECT a.dispatch_id FROM action_revisions a JOIN action_heads h ON h.revision=a.revision JOIN steps s ON s.id=h.step_id WHERE s.task_id=?1 AND s.state=?2"))?;
+        let rows = sql(statement.query_map(
+            params![task.to_string(), encode(&TaskState::Running)?],
+            |r| r.get::<_, String>(0),
         ))?;
-        if actor.is_nil() || owner != actor.to_string() {
-            return Err(ErrorCode::Denied);
+        let mut ids = Vec::new();
+        for row in rows {
+            ids.push(Uuid::parse_str(&sql(row)?).map_err(|_| ErrorCode::Malformed)?);
         }
+        ids
+    };
+    sql(tx.execute("UPDATE action_revisions SET cancel_requested=1 WHERE step_id IN(SELECT id FROM steps WHERE task_id=?1)",[task.to_string()]))?;
+    sql(tx.execute(
+        "UPDATE steps SET state=?2,updated_ms=?3 WHERE task_id=?1 AND state IN(?4,?5,?6,?7)",
+        params![
+            task.to_string(),
+            encode(&TaskState::Cancelled)?,
+            clock(now_ms)?,
+            encode(&TaskState::Proposed)?,
+            encode(&TaskState::Queued)?,
+            encode(&TaskState::AwaitingApproval)?,
+            encode(&TaskState::Suspended)?
+        ],
+    ))?;
+    if dispatches.is_empty() {
         sql(tx.execute(
-            "UPDATE accepted_intents SET cancel_requested=1 WHERE task_id=?1",
-            [task.to_string()],
-        ))?;
-        let dispatches = {
-            let mut statement=sql(tx.prepare("SELECT a.dispatch_id FROM action_revisions a JOIN action_heads h ON h.revision=a.revision JOIN steps s ON s.id=h.step_id WHERE s.task_id=?1 AND s.state=?2"))?;
-            let rows = sql(statement.query_map(
-                params![task.to_string(), encode(&TaskState::Running)?],
-                |r| r.get::<_, String>(0),
-            ))?;
-            let mut ids = Vec::new();
-            for row in rows {
-                ids.push(Uuid::parse_str(&sql(row)?).map_err(|_| ErrorCode::Malformed)?);
-            }
-            ids
-        };
-        sql(tx.execute("UPDATE action_revisions SET cancel_requested=1 WHERE step_id IN(SELECT id FROM steps WHERE task_id=?1)",[task.to_string()]))?;
-        sql(tx.execute(
-            "UPDATE steps SET state=?2,updated_ms=?3 WHERE task_id=?1 AND state IN(?4,?5,?6,?7)",
+            "UPDATE tasks SET state=?2,updated_ms=?3 WHERE id=?1 AND state NOT IN(?4,?5,?6)",
             params![
                 task.to_string(),
                 encode(&TaskState::Cancelled)?,
                 clock(now_ms)?,
-                encode(&TaskState::Proposed)?,
-                encode(&TaskState::Queued)?,
-                encode(&TaskState::AwaitingApproval)?,
-                encode(&TaskState::Suspended)?
+                encode(&TaskState::Succeeded)?,
+                encode(&TaskState::Failed)?,
+                encode(&TaskState::UnknownEffect)?
             ],
         ))?;
-        if dispatches.is_empty() {
-            sql(tx.execute(
-                "UPDATE tasks SET state=?2,updated_ms=?3 WHERE id=?1 AND state NOT IN(?4,?5,?6)",
-                params![
-                    task.to_string(),
-                    encode(&TaskState::Cancelled)?,
-                    clock(now_ms)?,
-                    encode(&TaskState::Succeeded)?,
-                    encode(&TaskState::Failed)?,
-                    encode(&TaskState::UnknownEffect)?
-                ],
-            ))?;
-        }
-        event(&tx, task, None, "cancel_requested", clock(now_ms)?)?;
-        sql(tx.commit())?;
-        Ok(dispatches)
     }
+    event(tx, task, None, "cancel_requested", clock(now_ms)?)?;
+    Ok(dispatches)
 }

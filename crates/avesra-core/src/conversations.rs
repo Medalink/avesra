@@ -5,10 +5,16 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+#[path = "conversation_tasks.rs"]
+mod tasks;
+pub use tasks::{AppTaskRequest, LinkedTask, TaskAuthority, TaskResolution};
+pub(crate) use tasks::{SCHEMA as TASK_SCHEMA, validate_dispatch as validate_linked_dispatch};
+
 const MAX_BODY: usize = 65_536;
 pub(crate) const SCHEMA: &str = "CREATE TABLE accepted_conversations(id TEXT PRIMARY KEY CHECK(length(id)=36),revision TEXT UNIQUE NOT NULL CHECK(length(revision)=36),actor TEXT NOT NULL CHECK(length(actor)=36),device TEXT NOT NULL CHECK(length(device)=36),session TEXT NOT NULL CHECK(length(session)=36),utterance TEXT NOT NULL CHECK(length(utterance)=36),body TEXT NOT NULL CHECK(length(body)<=65536),state TEXT NOT NULL CHECK(state IN ('accepted','planning','waiting_input','answered','cancelled','suspended')),UNIQUE(device,session,utterance))";
 
 pub(crate) fn check_schema(db: &Connection, version: u64) -> Result<(), ErrorCode> {
+    tasks::check_schema(db, version)?;
     let attached:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE tbl_name='accepted_conversations' AND type NOT IN ('table','index'))",[],|r|r.get(0)).map_err(|_|ErrorCode::Malformed)?;
     if attached {
         return Err(ErrorCode::Malformed);
@@ -105,6 +111,14 @@ impl Source {
             .any(Uuid::is_nil)
     }
 }
+/// Exact native cancellation identity; metadata alone grants no authority.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct CancellationTarget {
+    pub actor: Uuid,
+    pub source: Source,
+    pub id: Uuid,
+    pub revision: Uuid,
+}
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Record {
@@ -180,6 +194,7 @@ pub struct Summary {
     pub source: Source,
     pub state: String,
     pub created_ms: u64,
+    pub linked_task: Option<LinkedTask>,
 }
 impl Store {
     pub fn accept_conversation(
@@ -281,6 +296,7 @@ impl Store {
             source,
             state,
             created_ms: record.created_ms,
+            linked_task: tasks::linked(&self.connection, &record)?,
         }))
     }
     /// Explicit native cancellation of this exact accepted turn. Future planner
@@ -292,7 +308,7 @@ impl Store {
         id: Uuid,
         revision: Uuid,
         authorize: &mut dyn FnMut() -> Result<(), ErrorCode>,
-    ) -> Result<(), ErrorCode> {
+    ) -> Result<Vec<Uuid>, ErrorCode> {
         if id.is_nil() || revision.is_nil() {
             return Err(ErrorCode::Malformed);
         }
@@ -307,7 +323,14 @@ impl Store {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|_| ErrorCode::Storage)?;
         if tx.execute("UPDATE accepted_conversations SET state='cancelled' WHERE id=?1 AND revision=?2 AND actor=?3 AND state IN ('accepted','planning','waiting_input','suspended','cancelled')",params![id.to_string(),revision.to_string(),actor.to_string()]).map_err(|_|ErrorCode::Storage)?!=1{return Err(ErrorCode::Stale);}
+        let dispatches = if let Some(linked) = summary.linked_task {
+            let now = tasks::wall_time()?;
+            crate::ledger::cancel_task_in(&tx, linked.task, actor, now)?
+        } else {
+            Vec::new()
+        };
         authorize()?;
-        tx.commit().map_err(|_| ErrorCode::Storage)
+        tx.commit().map_err(|_| ErrorCode::Storage)?;
+        Ok(dispatches)
     }
 }
