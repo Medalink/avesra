@@ -87,6 +87,7 @@ pub async fn revoke_browser_scope(
             .checked_add(1)
             .ok_or("Restart Avesra")?;
         inner.attempt = None;
+        state.browser.reading.invalidate();
         state.browser.scopes.invalidate();
         state.browser.documents.invalidate();
         let work = state

@@ -19,6 +19,7 @@ use std::{
 use tauri::Manager;
 use uuid::Uuid;
 pub mod documents;
+mod reading;
 pub mod scopes;
 
 #[derive(Default)]
@@ -27,6 +28,7 @@ pub struct BrowserSetup {
     inner: Mutex<Inner>,
     scopes: scopes::Coordinator,
     documents: documents::Coordinator,
+    reading: reading::Coordinator,
 }
 #[derive(Default)]
 struct Inner {
@@ -78,6 +80,7 @@ pub struct Status {
 impl BrowserSetup {
     /// Caller lock order: Runtime.local -> browser.inner. Never does I/O.
     pub fn invalidate(&self) {
+        self.reading.invalidate();
         if let Ok(mut inner) = self.inner.lock() {
             inner.generation = inner.generation.saturating_add(1);
             inner.settings_generation = inner.settings_generation.saturating_add(1);
@@ -89,7 +92,10 @@ impl BrowserSetup {
     }
     /// Caller holds Runtime.local. Withdrawal retires metadata before remote or
     /// durable actor revocation; it never grants/reconstructs accepted work.
-    pub fn retire_actor_targets(&self, actor: Uuid) {
+    pub fn retire_actor_targets(&self, actor: Uuid, registration: Uuid) {
+        if !self.reading.revoke(actor, registration) {
+            return;
+        }
         if let Ok(mut inner) = self.inner.lock()
             && let Some(attempt) = inner.attempt.as_mut()
         {
@@ -110,6 +116,7 @@ impl BrowserSetup {
                 v.selection.is_some() && v.state == "authenticated_no_scopes" && v.current_time()
             });
             if !established {
+                self.reading.invalidate();
                 inner.generation = inner.generation.saturating_add(1);
                 inner.attempt = None;
             }
@@ -121,12 +128,22 @@ impl BrowserSetup {
     /// this exact epoch even when a transport survives Stop/Pause for status.
     pub fn observe(&self, local: &avesra_core::state::LocalState) {
         if let Ok(mut inner) = self.inner.lock() {
+            if inner.action_epoch != local.action_epoch
+                || !local.connected
+                || local.locked
+                || local.settings.paused
+            {
+                self.reading.invalidate();
+            }
             inner.action_epoch = local.action_epoch;
             inner.action_allowed = local.connected && !local.locked && !local.settings.paused;
             self.scopes.observe(local);
             self.documents.observe(local);
         }
     }
+}
+pub(crate) fn start_read_preparation(app: tauri::AppHandle) -> Result<(), ErrorCode> {
+    reading::start(app)
 }
 fn management_current(
     app: &tauri::AppHandle,
@@ -206,6 +223,7 @@ pub async fn revoke_browser_pairing(
             .checked_add(1)
             .ok_or("Restart Avesra")?;
         inner.attempt = None;
+        state.browser.reading.invalidate();
         state.browser.scopes.invalidate();
         state.browser.documents.invalidate();
         let work = state.browser.work.clone().try_lock_owned().map_err(
@@ -251,6 +269,7 @@ fn selection_change(
         .checked_add(1)
         .ok_or("Restart Avesra")?;
     inner.attempt = None;
+    state.browser.reading.invalidate();
     state.browser.scopes.invalidate();
     state.browser.documents.invalidate();
     let work = state
@@ -428,6 +447,32 @@ fn with_attempt<T>(
     }
     f(&runtime, &local, attempt)
 }
+// Withdrawal is valid after expiry/lock. Match ownership without requiring
+// the live authority that teardown is removing; never touch a replacement.
+fn close_attempt(app: &tauri::AppHandle, id: Uuid, generation: u64) -> Result<(), ErrorCode> {
+    let state = app.state::<Runtime>();
+    let _local = state.local.lock().map_err(|_| ErrorCode::Unavailable)?;
+    let mut inner = state
+        .browser
+        .inner
+        .lock()
+        .map_err(|_| ErrorCode::Unavailable)?;
+    if inner.generation != generation {
+        return Err(ErrorCode::Stale);
+    }
+    let attempt = inner
+        .attempt
+        .as_mut()
+        .filter(|v| v.id == id)
+        .ok_or(ErrorCode::Stale)?;
+    attempt.pending = None;
+    attempt.approval = None;
+    attempt.state = "closing";
+    state.browser.reading.invalidate();
+    state.browser.scopes.invalidate();
+    state.browser.documents.invalidate();
+    Ok(())
+}
 #[tauri::command]
 pub fn browser_pairing_status(
     window: tauri::WebviewWindow,
@@ -491,6 +536,7 @@ pub fn cancel_browser_pairing(
         inner.generation = inner.generation.saturating_add(1);
         inner.settings_generation = inner.settings_generation.saturating_add(1);
         inner.attempt = None;
+        state.browser.reading.invalidate();
         state.browser.scopes.invalidate();
         state.browser.documents.invalidate();
     }
@@ -522,6 +568,7 @@ pub fn release_browser_management(
         state.browser.scopes.invalidate();
         state.browser.documents.invalidate();
         if !established {
+            state.browser.reading.invalidate();
             inner.generation = inner.generation.saturating_add(1);
             inner.attempt = None;
         }
@@ -619,6 +666,7 @@ fn begin(
             .generation
             .checked_add(1)
             .ok_or("Restart Avesra to reset browser ownership")?;
+        state.browser.reading.invalidate();
         state.browser.scopes.invalidate();
         state.browser.documents.invalidate();
         inner.attempt = Some(Attempt {
@@ -911,6 +959,7 @@ async fn run(
                     }
                     if revision > attempt.observation_revision {
                         attempt.observation_revision = revision;
+                        state.browser.reading.invalidate();
                         for target in &mut attempt.targets {
                             target.retire();
                         }
@@ -1131,14 +1180,7 @@ async fn run(
     .await;
     // Invalidate publication before waiting for potentially blocked storage. The
     // top-level owned slot is not released until the actual writer exits.
-    let _ = with_attempt(app, id, generation, |state, _, attempt| {
-        attempt.pending = None;
-        attempt.approval = None;
-        attempt.state = "closing";
-        state.browser.scopes.invalidate();
-        state.browser.documents.invalidate();
-        Ok(())
-    });
+    let _ = close_attempt(app, id, generation);
     drop(pipe);
     if let Some(job) = job {
         let _ = job.await;

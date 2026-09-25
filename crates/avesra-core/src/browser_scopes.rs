@@ -202,6 +202,18 @@ fn get(db: &Connection, actor: Id, id: Id, revision: Id) -> Result<Grant, ErrorC
     decode(value)
 }
 impl Store {
+    /// Existing accepted-read metadata only; never initializes setup state.
+    pub fn open_read_only(path: &Path) -> Result<Self, ErrorCode> {
+        let db = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|_| ErrorCode::Unavailable)?;
+        db.busy_timeout(Duration::from_secs(2))
+            .map_err(|_| ErrorCode::Unavailable)?;
+        if !check_schema(&db)? {
+            return Err(ErrorCode::Malformed);
+        }
+        count(&db)?;
+        Ok(Self(db))
+    }
     pub fn open(path: &Path) -> Result<Self, ErrorCode> {
         let mut db = Connection::open(path).map_err(|_| ErrorCode::Unavailable)?;
         db.busy_timeout(Duration::from_secs(2))

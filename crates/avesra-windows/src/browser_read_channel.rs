@@ -16,14 +16,14 @@ pub type Current = Box<dyn FnMut() -> Result<(), ErrorCode> + Send>;
 /// No public constructor or sender access. NativeEffects creates this for its
 /// one actual worker and moves it into that thread for the entire lifetime.
 pub struct WorkerOwner {
-    send: SyncSender<Offer>,
+    send: tokio::sync::mpsc::Sender<Offer>,
     resource: Arc<AtomicU64>,
 }
 pub struct PreparationReceiver {
-    receive: Receiver<Offer>,
+    receive: tokio::sync::mpsc::Receiver<Offer>,
 }
 pub(crate) fn channel(resource: Arc<AtomicU64>) -> (WorkerOwner, PreparationReceiver) {
-    let (send, receive) = mpsc::sync_channel(1);
+    let (send, receive) = tokio::sync::mpsc::channel(1);
     (
         WorkerOwner { send, resource },
         PreparationReceiver { receive },
@@ -56,6 +56,20 @@ pub struct Offer {
     shared: Arc<Shared>,
     reply: Option<SyncSender<Prepared>>,
     completed: bool,
+}
+/// Cloneable withdrawal only; cannot reserve, publish, settle or release.
+#[derive(Clone)]
+pub struct Withdrawal(Arc<Shared>);
+impl Withdrawal {
+    pub fn cancel(&self) {
+        self.0.preparation.withdraw();
+    }
+    pub fn remaining_ms(&self) -> Result<u64, ErrorCode> {
+        self.0.current()
+    }
+    pub fn reservation_generation(&self) -> Result<u64, ErrorCode> {
+        self.0.reserved()
+    }
 }
 /// Checked response data, NOT a publication/settlement capability.
 pub struct Prepared {
@@ -113,16 +127,16 @@ impl Drop for WorkerOwner {
     }
 }
 impl PreparationReceiver {
-    /// Nonblocking so the native runtime need not detach a waiting receiver.
-    pub fn try_receive(&self) -> Result<Option<Offer>, ErrorCode> {
-        match self.receive.try_recv() {
-            Ok(offer) => Ok(Some(offer)),
-            Err(mpsc::TryRecvError::Empty) => Ok(None),
-            Err(mpsc::TryRecvError::Disconnected) => Err(ErrorCode::Unavailable),
-        }
+    /// One runtime consumer sleeps until an actual offer or worker exit. This
+    /// receiver is independent of the authenticated pipe framing owner.
+    pub async fn receive(&mut self) -> Result<Offer, ErrorCode> {
+        self.receive.recv().await.ok_or(ErrorCode::Unavailable)
     }
 }
 impl Offer {
+    pub fn withdrawal(&self) -> Withdrawal {
+        Withdrawal(self.shared.clone())
+    }
     pub fn permit(&self) -> &DispatchPermit {
         self.shared.preparation.permit()
     }

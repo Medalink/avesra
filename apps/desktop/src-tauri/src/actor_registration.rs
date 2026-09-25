@@ -161,7 +161,7 @@ async fn run(
                 {
                     let state = app.state::<Runtime>();
                     let _local = state.local.lock().map_err(|_| "Local state unavailable")?;
-                    state.browser.retire_actor_targets(identity.actor);
+                    state.browser.retire_actor_targets(identity.actor, registration_revision);
                 }
                 actors::Command::Revoke { actor: identity.actor, registration_revision }
             }

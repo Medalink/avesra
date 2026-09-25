@@ -510,6 +510,10 @@ fn main() {
                 shortcut_recording: Mutex::new(None),
                 shortcut_focus_generation: std::sync::atomic::AtomicU64::new(1),
             });
+            // Receiver is independent of the selected transport. No worker
+            // emits an accepted-read offer until the full dispatch is wired.
+            browser::start_read_preparation(app.handle().clone())
+                .map_err(|_| "Native browser preparation unavailable")?;
             let hotkey_app = app.handle().clone();
             let hotkeys =
                 avesra_windows::shortcuts::Hotkeys::spawn(initial_shortcuts, move |action| {

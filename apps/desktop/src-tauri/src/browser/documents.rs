@@ -2,6 +2,7 @@
 use super::*;
 use avesra_contracts::browser::{ScopeOperation, ScopeRef, documents as wire};
 use avesra_core::browser_scopes::{Grant, Store as ScopeStore};
+use avesra_windows::browser_read_channel::{Offer, Withdrawal};
 use scopes::Context;
 pub(super) const MAX_TARGETS: usize = 16;
 
@@ -85,6 +86,16 @@ pub(super) fn resolve_target(
     reference: ScopeRef,
     actor: Uuid,
 ) -> Result<Target, ErrorCode> {
+    resolve_target_resource(state, local, inner, reference, actor, None)
+}
+fn resolve_target_resource(
+    state: &Runtime,
+    local: &avesra_core::state::LocalState,
+    inner: &Inner,
+    reference: ScopeRef,
+    actor: Uuid,
+    reservation: Option<(&Withdrawal, u64)>,
+) -> Result<Target, ErrorCode> {
     let attempt = inner.attempt.as_ref().ok_or(ErrorCode::Stale)?;
     let target = attempt
         .targets
@@ -113,15 +124,160 @@ pub(super) fn resolve_target(
                 && app.revision == target.grant.browser_revision.uuid()
                 && app.selected_by == actor
         })
-        || !state
-            .effects
-            .browser_work_generation()
-            .is_ok_and(|v| v == target.resource_generation)
+        || !match reservation {
+            Some((signal, generation)) => {
+                signal.remaining_ms().is_ok()
+                    && signal
+                        .reservation_generation()
+                        .is_ok_and(|v| v == generation)
+                    && target.resource_generation.checked_add(1) == Some(generation)
+            }
+            None => state
+                .effects
+                .browser_work_generation()
+                .is_ok_and(|v| v == target.resource_generation),
+        }
     {
         return Err(ErrorCode::Stale);
     }
     target.candidate.validate(&target.grant.origin)?;
     Ok(target.clone())
+}
+/// Exact private metadata plus this offer's own resource transition. Not a grant.
+pub(super) struct PreparedTarget {
+    target: Target,
+    generation: u64,
+}
+pub(super) fn reserve_target(
+    state: &Runtime,
+    local: &avesra_core::state::LocalState,
+    inner: &Inner,
+    offer: &Offer,
+) -> Result<PreparedTarget, ErrorCode> {
+    let action = &offer.permit().action;
+    let reference = inner
+        .attempt
+        .as_ref()
+        .ok_or(ErrorCode::Stale)?
+        .targets
+        .iter()
+        .find(|v| v.reference.id.uuid() == action.target_id)
+        .ok_or(ErrorCode::Stale)?
+        .reference;
+    let target = resolve_target(state, local, inner, reference, action.actor_id)?;
+    let avesra_contracts::ActionPayload::ReadPage { origin, .. } = &action.payload else {
+        return Err(ErrorCode::Denied);
+    };
+    if avesra_contracts::browser::Origin::parse(origin)? != target.grant.origin {
+        return Err(ErrorCode::Stale);
+    }
+    let generation = offer.reserve(target.resource_generation)?;
+    state.browser.documents.invalidate();
+    Ok(PreparedTarget { target, generation })
+}
+impl PreparedTarget {
+    pub(super) fn current(
+        &self,
+        state: &Runtime,
+        local: &avesra_core::state::LocalState,
+        inner: &Inner,
+        signal: &Withdrawal,
+    ) -> Result<(), ErrorCode> {
+        resolve_target_resource(
+            state,
+            local,
+            inner,
+            self.target.reference,
+            self.target.actor,
+            Some((signal, self.generation)),
+        )
+        .map(|_| ())
+    }
+    pub(super) fn saved(
+        &self,
+        directory: &std::path::Path,
+        current: &mut dyn FnMut() -> Result<(), ErrorCode>,
+    ) -> Result<(), ErrorCode> {
+        current()?;
+        let expected = &self.target.grant;
+        let grant = ScopeStore::open_read_only(&directory.join("browser-scopes.db"))?.get(
+            expected.actor,
+            expected.id,
+            expected.revision,
+        )?;
+        if serde_json::to_vec(&grant).map_err(|_| ErrorCode::Malformed)?
+            != serde_json::to_vec(expected).map_err(|_| ErrorCode::Malformed)?
+        {
+            return Err(ErrorCode::Stale);
+        }
+        current()?;
+        let store = Store::open_existing(&directory.join("browser-pairings"))?;
+        current()?;
+        let (selected, binding) = store.selected(expected.actor)?.ok_or(ErrorCode::Stale)?;
+        if selected.revision != expected.selection
+            || selected.actor != expected.actor
+            || selected.pairing != expected.pairing
+            || binding.actor != expected.actor
+            || binding.pairing != expected.pairing
+            || binding.browser_app != expected.browser_app
+            || binding.browser_revision != expected.browser_revision
+        {
+            return Err(ErrorCode::Stale);
+        }
+        current()
+    }
+    pub(super) fn request(
+        &self,
+        permit: &avesra_core::ledger::DispatchPermit,
+        remaining_ms: u64,
+    ) -> Result<avesra_contracts::browser::reading::Request, ErrorCode> {
+        use avesra_contracts::browser::reading::{Context, Request, Source};
+        let avesra_contracts::ActionPayload::ReadPage { message_limit, .. } = permit.action.payload
+        else {
+            return Err(ErrorCode::Denied);
+        };
+        let action = &permit.action;
+        let target = &self.target;
+        let grant = &target.grant;
+        let request = Request {
+            context: Context {
+                request: Id::new(Uuid::new_v4())?,
+                dispatch: Id::new(permit.dispatch_id)?,
+                task: Id::new(action.task_id)?,
+                step: Id::new(action.step_id)?,
+                actor: Id::new(action.actor_id)?,
+                action_revision: Id::new(action.revision)?,
+                intent_revision: Id::new(action.intent_revision)?,
+                grant: Id::new(action.grant_id)?,
+                target: target.reference,
+                scope: ScopeRef {
+                    id: grant.id,
+                    revision: grant.revision,
+                },
+                pairing: grant.pairing,
+                selection: grant.selection,
+                browser_app: ScopeRef {
+                    id: grant.browser_app,
+                    revision: grant.browser_revision,
+                },
+                browser_session: target.session,
+                browser_generation: target.transport,
+                observation_revision: target.observation_revision,
+                source: Source {
+                    device: Id::new(permit.device_id)?,
+                    session: Id::new(permit.session_id)?,
+                    capture_epoch: permit.capture_epoch,
+                    action_epoch: permit.action_epoch,
+                },
+            },
+            origin: grant.origin.clone(),
+            document: target.candidate.clone(),
+            message_limit,
+            remaining_ms,
+        };
+        avesra_core::browser_reading::validate_dispatch(&request, permit)?;
+        Ok(request)
+    }
 }
 #[derive(Clone, Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]

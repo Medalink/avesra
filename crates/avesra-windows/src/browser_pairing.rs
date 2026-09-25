@@ -131,6 +131,30 @@ pub struct Store {
     _lock: File,
 }
 impl Store {
+    /// Accepted preparation reads existing setup only, retaining the same
+    /// exclusive lock/principal checks without creating directories or files.
+    pub fn open_existing(directory: &Path) -> Result<Self, ErrorCode> {
+        let metadata = std::fs::symlink_metadata(directory).map_err(|_| ErrorCode::Unavailable)?;
+        if !metadata.is_dir() || metadata.file_attributes() & 0x400 != 0 {
+            return Err(ErrorCode::Malformed);
+        }
+        let lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(0x00200000)
+            .open(directory.join("pairings.lock"))
+            .map_err(|_| ErrorCode::Unavailable)?;
+        let metadata = lock.metadata().map_err(|_| ErrorCode::Unavailable)?;
+        if !metadata.is_file() || metadata.file_attributes() & 0x400 != 0 {
+            return Err(ErrorCode::Malformed);
+        }
+        lock.try_lock().map_err(|_| ErrorCode::Unavailable)?;
+        Ok(Self {
+            directory: directory.into(),
+            principal: crate::principal::current_user()?,
+            _lock: lock,
+        })
+    }
     pub fn open(directory: &Path) -> Result<Self, ErrorCode> {
         std::fs::create_dir_all(directory).map_err(|_| ErrorCode::Unavailable)?;
         let lock = OpenOptions::new()
