@@ -29,7 +29,7 @@ def child(pipe, config):
             while True:
                 payload = pipe.recv()
                 try:
-                    result = driver.infer(payload)
+                    result = driver.request(payload)
                     payload = None
                     pipe.send({"result": result})
                 except Exception:
@@ -59,6 +59,23 @@ class Service:
         self.clock_wall = time.time()
         self.clock_mono = time.monotonic()
         self.lifecycle = asyncio.Lock()
+        self.stream = None
+        self.stream_timer = None
+        self.streams_recent = {}
+
+    def clear_stream(self):
+        self.stream = None
+        timer, self.stream_timer = self.stream_timer, None
+        if timer is not None and timer is not asyncio.current_task():
+            timer.cancel()
+
+    def arm_stream(self, generation):
+        if self.stream_timer is not None:
+            self.stream_timer.cancel()
+        async def expire():
+            await asyncio.sleep(max(0, min(2, self.stream["deadline"] - time.monotonic())))
+            await self.stop(generation)
+        self.stream_timer = asyncio.create_task(expire())
 
     def current(self, generation, key, epoch, deadline):
         return generation == self.generation and self.sessions.get(key, (None,))[0] == epoch and time.monotonic() < deadline
@@ -68,6 +85,7 @@ class Service:
             if expected_generation is not None and expected_generation != self.generation:
                 return self.state != "termination_pending"
             self.generation += 1
+            self.clear_stream()
             process = self.process
             pipe, self.pipe = self.pipe, None
             self.state = "termination_pending" if process is not None else "unavailable"
@@ -123,15 +141,17 @@ class Service:
             return {
                 "version": 1, "lane": self.config["lane"],
                 "model_revision": self.config["model_revision"], "state": self.state,
-                "streaming": False, "cancellation": "terminate_process",
-                "permission_authority": False, "busy": self.active is not None,
+                "streaming": self.config.get("asr_streaming", False), "cancellation": "terminate_process",
+                "permission_authority": False, "busy": self.active is not None or self.stream is not None,
                 "successful_inferences": self.successful_inferences,
                 "last_inference_ms": self.last_inference_ms,
             }
         fields = {"version", "operation", "request_id", "session_id", "capture_epoch", "sequence", "issued_at_ms", "expires_at_ms"}
-        if operation == "infer":
+        if operation in {"infer", "stream"}:
             fields |= {"payload"}
-        if set(request) != fields or operation not in {"load", "infer", "cancel"}:
+        if operation == "stream":
+            fields |= {"chunk_sequence", "final"}
+        if set(request) != fields or operation not in {"load", "infer", "cancel", "stream"}:
             return {"error": "invalid_request"}
         try:
             for name in ("request_id", "session_id"):
@@ -147,6 +167,8 @@ class Service:
             if not request["issued_at_ms"] <= now < request["expires_at_ms"] or request["expires_at_ms"] - request["issued_at_ms"] > (120_000 if operation == "load" else 30_000):
                 raise ValueError()
             deadline = time.monotonic() + (request["expires_at_ms"] - now) / 1000
+            if operation == "stream" and (not self.config.get("asr_streaming", False) or type(request["chunk_sequence"]) is not int or not 0 < request["chunk_sequence"] <= 3000 or type(request["final"]) is not bool):
+                raise ValueError()
         except (ValueError, TypeError, AttributeError):
             return {"error": "invalid_request"}
         key = request["session_id"]
@@ -160,13 +182,34 @@ class Service:
             return {"error": "session_capacity"}
         self.sessions[key] = (request["capture_epoch"], request["sequence"], monotonic)
         if operation == "cancel":
-            if self.active != (key, request["request_id"]):
+            active_matches = self.active is not None and self.active[:2] == (key, request["request_id"])
+            stream_matches = self.stream is not None and (self.stream["session"], self.stream["id"]) == (key, request["request_id"])
+            if not active_matches and not stream_matches:
                 return {"error": "unknown_request"}
             stopped = await self.stop(self.generation)
             return {"outcome": "cancelled" if stopped else "termination_pending"}
         if self.active is not None:
             return {"error": "busy"}
-        self.active = (key, request["request_id"])
+        if self.stream is not None and (operation != "stream" or (key, request["request_id"], request["capture_epoch"], request["expires_at_ms"], request.get("chunk_sequence")) != (self.stream["session"], self.stream["id"], self.stream["epoch"], self.stream["expires"], self.stream["next"])):
+            return {"error": "stream_busy_or_stale"}
+        first = operation == "stream" and self.stream is None
+        if first and request["chunk_sequence"] != 1:
+            return {"error": "stream_sequence"}
+        if first:
+            self.streams_recent = {k: until for k, until in self.streams_recent.items() if until > time.monotonic()}
+            identity = (key, request["request_id"])
+            if identity in self.streams_recent or len(self.streams_recent) >= 128:
+                return {"error": "stream_replay_or_capacity"}
+        final = request.get("final", False)
+        if operation == "stream":
+            if self.state != "loaded_unqualified":
+                return {"error": "load_required"}
+            if first:
+                self.streams_recent[identity] = time.monotonic() + 31
+                self.stream = {"session": key, "id": request["request_id"], "epoch": request["capture_epoch"], "expires": request["expires_at_ms"], "deadline": deadline, "next": 1}
+            deadline = self.stream["deadline"]
+            self.arm_stream(self.generation)
+        self.active = (key, request["request_id"], uuid.uuid4())
         owner = self.active
         epoch = request["capture_epoch"]
         payload = request.pop("payload", None)
@@ -189,16 +232,28 @@ class Service:
             if not isinstance(payload, dict):
                 return {"error": "invalid_arguments"}
             # Off-loop send: OS pipe capacity must never block cancellation/health.
-            await asyncio.wait_for(asyncio.to_thread(self.pipe.send, payload), max(0.001, min(2, deadline - time.monotonic())))
+            envelope = {"operation": operation, "payload": payload, "first": first, "final": final, "deadline": deadline}
+            await asyncio.wait_for(asyncio.to_thread(self.pipe.send, envelope), max(0.001, min(2, deadline - time.monotonic())))
+            envelope = None
             payload = None
             result = await self.receive(generation, deadline)
             if not self.current(generation, key, epoch, deadline):
                 raise ValueError("stale_reply")
             if "result" in result:
-                self.successful_inferences += 1
+                self.successful_inferences += int(operation != "stream" or final)
                 self.last_inference_ms = round((time.monotonic() - started) * 1000, 3)
                 result["lane"] = self.config["lane"]
                 result["model_revision"] = self.config["model_revision"]
+                if operation == "stream":
+                    result["request_id"], result["session_id"], result["capture_epoch"] = owner[1], key, epoch
+                    result["chunk_sequence"] = self.stream["next"]
+                    self.stream["next"] += 1
+                    if final:
+                        self.clear_stream()
+                    else:
+                        self.arm_stream(generation)
+            elif operation == "stream":
+                await self.stop(generation)
             return result
         except (Exception, asyncio.CancelledError):
             if generation == self.generation:
@@ -206,6 +261,7 @@ class Service:
             return {"error": "cancelled_or_unavailable"}
         finally:
             payload = None
+            envelope = None
             if self.active == owner:
                 self.active = None
 
@@ -250,10 +306,14 @@ async def serve(config_path, socket_path):
     from .drivers import REVISIONS
 
     config = json.loads(Path(config_path).read_text())
-    if set(config) - {"lane", "model_path", "model_revision", "cache_path", "voice_preset"}:
+    if set(config) - {"lane", "model_path", "model_revision", "cache_path", "voice_preset", "asr_streaming", "asr_right_context"}:
         raise ValueError("Unknown configuration field")
     if config.get("lane") not in REVISIONS or config.get("model_revision") != REVISIONS[config["lane"]]:
         raise ValueError("Unsupported model revision")
+    if type(config.get("asr_streaming", False)) is not bool or (config.get("asr_streaming", False) and config["lane"] != "asr"):
+        raise ValueError("Invalid streaming configuration")
+    if "asr_right_context" in config and (not config.get("asr_streaming", False) or type(config["asr_right_context"]) is not int or config["asr_right_context"] not in {0, 1, 6, 13}):
+        raise ValueError("Invalid streaming context")
     path = Path(socket_path)
     parent = path.parent.stat()
     if parent.st_uid != os.getuid() or stat.S_IMODE(parent.st_mode) & 0o077:

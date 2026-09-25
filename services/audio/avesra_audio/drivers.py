@@ -47,6 +47,7 @@ class Driver:
         self.torch = torch
         self.lane = config["lane"]
         self.prompt = None
+        self.stream = None
         model_path = Path(config["model_path"])
         if not model_path.is_dir() or config["model_revision"] != REVISIONS[self.lane]:
             raise ValueError("model_revision_unavailable")
@@ -68,6 +69,9 @@ class Driver:
             if len(files) != 1:
                 raise ValueError("model_artifact_unavailable")
             self.model = ASRModel.restore_from(str(files[0]), map_location="cuda")
+            self.model = self.model.float()
+            if config.get("asr_streaming", False):
+                self.model.encoder.set_default_att_context_size([70, config.get("asr_right_context", 1)])
             self.model.eval()
         else:
             from qwen_tts import Qwen3TTSModel
@@ -91,6 +95,37 @@ class Driver:
                 self.prompt = self.model.create_voice_clone_prompt(
                     ref_audio=(wave, rate), ref_text=text(metadata.get("text"), 2048),
                 )
+
+    def request(self, envelope):
+        if envelope["operation"] != "stream":
+            if self.stream is not None:
+                raise ValueError("stream_active")
+            return self.infer(envelope["payload"])
+        if self.lane != "asr":
+            raise ValueError("streaming_unsupported")
+        from .streaming_asr import StreamingAsr
+        import numpy as np
+
+        payload = envelope["payload"]
+        if set(payload) != {"pcm_s16le"} or not isinstance(payload["pcm_s16le"], str) or len(payload["pcm_s16le"]) > 8536:
+            raise ValueError("invalid_stream_audio")
+        raw = base64.b64decode(payload["pcm_s16le"], validate=True)
+        if len(raw) > 6400 or len(raw) % 2:
+            raise ValueError("invalid_stream_audio")
+        samples = np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32768.0
+        raw = None
+        if envelope["first"]:
+            if self.stream is not None:
+                raise ValueError("stream_active")
+            self.stream = StreamingAsr(self.model, self.torch, envelope["deadline"])
+        if self.stream is None:
+            raise ValueError("stream_missing")
+        try:
+            return self.stream.push(samples, envelope["final"])
+        finally:
+            samples = None
+            if self.stream.closed:
+                self.stream = None
 
     def infer(self, payload):
         with self.torch.inference_mode():

@@ -1,0 +1,8 @@
+{
+  "lane": "asr",
+  "model_path": "/models/nemotron-speech-streaming-en-0.6b",
+  "model_revision": "ebe59e5a817142986528bbbee5dba8db7b38ed50",
+  "cache_path": "/cache/asr",
+  "asr_streaming": true,
+  "asr_right_context": 1
+}
