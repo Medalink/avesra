@@ -264,13 +264,26 @@ async def serve(config_path, socket_path):
     service = Service(config)
     server = await asyncio.start_unix_server(service.connection, path=path, limit=MAX_PACKET + 4, backlog=8)
     task = asyncio.current_task()
-    asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, task.cancel)
+    terminated = False
+
+    def terminate():
+        nonlocal terminated
+        if not terminated:
+            terminated = True
+            task.cancel()
+
+    loop = asyncio.get_running_loop()
+    loop.add_signal_handler(signal.SIGTERM, terminate)
     try:
         async with server:
             await server.serve_forever()
+    except asyncio.CancelledError:
+        if not terminated:
+            raise
     finally:
         await service.stop()
         path.unlink(missing_ok=True)
+        loop.remove_signal_handler(signal.SIGTERM)
 
 
 def main():
