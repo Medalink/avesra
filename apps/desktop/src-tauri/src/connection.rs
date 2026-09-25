@@ -344,7 +344,7 @@ pub async fn run(
           response_sequence=reply.sequence;last_reply=tokio::time::Instant::now();
           let state=app.state::<Runtime>();let mut local=state.local.lock().map_err(|_|"Local state unavailable")?;
           if state.connection_generation.load(std::sync::atomic::Ordering::SeqCst)!=generation{return Err("Session replaced".into());}
-          if !local.connected&&local.capture_epoch==reply.capture_epoch&&local.action_epoch==reply.action_epoch{local.connected=true;local.refresh();let _=app.emit("runtime-state",local.clone());}continue;
+          if !local.connected&&local.capture_epoch==reply.capture_epoch&&local.action_epoch==reply.action_epoch{local.connected=true;local.refresh();state.publish(&local);let _=app.emit("runtime-state",local.clone());}continue;
          }
         };
         if pending.len() >= 8 {

@@ -26,29 +26,46 @@ pub struct AudioFrame {
 }
 /// Shared local invalidation gate; only trusted native state should publish it.
 pub struct MediaGate {
-    enabled: AtomicBool,
-    epoch: AtomicU64,
+    permission: Arc<MediaPermission>,
+    attempt_epoch: Option<u64>,
     failed: AtomicBool,
     dropped: AtomicU64,
+}
+struct MediaPermission {
+    enabled: AtomicBool,
+    epoch: AtomicU64,
 }
 impl Default for MediaGate {
     fn default() -> Self {
         Self {
-            enabled: AtomicBool::new(false),
-            epoch: AtomicU64::new(1),
+            permission: Arc::new(MediaPermission {
+                enabled: AtomicBool::new(false),
+                epoch: AtomicU64::new(1),
+            }),
+            attempt_epoch: None,
             failed: AtomicBool::new(false),
             dropped: AtomicU64::new(0),
         }
     }
 }
 impl MediaGate {
+    /// Every device attempt gets independent failure state and an immutable epoch.
+    /// A still-opening old device can never adopt a replacement device's epoch.
+    pub fn new_attempt(&self, epoch: u64) -> Arc<Self> {
+        Arc::new(Self {
+            permission: self.permission.clone(),
+            attempt_epoch: Some(epoch),
+            failed: AtomicBool::new(false),
+            dropped: AtomicU64::new(0),
+        })
+    }
     /// Call serialized with native state changes; disable first and invalidate
     /// before enabling a newly authenticated session. Old queue entries stay stale.
     pub fn publish(&self, enabled: bool, epoch: u64) {
-        self.enabled.store(false, Ordering::SeqCst);
-        self.epoch.store(epoch, Ordering::SeqCst);
+        self.permission.enabled.store(false, Ordering::SeqCst);
+        self.permission.epoch.store(epoch, Ordering::SeqCst);
         if enabled && !self.failed.load(Ordering::SeqCst) {
-            self.enabled.store(true, Ordering::SeqCst);
+            self.permission.enabled.store(true, Ordering::SeqCst);
         }
     }
     pub fn failed(&self) -> bool {
@@ -57,14 +74,17 @@ impl MediaGate {
     pub fn dropped(&self) -> u64 {
         self.dropped.load(Ordering::Relaxed)
     }
-    fn current(&self, epoch: u64) -> bool {
-        self.enabled.load(Ordering::SeqCst)
-            && self.epoch.load(Ordering::SeqCst) == epoch
+    pub fn current(&self, epoch: u64) -> bool {
+        self.permission.enabled.load(Ordering::SeqCst)
+            && self.permission.epoch.load(Ordering::SeqCst) == epoch
+            && self.attempt_epoch.is_none_or(|attempt| attempt == epoch)
             && !self.failed.load(Ordering::Relaxed)
     }
     fn fail(&self) {
-        self.enabled.store(false, Ordering::SeqCst);
         self.failed.store(true, Ordering::SeqCst);
+    }
+    pub fn close_attempt(&self) {
+        self.fail();
     }
 }
 pub struct Capture {
@@ -141,13 +161,15 @@ fn native_config(
 }
 impl Capture {
     pub fn open(selected_name: &str) -> Result<Self, ErrorCode> {
+        Self::open_with_gate(selected_name, Arc::new(MediaGate::default()))
+    }
+    pub fn open_with_gate(selected_name: &str, gate: Arc<MediaGate>) -> Result<Self, ErrorCode> {
         let device = selected(selected_name, true)?;
         let supported = native_config(&device, true)?;
         let config = supported.config();
         if !config_valid(&config) {
             return Err(ErrorCode::Unsupported);
         }
-        let gate = Arc::new(MediaGate::default());
         let (sender, frames) = sync_channel(MAX_AUDIO_QUEUE);
         let stream = match supported.sample_format() {
             cpal::SampleFormat::F32 => {
@@ -189,7 +211,7 @@ where
         .build_input_stream(
             config,
             move |input: &[T], info: &cpal::InputCallbackInfo| {
-                let current = gate.epoch.load(Ordering::SeqCst);
+                let current = gate.permission.epoch.load(Ordering::SeqCst);
                 if current != epoch || !gate.current(current) {
                     samples.fill(0);
                     count = 0;
@@ -263,13 +285,15 @@ where
 }
 impl Playback {
     pub fn open(selected_name: &str) -> Result<Self, ErrorCode> {
+        Self::open_with_gate(selected_name, Arc::new(MediaGate::default()))
+    }
+    pub fn open_with_gate(selected_name: &str, gate: Arc<MediaGate>) -> Result<Self, ErrorCode> {
         let device = selected(selected_name, false)?;
         let supported = native_config(&device, false)?;
         let config = supported.config();
         if !config_valid(&config) {
             return Err(ErrorCode::Unsupported);
         }
-        let gate = Arc::new(MediaGate::default());
         let (frames, receiver) = sync_channel(MAX_AUDIO_QUEUE);
         let (reference_sender, reference) = sync_channel(MAX_AUDIO_QUEUE);
         let stream = match supported.sample_format() {
@@ -310,7 +334,7 @@ fn playback_stream<T: Sample + SizedSample + FromSample<f32>>(
         .build_output_stream(
             config,
             move |output: &mut [T], info: &cpal::OutputCallbackInfo| {
-                let now_epoch = gate.epoch.load(Ordering::SeqCst);
+                let now_epoch = gate.permission.epoch.load(Ordering::SeqCst);
                 if now_epoch != epoch || !gate.current(now_epoch) {
                     current = None;
                     index = 0;

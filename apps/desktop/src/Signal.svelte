@@ -7,6 +7,7 @@
     samples: number[];
     sequence: number;
     capturedAt: number;
+    captureEpoch: number;
   };
   let {
     frame = null,
@@ -22,7 +23,8 @@
       frozenFrame = null;
     } else if (
       frozenFrame?.kind !== frame.kind ||
-      frozenFrame?.source !== frame.source
+      frozenFrame?.source !== frame.source ||
+      frozenFrame?.captureEpoch !== frame.captureEpoch
     ) {
       frozenFrame = frame;
     }

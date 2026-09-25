@@ -1,5 +1,6 @@
 //! Same-user local audio driver client. This is not an owner authority.
 use avesra_contracts::ErrorCode;
+use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use std::{
     os::unix::fs::{FileTypeExt, MetadataExt},
@@ -17,6 +18,14 @@ use tokio::{
 };
 use uuid::Uuid;
 const MAX_PACKET: usize = 2_000_000;
+fn valid_pcm(encoded: &str, min_bytes: usize, max_bytes: usize) -> bool {
+    if encoded.len() > max_bytes.div_ceil(3) * 4 {
+        return false;
+    }
+    STANDARD.decode(encoded).is_ok_and(|bytes| {
+        bytes.len() >= min_bytes && bytes.len() <= max_bytes && bytes.len().is_multiple_of(2)
+    })
+}
 #[derive(Serialize)]
 #[serde(untagged)]
 pub enum AudioInput {
@@ -27,13 +36,7 @@ pub enum AudioInput {
 impl AudioInput {
     fn validate(&self) -> Result<(), ErrorCode> {
         let valid = match self {
-            Self::Pcm { pcm_s16le } => {
-                !pcm_s16le.is_empty()
-                    && pcm_s16le.len() <= 1_280_000
-                    && pcm_s16le
-                        .bytes()
-                        .all(|v| v.is_ascii_alphanumeric() || matches!(v, b'+' | b'/' | b'='))
-            }
+            Self::Pcm { pcm_s16le } => valid_pcm(pcm_s16le, 320, 960_000),
             Self::Speech { text } => !text.trim().is_empty() && text.len() <= 512,
             Self::Design { text, description } => {
                 !text.trim().is_empty()
@@ -82,12 +85,12 @@ impl AudioOutput {
                 pcm_s16le,
                 sample_rate,
             } => {
-                !pcm_s16le.is_empty()
-                    && pcm_s16le.len() <= 1_920_000
-                    && (8000..=48000).contains(sample_rate)
-                    && pcm_s16le
-                        .bytes()
-                        .all(|v| v.is_ascii_alphanumeric() || matches!(v, b'+' | b'/' | b'='))
+                (8000..=48000).contains(sample_rate)
+                    && valid_pcm(
+                        pcm_s16le,
+                        2,
+                        ((*sample_rate as usize * 30).min(720_000)) * 2,
+                    )
             }
         };
         if valid {

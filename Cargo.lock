@@ -204,6 +204,7 @@ dependencies = [
  "avesra-core",
  "axum",
  "axum-server",
+ "base64 0.22.1",
  "hex",
  "rand 0.9.5",
  "rcgen",

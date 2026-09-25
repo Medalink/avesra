@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod connection;
+mod media;
 use avesra_core::{
     state::{LocalControl, LocalState, Settings},
     store::Store,
@@ -39,12 +40,19 @@ struct WriteSettings {
     reply: oneshot::Sender<Result<(), String>>,
 }
 struct Runtime {
+    media: media::MediaWorker,
     local: Mutex<LocalState>,
     writes: SyncSender<WriteSettings>,
     modes: tokio::sync::watch::Sender<ModeSnapshot>,
     connection: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
     connection_generation: AtomicU64,
     pairing: tokio::sync::Mutex<()>,
+}
+impl Runtime {
+    fn publish(&self, local: &LocalState) {
+        self.media.publish(local);
+        self.modes.send_replace(ModeSnapshot::from(local));
+    }
 }
 fn enqueue(
     runtime: &Runtime,
@@ -83,7 +91,7 @@ async fn local_control(
         let mut local = state.local.lock().map_err(|_| "Local state unavailable")?;
         local.apply(control);
         let snapshot = local.clone();
-        state.modes.send_replace(ModeSnapshot::from(&snapshot));
+        state.publish(&snapshot);
         let pending = enqueue(&state, snapshot.settings.clone());
         (snapshot, pending)
     };
@@ -109,8 +117,16 @@ async fn save_settings(
             return Err("Use local controls to change listening modes".into());
         }
         let pending = enqueue(&state, settings.clone())?;
+        if settings.microphone != local.settings.microphone
+            || settings.speaker != local.settings.speaker
+            || settings.profile != local.settings.profile
+        {
+            local.capture_epoch = local.capture_epoch.saturating_add(1);
+            local.action_epoch = local.action_epoch.saturating_add(1);
+        }
         local.settings = settings;
         local.refresh();
+        state.publish(&local);
         (local.clone(), pending)
     };
     app.emit("runtime-state", &snapshot)
@@ -140,7 +156,7 @@ fn start_connection(
         }
         let generation = state.connection_generation.fetch_add(1, Ordering::SeqCst) + 1;
         local.apply(LocalControl::Disconnect);
-        state.modes.send_replace(ModeSnapshot::from(&*local));
+        state.publish(&local);
         app.emit("runtime-state", local.clone())
             .map_err(|_| "Unable to notify windows")?;
         generation
@@ -157,7 +173,7 @@ fn start_connection(
             && state.connection_generation.load(Ordering::SeqCst) == generation
         {
             local.apply(LocalControl::Disconnect);
-            state.modes.send_replace(ModeSnapshot::from(&*local));
+            state.publish(&local);
             let _ = app_handle.emit("runtime-state", local.clone());
             if let Err(error) = outcome {
                 let _ = app_handle.emit("runtime-error", error);
@@ -246,7 +262,7 @@ fn disconnect_spark(app: tauri::AppHandle, state: tauri::State<'_, Runtime>) -> 
     let mut local = state.local.lock().map_err(|_| "Local state unavailable")?;
     state.connection_generation.fetch_add(1, Ordering::SeqCst);
     local.apply(LocalControl::Disconnect);
-    state.modes.send_replace(ModeSnapshot::from(&*local));
+    state.publish(&local);
     let snapshot = local.clone();
     drop(local);
     if let Some(task) = slot.take() {
@@ -294,7 +310,10 @@ fn main() {
                 })?;
             let local = LocalState::new(settings);
             let (modes, _) = tokio::sync::watch::channel(ModeSnapshot::from(&local));
+            let media = media::MediaWorker::spawn(app.handle().clone())?;
+            media.publish(&local);
             app.manage(Runtime {
+                media,
                 local: Mutex::new(local),
                 writes,
                 modes,
@@ -340,7 +359,7 @@ fn main() {
                             };
                             local.apply(control);
                             let snapshot = local.clone();
-                            state.modes.send_replace(ModeSnapshot::from(&snapshot));
+                            state.publish(&snapshot);
                             let pending = enqueue(&state, snapshot.settings.clone());
                             drop(local);
                             let _ = app.emit("runtime-state", snapshot);
@@ -356,6 +375,7 @@ fn main() {
                     "quit" => {
                         if let Ok(mut local) = app.state::<Runtime>().local.lock() {
                             local.apply(LocalControl::Quit);
+                            app.state::<Runtime>().publish(&local);
                         }
                         app.exit(0);
                     }
