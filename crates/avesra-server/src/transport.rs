@@ -37,6 +37,8 @@ struct ServerState {
 struct LiveSession {
     device: Uuid,
     epoch: u64,
+    enabled: bool,
+    permission: tokio::sync::watch::Sender<(u64, bool)>,
     updated: std::time::Instant,
     seen: std::collections::VecDeque<(Uuid, std::time::Instant)>,
 }
@@ -46,6 +48,7 @@ fn session_current(auth: &Shared, device: Uuid, session: Uuid, epoch: u64) -> bo
         sessions.get(&session).is_some_and(|live| {
             live.device == device
                 && live.epoch == epoch
+                && live.enabled
                 && live.updated.elapsed() < Duration::from_secs(30)
         })
     })
@@ -228,7 +231,7 @@ async fn speaker_infer(
         {
             return Err(StatusCode::BAD_REQUEST);
         }
-        {
+        let mut permission = {
             let mut sessions = auth
                 .sessions
                 .lock()
@@ -238,6 +241,7 @@ async fn speaker_infer(
                 .ok_or(StatusCode::UNAUTHORIZED)?;
             if live.device != device
                 || live.epoch != input.capture_epoch
+                || !live.enabled
                 || live.updated.elapsed() >= Duration::from_secs(30)
             {
                 return Err(StatusCode::UNAUTHORIZED);
@@ -254,7 +258,8 @@ async fn speaker_infer(
             }
             live.seen
                 .push_back((input.request_id, std::time::Instant::now()));
-        }
+            live.permission.subscribe()
+        };
         {
             use base64::Engine;
             let raw = base64::engine::general_purpose::STANDARD
@@ -286,18 +291,20 @@ async fn speaker_infer(
             id: worker_id,
             complete: false,
         };
-        let result = client
-            .infer_with_budget(
-                worker_id,
-                1,
-                input.request_id,
-                AudioInput::Pcm {
-                    pcm_s16le: input.pcm_s16le,
-                },
-                Duration::from_secs(15),
-            )
-            .await
-            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+        let inference = client.infer_with_budget(
+            worker_id,
+            1,
+            input.request_id,
+            AudioInput::Pcm {
+                pcm_s16le: input.pcm_s16le,
+            },
+            Duration::from_secs(15),
+        );
+        let result = tokio::select! {
+            biased;
+            _=permission.changed()=>return Err(StatusCode::UNAUTHORIZED),
+            result=inference=>result.map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?,
+        };
         cancel.complete = true;
         if !session_current(&auth, device, input.session_id, input.capture_epoch)
             || !active(auth.clone(), device).await
@@ -528,10 +535,26 @@ async fn session(
             let live = sessions.entry(session_id).or_insert_with(|| LiveSession {
                 device: device_id,
                 epoch: envelope.capture_epoch,
+                enabled: !mode.0 && !mode.1 && !mode.2,
+                permission: tokio::sync::watch::channel((
+                    envelope.capture_epoch,
+                    !mode.0 && !mode.1 && !mode.2,
+                ))
+                .0,
                 updated: std::time::Instant::now(),
                 seen: std::collections::VecDeque::new(),
             });
             live.epoch = envelope.capture_epoch;
+            live.enabled = !mode.0 && !mode.1 && !mode.2;
+            live.permission.send_if_modified(|permission| {
+                let next = (live.epoch, live.enabled);
+                if *permission == next {
+                    false
+                } else {
+                    *permission = next;
+                    true
+                }
+            });
             live.updated = std::time::Instant::now();
         }
         let Some(next) = response_sequence.checked_add(1) else {
