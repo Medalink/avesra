@@ -48,18 +48,22 @@
     finally { busy = false; }
   }
   function refresh() { return run(async current => {
-    if (!panel) {
-      const owned = await command<string>("open_app_catalog");
-      if (!mounted || current !== generation) { void command("close_app_catalog", { panel: owned }).catch(() => {}); return; }
-      panel = owned;
-    }
-    const selected = panel;
     try {
+      if (!panel) {
+        const owned = await command<string>("open_app_catalog");
+        if (!mounted || current !== generation) { void command("close_app_catalog", { panel: owned }).catch(() => {}); return; }
+        panel = owned;
+      }
+      const selected = panel;
       const names = await command<Alias[]>("app_aliases", { panel: selected });
       if (!mounted || current !== generation) return;
       aliases = names;
       if (!names.some(v => v.phrase === phrase && v.available)) phrase = "";
-    } catch (e) { if (current === generation) { panel = null; aliases = null; phrase = ""; } throw e; }
+    } catch (e) {
+      if (!mounted || current !== generation) return;
+      const owned = panel; panel = null; aliases = null; phrase = ""; error = String(e);
+      if (owned) void command("close_app_catalog", { panel: owned }).catch(() => {});
+    }
     const next = await command<Status>("browser_pairing_status");
     if (!mounted || current !== generation) return;
     status = next;
