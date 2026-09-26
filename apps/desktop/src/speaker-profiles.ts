@@ -12,7 +12,7 @@ export type AvatarParameters = { version: 1; shape: number[]; petals: null[]; ri
 export type VoiceAvatar = { version: 1; state: "ready_without_portrait" | "unavailable" | "source_unavailable"; parameters: AvatarParameters | null; candidate: { id: string; revision: string } | null; reason: string | null };
 export type SpeakerStore = { candidates: SpeakerCandidate[]; storage_directory: string; avatar: VoiceAvatar };
 export const unavailableAvatar = (reason = "Voice avatar is unavailable."): VoiceAvatar => ({ version: 1, state: "unavailable", parameters: null, candidate: null, reason });
-function decodeAvatar(value: unknown): VoiceAvatar {
+export function decodeAvatar(value: unknown): VoiceAvatar {
   if (!value || typeof value !== "object" || !("version" in value) || value.version !== 1) return unavailableAvatar("Open the updated app to view your voice avatar.");
   const avatar = value as VoiceAvatar;
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
