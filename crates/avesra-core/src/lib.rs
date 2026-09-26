@@ -1,6 +1,7 @@
 pub mod action_permissions;
 pub mod actor_intents;
 pub mod clock;
+pub mod comparison;
 pub mod conversations;
 pub mod diagnostics;
 pub mod download;

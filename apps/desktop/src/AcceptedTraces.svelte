@@ -1,5 +1,6 @@
 <script lang="ts">
   import EngineReadings from "./EngineReadings.svelte";
+  import SavedComparisons from "./SavedComparisons.svelte";
   import ResourceReadings from "./ResourceReadings.svelte";
   import type { ComponentProps } from "svelte";
   import { command, native, type Runtime } from "./runtime";
@@ -13,7 +14,11 @@
   let message = $state("");
   let days = $state(7);
   let generation=0;
-  $effect(()=>{if(runtime?.locked){generation++;view=null;selected="";message="";}});
+  let traceContext = "";
+  $effect(() => {
+    const next = JSON.stringify([runtime?.locked, runtime?.connected, runtime?.action_epoch, runtime?.settings.owner_name?.actor]);
+    if (next !== traceContext) { traceContext = next; generation++; view = null; selected = ""; message = ""; }
+  });
   const spans=$derived([...(view?.local.records??[]),...(view?.controller?.records??[])]);
   const turns=$derived([...new Set([...spans.map(s=>s.link.turn),...(view?.controller?.engine.queues??[]).map(q=>q.link.turn),...(view?.controller?.engine.live??[]).map(q=>q.link.turn)])]);
   const rows=$derived(selected?spans.filter(s=>s.link.turn===selected):[]);
@@ -70,6 +75,7 @@
       </div>
     {/each}
   {/if}
+  <SavedComparisons {runtime} turns={view?.local.records.map(span => span.link.turn) ?? []} />
   {#if message}<p class="av-hint break-all" role="status">{message}</p>{/if}
   <p class="av-hint">Different hosts have unsynchronized clocks; durations are never subtracted across hosts. Endpoint response submission starts after the required quiet tail and minimum capture span, not at the user's last speech. It ends at the start of the first reference block containing nonzero accepted speech, with up to 20 ms block granularity. It excludes the quiet tail from user-speech-end latency and does not prove audibility or human-rated usefulness; A06 latency targets remain unmeasured here. Failed/missing/abandoned observations remain in totals and drilldown. Successful controller ASR/speaker receipts are separate from native failure totals. Hardware headroom and complete release benchmarks remain separate evidence.</p>
 </section>

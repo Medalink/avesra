@@ -97,3 +97,5 @@ caller withdrawal, actual completion and missing terminal evidence.
 Source/static checks do not prove A28. Runtime evidence must follow an actually
 accepted conversation and action across both hosts and an exported drilldown,
 including failure/cancellation and a content-canary inspection.
+
+Manual saved cohorts use existing current-owner queries without changing trace wire version. See [manual comparison contracts](performance.md#manual-saved-cohorts-report-format-1). Reports preserve actual source records and distinguish owner annotations from measured provenance. No imported traces can become saved native evidence.

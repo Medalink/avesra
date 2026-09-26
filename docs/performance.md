@@ -82,3 +82,51 @@ accepted-trace view/export. Received versus discarded dwell and complete, failed
 or abandoned capacity-reservation waits remain distinct. No model waiting queue,
 GPU compute time or token-throughput measurement is inferred from these events.
 The source implementation still requires actual runtime/export evidence.
+
+## Manual saved cohorts (report format 1)
+
+Visible unlocked Settings may save 1–64 distinct accepted turns from a fresh,
+current-owner/device trace query. Empty or missing native turns are rejected.
+Scenario ID/version, cold/warm state and contention condition are explicit owner
+annotations, not observed facts. Saving runs no scenario, inference or device work.
+Reports contain the selected actual records and query coverage counters, never
+transcripts, prompts, audio, credentials or imported measurement values. Query
+process identity is separate from every record's original process. Historical
+binary, profile and scenario provenance is unavailable; it is never filled from
+the currently running app. A selected turn is not proof of an independent scenario
+repetition, and unaccepted/ambient attempts are outside this retained cohort.
+
+The native trace owner retains the original authority and 12-second deadline
+through reading, filtering and publication. All report file work runs on a retained
+blocking worker. A process writer lock serializes publication/deletion. Reports
+are DPAPI protected and checked against the current native owner/device before
+listing or use. At most 16 reports of 4 MiB protected bytes each are retained until
+explicit deletion; capacity refuses new saves without silently evicting evidence.
+Export writes a bounded redacted JSON file only on request. Deleting a saved
+report does not delete source traces, accepted history or previously exported files.
+
+A comparable claim requires matching declared scenario/version/temperature/condition and
+same owner/device. Rows are grouped by host and stage; clocks are never subtracted
+across hosts. Original process and deployment values remain visible. Missing
+build/profile provenance, unknown annotations, unavailable controller, observer
+loss/eviction/truncation, missing stage coverage, multiple process/deployment tuples
+or missing deployment fields prevent a comparable claim. Cumulative query losses
+are conservatively reported as possible coverage gaps, not attributed to the
+selected turns. An apparently complete query is not proof of a complete corpus.
+
+Each row separates selected unique turns, observed unique turns, span attempts and
+outcome counts. Absent stage records are missing coverage, never zero duration.
+All-outcome elapsed percentiles preserve failure/withdrawal/uncertainty/abandonment.
+The endpoint-response stage separately summarizes successful post-quiet-endpoint
+submission latency and non-success elapsed time; it retains the existing up-to-20ms
+reference-block and non-acoustic limitations. Fewer than 30 timed unique accepted
+turns is provisional, not 30 independent measured scenario runs. A comparison
+shows descriptive measurements only: no speed-only winner, accuracy pass, promotion,
+qualification or automatic rollback. Genuine matched manual repetitions and their
+correctness evidence remain A29 release work.
+
+Saved report envelopes also bind the actual protected owner revision and paired server fingerprint. The sixteen-slot bound covers the local report store, including reports hidden by a changed owner or pairing; those records are never exposed to a different binding. Percentiles weight actual span attempts, not unique turns; repeated stage attempts are disclosed. The native endpoint-submission row remains visible when neither cohort has that stage, with unavailable duration and all selected turns missing. This format is descriptive only because historical build/profile provenance is unavailable; it does not complete A29 qualification.
+
+A separately confirmed **Delete inaccessible saved reports** operation exposes only the count and deletes old-binding report files under the current protected Windows owner. It preserves current-binding reports and rechecks the original owner/deadline before each deletion; partial cleanup errors require refreshing. Exports preserve redacted owner-revision/server-binding facts, write a single bounded temporary file, recheck authority before atomic publication, and remove a newly created export if the final check fails. No inaccessible record IDs or annotations are returned.
+
+The thirty-unique-turn provisional label is only a minimum coverage warning. Removing that warning does not qualify tail percentiles: p95/p99 remain descriptive attempt-level observations without independent tail-accuracy evidence, even when at least thirty selected turns exist.

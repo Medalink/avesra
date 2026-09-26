@@ -25,7 +25,7 @@ impl Drop for Caller {
         self.0.store(false, Ordering::SeqCst);
     }
 }
-fn current(
+pub(crate) fn current(
     window: &tauri::WebviewWindow,
     app: &tauri::AppHandle,
     challenge: u64,
@@ -52,6 +52,7 @@ async fn collect(
     turn: Option<Uuid>,
     export: bool,
     days: Option<u8>,
+    save: Option<avesra_core::comparison::Request>,
 ) -> Result<(Option<View>, Option<String>), String> {
     let started = Instant::now();
     let state = app.state::<Runtime>();
@@ -158,6 +159,32 @@ async fn collect(
             controller,
             controller_error,
         };
+        if let Some(request) = save {
+            let binding = crate::comparison::Binding {
+                actor,
+                revision,
+                device,
+                server: pairing.server_fingerprint()?,
+            };
+            let id = tokio::task::spawn_blocking(move || {
+                let _owner = _owner;
+                let current = || current(&window, &app, challenge, started, &present);
+                current()?;
+                let report = avesra_core::comparison::Report::capture(
+                    actor,
+                    device,
+                    crate::comparison::now_ms()?,
+                    request,
+                    &view.local,
+                    view.controller.as_ref(),
+                )
+                .map_err(|_| "Selected current-owner evidence unavailable")?;
+                crate::comparison::save(&directory, binding, report, &current)
+            })
+            .await
+            .map_err(|_| "Saved report writer stopped")??;
+            return Ok((None, Some(id.to_string())));
+        }
         if !export {
             return Ok((Some(view), None));
         }
@@ -204,7 +231,7 @@ pub async fn accepted_traces(
     app: tauri::AppHandle,
     turn: Option<Uuid>,
 ) -> Result<View, String> {
-    collect(window, app, turn, false, None)
+    collect(window, app, turn, false, None, None)
         .await?
         .0
         .ok_or("Trace result unavailable".into())
@@ -215,7 +242,7 @@ pub async fn export_accepted_traces(
     app: tauri::AppHandle,
     turn: Option<Uuid>,
 ) -> Result<String, String> {
-    collect(window, app, turn, true, None)
+    collect(window, app, turn, true, None, None)
         .await?
         .1
         .ok_or("Trace export unavailable".into())
@@ -226,8 +253,25 @@ pub async fn set_trace_retention(
     app: tauri::AppHandle,
     days: u8,
 ) -> Result<View, String> {
-    collect(window, app, None, false, Some(days))
+    collect(window, app, None, false, Some(days), None)
         .await?
         .0
         .ok_or("Trace result unavailable".into())
+}
+
+#[tauri::command]
+pub async fn save_trace_cohort(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    annotation: avesra_core::comparison::Annotation,
+    turns: Vec<Uuid>,
+) -> Result<String, String> {
+    let request = avesra_core::comparison::Request { annotation, turns };
+    request
+        .validate()
+        .map_err(|_| "Select 1–64 distinct retained turns and valid scenario annotations")?;
+    collect(window, app, None, false, None, Some(request))
+        .await?
+        .1
+        .ok_or("Saved report unavailable".into())
 }

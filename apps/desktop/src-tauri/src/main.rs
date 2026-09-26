@@ -2,6 +2,7 @@
 mod actor_registration;
 mod browser;
 mod catalog;
+mod comparison;
 mod connection;
 mod discovery;
 mod media;
@@ -953,6 +954,8 @@ fn main() {
             catalog::forget_app_alias,
             tasks::open_action_panel,
             performance::performance_snapshot,
+            comparison::trace_cohorts,
+            traces::save_trace_cohort,
             traces::accepted_traces,
             traces::export_accepted_traces,
             traces::set_trace_retention,
