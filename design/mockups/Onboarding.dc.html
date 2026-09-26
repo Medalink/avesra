@@ -1,0 +1,833 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Avesra setup window</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./avesra.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>body{margin:0;background:#121214}</style>
+</helmet>
+<div class="flex flex-col overflow-hidden bg-[#1f1f23] font-sans text-zinc-100 ring-1 ring-white/10" style="width: 880px; height: 640px; box-sizing: border-box;">
+
+  <!-- Title bar (same chrome as Avesra Settings) -->
+  <div class="flex h-11 shrink-0 items-center gap-2.5 border-b border-white/[0.06] pr-2 pl-4">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" class="text-av-400" aria-hidden="true"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.8"></circle><path d="M8.5 10v4M12 7.5v9M15.5 10v4" stroke="currentColor" stroke-width="2" stroke-linecap="square"></path></svg>
+    <span class="text-[13px] font-medium text-zinc-100">Avesra setup</span>
+    <span class="flex-1"></span>
+    <sc-if value="{{hasBrain}}" hint-placeholder-val="{{ true }}">
+      <span class="{{brainCls}}" title="Where Avesra is running right now"><span class="{{brainDotCls}}"></span>{{brainLabel}}</span>
+    </sc-if>
+    <button type="button" class="av-iconbtn size-7" aria-label="Close setup" title="Close">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg>
+    </button>
+  </div>
+
+  <div class="flex min-h-0 flex-1">
+    <!-- Step rail -->
+    <nav aria-label="Setup steps" class="flex w-[200px] shrink-0 flex-col border-r border-white/[0.06] bg-black/20 p-2.5">
+      <span class="av-kicker px-2.5 pt-1 pb-2">Setup</span>
+      <ol class="m-0 flex list-none flex-col gap-0.5 p-0">
+        <sc-for list="{{rail}}" as="r" hint-placeholder-count="6">
+          <li class="{{r.cls}}" aria-current="{{r.current}}">
+            <span class="{{r.markCls}}">
+              <sc-if value="{{r.done}}" hint-placeholder-val="{{ false }}">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>
+              </sc-if>
+              <sc-if value="{{r.notDone}}" hint-placeholder-val="{{ true }}">{{r.n}}</sc-if>
+            </span>
+            <span>{{r.label}}</span>
+          </li>
+        </sc-for>
+      </ol>
+      <span class="flex-1"></span>
+      <div class="flex flex-col gap-0.5 px-2.5 pb-1">
+        <span class="font-mono text-[10.5px] text-zinc-400">Avesra 0.1 · prototype</span>
+        <span class="text-[10.5px] leading-[14px] text-zinc-400">Setup runs by voice. Click or type at any point.</span>
+      </div>
+    </nav>
+
+    <!-- Main column -->
+    <div class="flex min-w-0 flex-1 flex-col">
+      <!-- Voice signal -->
+      <div class="flex h-[88px] shrink-0 items-center justify-center border-b border-white/[0.06] bg-black/20" aria-hidden="true">
+        <dc-import name="VoiceBars" tone="{{bandTone}}" count="44" height="76" still="{{still}}" hint-size="261px,76px"></dc-import>
+      </div>
+
+      <!-- Captions -->
+      <div class="flex shrink-0 flex-col gap-2 px-7 pt-5" aria-live="polite">
+        <sc-if value="{{hasLine}}" hint-placeholder-val="{{ true }}">
+          <div class="flex gap-3">
+            <span class="av-kicker w-[52px] shrink-0 pt-[5px] text-av-300">Avesra</span>
+            <p class="m-0 text-[17px] leading-[25px] text-zinc-50">{{shown}}<sc-if value="{{speaking}}" hint-placeholder-val="{{ false }}"><span class="av-caret ml-0.5 inline-block h-[17px] w-[2px] translate-y-[3px] bg-av-400"></span></sc-if></p>
+          </div>
+        </sc-if>
+        <sc-if value="{{hasUser}}" hint-placeholder-val="{{ false }}">
+          <div class="flex gap-3">
+            <span class="av-kicker w-[52px] shrink-0 pt-[3px] text-[#8fa6ff]">You</span>
+            <p class="m-0 text-[14px] leading-[21px] text-[#c3cdff]">{{userLine}}</p>
+          </div>
+        </sc-if>
+      </div>
+
+      <!-- Step panel -->
+      <div class="av-scroll min-h-0 flex-1 overflow-auto px-7 pt-5 pb-4">
+
+        <!-- 1 · Install -->
+        <sc-if value="{{is.installReady}}" hint-placeholder-val="{{ true }}">
+          <div class="flex flex-col gap-5">
+            <div class="flex flex-col gap-1.5">
+              <h1 class="m-0 text-[22px] font-semibold tracking-[-0.01em]">Install Avesra</h1>
+              <p class="m-0 max-w-[520px] text-[13.5px] leading-5 text-zinc-400">A voice assistant for this PC. Setup takes a few minutes and runs mostly by voice.</p>
+            </div>
+            <div class="av-card flex flex-col divide-y divide-white/[0.06]">
+              <div class="flex items-center gap-4 px-4 py-3">
+                <div class="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <span class="av-label">Install to</span>
+                  <span class="font-mono text-[12px] text-zinc-400">C:\Program Files\Avesra</span>
+                </div>
+                <button type="button" class="av-btn av-btn-ghost av-btn-sm">Change</button>
+              </div>
+              <div class="flex items-center gap-4 px-4 py-3">
+                <div class="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <span class="av-label">Starter model</span>
+                  <span class="av-hint">Lets Avesra talk during setup. Runs on this PC; nothing is sent anywhere.</span>
+                </div>
+                <span class="av-chip text-zinc-300 ring-white/15">[SIZE]</span>
+              </div>
+              <div class="flex items-center gap-4 px-4 py-3">
+                <label class="flex min-w-0 flex-1 flex-col gap-0.5" for="ob-autostart">
+                  <span class="av-label">Start Avesra when I sign in</span>
+                  <span class="av-hint">So she's listening when you need her. You can change this later.</span>
+                </label>
+                <button type="button" id="ob-autostart" role="switch" class="av-switch" aria-checked="{{autostart}}" onClick="{{toggleAutostart}}"><span class="{{autostartKnob}}"></span></button>
+              </div>
+            </div>
+          </div>
+        </sc-if>
+        <sc-if value="{{is.installRun}}" hint-placeholder-val="{{ false }}">
+          <div class="flex flex-col gap-5">
+            <h1 class="m-0 text-[22px] font-semibold tracking-[-0.01em]">{{installTitle}}</h1>
+            <div class="flex flex-col gap-2">
+              <div class="flex items-baseline justify-between">
+                <span class="text-[13px] text-zinc-300">{{installStage}}</span>
+                <span class="font-mono text-[12px] text-zinc-400">{{progressPct}}</span>
+              </div>
+              <div class="h-1.5 w-full bg-white/[0.08]" role="progressbar" aria-label="Install progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{progress}}">
+                <div class="h-full bg-av-500 transition-[width] duration-100" style="width: {{progressW}};"></div>
+              </div>
+            </div>
+            <ul class="m-0 flex list-none flex-col gap-2 p-0">
+              <sc-for list="{{installItems}}" as="it" hint-placeholder-count="3">
+                <li class="flex items-center gap-2.5 text-[13px] {{it.textCls}}">
+                  <span class="{{it.iconCls}}">
+                    <sc-if value="{{it.done}}" hint-placeholder-val="{{ false }}"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg></sc-if>
+                    <sc-if value="{{it.running}}" hint-placeholder-val="{{ false }}"><span class="av-spin block size-3 border-[1.5px] border-av-400 border-t-transparent"></span></sc-if>
+                  </span>
+                  {{it.label}}
+                </li>
+              </sc-for>
+            </ul>
+          </div>
+        </sc-if>
+
+        <!-- 2 · Wake -->
+        <sc-if value="{{is.booting}}" hint-placeholder-val="{{ false }}">
+          <div class="flex flex-col gap-5">
+            <h1 class="m-0 text-[22px] font-semibold tracking-[-0.01em]">Waking up</h1>
+            <p class="m-0 max-w-[520px] text-[13.5px] leading-5 text-zinc-400">Loading the starter model on this PC. It's small, so Avesra will be a little slow until a bigger model is connected.</p>
+            <div class="flex flex-col gap-2">
+              <div class="h-1.5 w-full bg-white/[0.08]" role="progressbar" aria-label="Starter model loading" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{progress}}">
+                <div class="h-full bg-av-500 transition-[width] duration-100" style="width: {{progressW}};"></div>
+              </div>
+              <span class="font-mono text-[11.5px] text-zinc-500">Speech recognition · voice · small language model · all on this PC</span>
+            </div>
+          </div>
+        </sc-if>
+        <sc-if value="{{is.greeting}}" hint-placeholder-val="{{ false }}">
+          <div class="av-card flex flex-col divide-y divide-white/[0.06]">
+            <div class="flex items-center gap-4 px-4 py-3">
+              <label class="av-label w-[120px] shrink-0" for="ob-volume">Speakers</label>
+              <input id="ob-volume" type="range" class="av-range flex-1" min="0" max="100" value="{{volume}}" onChange="{{setVolume}}">
+              <span class="w-10 text-right font-mono text-[12px] text-zinc-400">{{volume}}%</span>
+            </div>
+            <div class="flex items-center gap-4 px-4 py-3">
+              <span class="av-label w-[120px] shrink-0">Microphone</span>
+              <div class="relative h-1.5 flex-1 bg-white/[0.08]" aria-hidden="true"><div class="{{levelCls}}"></div></div>
+              <span class="w-[132px] truncate text-right text-[12px] text-zinc-400">Default microphone</span>
+            </div>
+          </div>
+          <div class="mt-4 flex items-center gap-2">
+            <button type="button" class="av-btn av-btn-ghost av-btn-sm" onClick="{{toggleCantHear}}">I can't hear anything</button>
+          </div>
+          <sc-if value="{{cantHear}}" hint-placeholder-val="{{ false }}">
+            <p class="av-hint m-0 mt-2 max-w-[520px]">Check that your volume is up and the right output is selected in Windows. Captions stay on screen the whole time, so you can keep going by reading and typing.</p>
+          </sc-if>
+        </sc-if>
+
+        <!-- 3 · Name -->
+        <sc-if value="{{is.nameListen}}" hint-placeholder-val="{{ false }}">
+          <div class="flex max-w-[420px] flex-col gap-2">
+            <label class="av-label" for="ob-name">Your name</label>
+            <input id="ob-name" class="av-input h-10 text-[15px]" placeholder="Say it, or type it here" value="{{draftName}}" onChange="{{setDraftName}}" autocomplete="given-name">
+            <span class="av-hint">Avesra uses it to greet you. Later she'll also learn your voice, so she only takes instructions from you.</span>
+          </div>
+        </sc-if>
+        <sc-if value="{{is.nameConfirm}}" hint-placeholder-val="{{ false }}">
+          <div class="flex flex-col gap-5">
+            <div class="flex items-center gap-4">
+              <span class="text-[34px] font-semibold tracking-[-0.02em]">{{name}}</span>
+              <button type="button" class="av-btn av-btn-ghost av-btn-sm" onClick="{{spellName}}">Spell it</button>
+            </div>
+            <div class="av-card flex items-center gap-4 px-4 py-3">
+              <label class="flex min-w-0 flex-1 flex-col gap-0.5" for="ob-remember">
+                <span class="av-label">Remember my name for greetings</span>
+                <span class="av-hint">Stored on this PC. Change it anytime in People → Your name.</span>
+              </label>
+              <button type="button" id="ob-remember" role="switch" class="av-switch" aria-checked="{{rememberName}}" onClick="{{toggleRemember}}"><span class="{{rememberKnob}}"></span></button>
+            </div>
+          </div>
+        </sc-if>
+
+        <!-- 4 · Provider -->
+        <sc-if value="{{is.providerChoose}}" hint-placeholder-val="{{ false }}">
+          <div class="flex flex-col gap-3">
+            <div class="grid gap-2.5" style="grid-template-columns: repeat(2, minmax(0, 1fr));">
+              <sc-for list="{{providers}}" as="p" hint-placeholder-count="4">
+                <button type="button" class="{{p.cls}}" aria-pressed="{{p.selected}}" onClick="{{p.pick}}">
+                  <span class="flex items-center justify-between">
+                    <span class="text-[15px] font-semibold text-zinc-50">{{p.name}}</span>
+                    <span class="{{p.radioCls}}"></span>
+                  </span>
+                  <span class="font-mono text-[11px] tracking-[0.04em] text-zinc-400 uppercase">{{p.by}}</span>
+                  <span class="text-[12.5px] leading-[18px] text-zinc-400">{{p.note}}</span>
+                </button>
+              </sc-for>
+            </div>
+            <span class="av-hint">You can add or switch providers later in Settings → Models.</span>
+          </div>
+        </sc-if>
+        <sc-if value="{{is.providerKey}}" hint-placeholder-val="{{ false }}">
+          <div class="flex max-w-[480px] flex-col gap-4">
+            <div class="flex items-center gap-3">
+              <span class="text-[15px] font-semibold">{{prov.name}}</span>
+              <span class="font-mono text-[11px] tracking-[0.04em] text-zinc-400 uppercase">{{prov.by}}</span>
+              <span class="flex-1"></span>
+              <button type="button" class="av-btn av-btn-ghost av-btn-sm" onClick="{{changeProvider}}">Change</button>
+            </div>
+            <div class="flex flex-col gap-2">
+              <label class="av-label" for="ob-key">{{prov.keyLabel}}</label>
+              <input id="ob-key" type="password" class="av-input h-10 font-mono" placeholder="Paste your key" value="{{apiKey}}" onChange="{{setKey}}" autocomplete="off" spellcheck="false">
+              <span class="av-hint">Kept in Windows Credential Manager on this PC. Avesra never reads it back to you.</span>
+            </div>
+            <a href="#ob-key-help" class="w-fit text-[12.5px] text-av-300 underline-offset-2 hover:text-av-200 hover:underline">Where do I get a key?</a>
+            <p id="ob-key-help" class="av-hint m-0">Create one in your {{prov.by}} account's API settings: [KEY PAGE]. API usage is billed by {{prov.by}}, separately from any chat subscription.</p>
+          </div>
+        </sc-if>
+        <sc-if value="{{is.providerTesting}}" hint-placeholder-val="{{ false }}">
+          <div class="flex items-center gap-3 text-[14px] text-zinc-300">
+            <span class="av-spin block size-4 border-2 border-av-400 border-t-transparent"></span>
+            Checking the key with {{prov.by}}…
+          </div>
+        </sc-if>
+        <sc-if value="{{is.providerReady}}" hint-placeholder-val="{{ false }}">
+          <div class="av-card flex max-w-[520px] flex-col divide-y divide-white/[0.06]">
+            <div class="flex items-center gap-3 px-4 py-3">
+              <span class="grid size-6 place-items-center bg-av-500/15 text-av-300"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg></span>
+              <span class="flex-1 text-[14px] font-medium">Connected to {{prov.name}}</span>
+              <span class="av-chip text-zinc-300 ring-white/15">Key saved</span>
+            </div>
+            <div class="flex items-center gap-3 px-4 py-3">
+              <span class="av-label flex-1">Model</span>
+              <span class="text-[13px] text-zinc-300">Recommended default</span>
+            </div>
+            <p class="av-hint m-0 px-4 py-3">She'll use {{prov.name}} for reasoning and tasks. Change the model in Settings → Models.</p>
+          </div>
+        </sc-if>
+
+        <!-- 5 · Spark -->
+        <sc-if value="{{is.sparkFind}}" hint-placeholder-val="{{ false }}">
+          <div class="flex flex-col gap-3">
+            <div class="flex items-center gap-2.5 text-[13px] text-zinc-400">
+              <sc-if value="{{searching}}" hint-placeholder-val="{{ true }}"><span class="av-spin block size-3 border-[1.5px] border-zinc-400 border-t-transparent"></span></sc-if>
+              {{searchLabel}}
+            </div>
+            <sc-if value="{{found}}" hint-placeholder-val="{{ true }}">
+              <div class="av-card av-rise flex items-center gap-4 px-4 py-3.5">
+                <span class="grid size-9 shrink-0 place-items-center bg-white/[0.05] text-zinc-300 ring-1 ring-white/10 ring-inset">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3" y="4" width="18" height="7"></rect><rect x="3" y="13" width="18" height="7"></rect><path d="M7 7.5h.01M7 16.5h.01"></path></svg>
+                </span>
+                <div class="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <span class="font-mono text-[14px] text-zinc-50">spark-c8bb</span>
+                  <span class="text-[12px] text-zinc-400">Available for this PC · on your local network</span>
+                </div>
+                <button type="button" class="av-btn av-btn-secondary" onClick="{{useSpark}}">Use this Spark</button>
+              </div>
+            </sc-if>
+            <div class="flex flex-wrap items-center gap-1">
+              <button type="button" class="av-btn av-btn-ghost av-btn-sm">Advanced · manual pairing</button>
+              <button type="button" class="av-btn av-btn-ghost av-btn-sm" onClick="{{skipSpark}}" disabled="{{sparkRequired}}">I don't have a Spark</button>
+            </div>
+            <sc-if value="{{sparkRequired}}" hint-placeholder-val="{{ false }}">
+              <span class="av-hint">Local models run on your Spark, so this step is needed for Local. Pick a cloud provider to skip it.</span>
+            </sc-if>
+          </div>
+        </sc-if>
+        <sc-if value="{{is.sparkPair}}" hint-placeholder-val="{{ false }}">
+          <div class="flex flex-col gap-5">
+            <div class="flex flex-col gap-2">
+              <span class="av-label" id="ob-code-label">One-time pairing code</span>
+              <div class="flex gap-1.5" role="group" aria-labelledby="ob-code-label">
+                <sc-for list="{{codeBoxes}}" as="c" hint-placeholder-count="6">
+                  <input class="av-input h-12 w-11 px-0 text-center font-mono text-[20px]" maxlength="1" inputmode="numeric" aria-label="{{c.label}}" value="{{c.value}}" onChange="{{c.set}}">
+                </sc-for>
+              </div>
+              <span class="av-hint">Shown on your Spark's screen or in its Local Studio page. It expires in a few minutes.</span>
+            </div>
+            <div class="av-card flex flex-col gap-3 px-4 py-3.5">
+              <div class="flex items-center gap-2">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="text-zinc-400" aria-hidden="true"><rect x="5" y="10" width="14" height="10"></rect><path d="M8 10V7a4 4 0 0 1 8 0v3"></path></svg>
+                <span class="av-label">Check the fingerprint</span>
+              </div>
+              <span class="font-mono text-[13px] tracking-[0.06em] text-zinc-100">7F3A 91C2 5D0E B84F · 22A1 C9E7 03F6 1D5B</span>
+              <label class="flex items-center gap-2.5 text-[13px] text-zinc-300">
+                <input type="checkbox" class="size-4 accent-av-600" checked="{{fpOk}}" onChange="{{toggleFp}}">
+                My Spark shows the same fingerprint
+              </label>
+            </div>
+          </div>
+        </sc-if>
+        <sc-if value="{{is.sparkVerify}}" hint-placeholder-val="{{ false }}">
+          <ul class="av-card m-0 flex list-none flex-col divide-y divide-white/[0.06] p-0">
+            <sc-for list="{{checks}}" as="k" hint-placeholder-count="5">
+              <li class="flex items-center gap-3 px-4 py-2.5">
+                <span class="{{k.iconCls}}">
+                  <sc-if value="{{k.done}}" hint-placeholder-val="{{ false }}"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg></sc-if>
+                  <sc-if value="{{k.running}}" hint-placeholder-val="{{ false }}"><span class="av-spin block size-3 border-[1.5px] border-av-400 border-t-transparent"></span></sc-if>
+                </span>
+                <div class="flex min-w-0 flex-1 flex-col">
+                  <span class="{{k.titleCls}}">{{k.title}}</span>
+                  <span class="text-[11.5px] text-zinc-500">{{k.detail}}</span>
+                </div>
+                <span class="{{k.stateCls}}">{{k.state}}</span>
+              </li>
+            </sc-for>
+          </ul>
+        </sc-if>
+        <sc-if value="{{is.sparkReady}}" hint-placeholder-val="{{ false }}">
+          <div class="flex flex-col gap-3">
+            <div class="av-card flex flex-col divide-y divide-white/[0.06]">
+              <div class="flex items-center gap-3 px-4 py-3">
+                <span class="size-2 bg-av-500"></span>
+                <span class="flex-1 text-[14px] font-medium">Now running on <span class="font-mono">spark-c8bb</span></span>
+                <span class="av-chip text-zinc-300 ring-white/15">Encrypted</span>
+              </div>
+              <sc-for list="{{runsOn}}" as="ro" hint-placeholder-count="3">
+                <div class="flex items-center gap-3 px-4 py-2.5">
+                  <span class="av-label flex-1">{{ro.what}}</span>
+                  <span class="text-[13px] text-zinc-300">{{ro.where}}</span>
+                </div>
+              </sc-for>
+            </div>
+            <span class="av-hint">The starter model stays on this PC as a fallback for when the Spark is offline.</span>
+          </div>
+        </sc-if>
+
+        <!-- 6 · Ask -->
+        <sc-if value="{{is.ask}}" hint-placeholder-val="{{ false }}">
+          <div class="flex flex-col gap-3">
+            <div class="grid gap-3" style="grid-template-columns: repeat(2, minmax(0, 1fr));">
+              <button type="button" class="av-card flex cursor-pointer flex-col gap-1.5 p-4 text-left transition-colors hover:bg-white/[0.05] focus-visible:outline-1 focus-visible:outline-av-400" onClick="{{answerYes}}">
+                <span class="text-[16px] font-semibold text-zinc-50">Yes, show me</span>
+                <span class="text-[12.5px] leading-[18px] text-zinc-400">A short tour: her own settings first, then a few tasks to try.</span>
+              </button>
+              <button type="button" class="av-card flex cursor-pointer flex-col gap-1.5 p-4 text-left transition-colors hover:bg-white/[0.05] focus-visible:outline-1 focus-visible:outline-av-400" onClick="{{answerNo}}">
+                <span class="text-[16px] font-semibold text-zinc-50">Not now</span>
+                <span class="text-[12.5px] leading-[18px] text-zinc-400">She stays quiet and listens until you need her.</span>
+              </button>
+            </div>
+            <span class="av-hint">Or just say yes or no.</span>
+          </div>
+        </sc-if>
+
+        <!-- Yes · settings first -->
+        <sc-if value="{{is.tourSettings}}" hint-placeholder-val="{{ false }}">
+          <div class="grid gap-4" style="grid-template-columns: repeat(2, minmax(0, 1fr));">
+            <div class="flex flex-col gap-2">
+              <span class="av-kicker">Try saying</span>
+              <sc-for list="{{suggestions}}" as="sg" hint-placeholder-count="4">
+                <button type="button" class="{{sg.cls}}" onClick="{{sg.say}}">
+                  <span class="text-av-400" aria-hidden="true">“</span>{{sg.text}}<span class="text-av-400" aria-hidden="true">”</span>
+                </button>
+              </sc-for>
+            </div>
+            <div class="flex flex-col gap-2">
+              <span class="av-kicker">What changed</span>
+              <div class="av-card flex min-h-[172px] flex-col">
+                <sc-if value="{{changeEmpty}}" hint-placeholder-val="{{ true }}">
+                  <p class="av-hint m-0 p-4">Anything you ask her to change shows up here, with undo. Nothing changes without you asking.</p>
+                </sc-if>
+                <sc-if value="{{changePending}}" hint-placeholder-val="{{ false }}">
+                  <div class="flex items-center gap-2.5 p-4 text-[13px] text-zinc-300">
+                    <span class="av-spin block size-3 border-[1.5px] border-av-400 border-t-transparent"></span>Changing {{pendingSetting}}…
+                  </div>
+                </sc-if>
+                <sc-if value="{{changeShown}}" hint-placeholder-val="{{ false }}">
+                  <div class="av-rise flex flex-col gap-3 p-4">
+                    <div class="flex items-center gap-2">
+                      <span class="text-[13.5px] font-medium text-zinc-100">{{change.setting}}</span>
+                      <span class="flex-1"></span>
+                      <button type="button" class="av-btn av-btn-secondary av-btn-sm" onClick="{{toggleUndo}}">{{undoLabel}}</button>
+                    </div>
+                    <div class="flex items-center gap-2 font-mono text-[13px]">
+                      <span class="{{fromCls}}">{{change.from}}</span>
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="text-zinc-500" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
+                      <span class="{{toCls}}">{{change.to}}</span>
+                    </div>
+                    <span class="av-hint">{{change.where}}</span>
+                  </div>
+                </sc-if>
+              </div>
+            </div>
+          </div>
+        </sc-if>
+
+        <!-- Yes · then tasks -->
+        <sc-if value="{{is.tourTasks}}" hint-placeholder-val="{{ false }}">
+          <div class="flex flex-col gap-3">
+            <div class="grid gap-2.5" style="grid-template-columns: repeat(2, minmax(0, 1fr));">
+              <sc-for list="{{tasks}}" as="t" hint-placeholder-count="4">
+                <button type="button" class="av-card flex cursor-pointer flex-col gap-1.5 p-3.5 text-left transition-colors hover:bg-white/[0.05] focus-visible:outline-1 focus-visible:outline-av-400">
+                  <span class="text-[13.5px] leading-[19px] font-medium text-zinc-50">“{{t.say}}”</span>
+                  <span class="text-[12px] leading-[17px] text-zinc-400">{{t.what}}</span>
+                </button>
+              </sc-for>
+            </div>
+            <span class="av-hint">Nothing runs until you ask, and she checks with you before anything that sends, buys or deletes.</span>
+          </div>
+        </sc-if>
+
+        <!-- No · listens and waits -->
+        <sc-if value="{{is.rest}}" hint-placeholder-val="{{ false }}">
+          <div class="flex flex-col gap-4">
+            <div class="av-card flex items-center gap-4 px-4 py-3.5">
+              <div class="flex h-8 w-[112px] shrink-0 items-center justify-center" aria-hidden="true">
+                <dc-import name="VoiceBars" tone="background" count="18" height="32" still="{{still}}" hint-size="105px,32px"></dc-import>
+              </div>
+              <div class="flex min-w-0 flex-col gap-0.5">
+                <span class="text-[14px] font-medium">Listening in the background</span>
+                <span class="av-hint">The overlay stays small and quiet. Controls appear when you hover over it.</span>
+              </div>
+            </div>
+            <p class="av-hint m-0">Want the tour later? Say “Avesra, show me what you can do,” or open Settings.</p>
+          </div>
+        </sc-if>
+
+        <!-- Closed -->
+        <sc-if value="{{is.closed}}" hint-placeholder-val="{{ false }}">
+          <div class="flex flex-col items-start gap-3">
+            <h1 class="m-0 text-[22px] font-semibold tracking-[-0.01em]">Setup finished</h1>
+            <p class="m-0 text-[13.5px] text-zinc-400">This window closes and the overlay takes over.</p>
+            <button type="button" class="av-btn av-btn-secondary" onClick="{{restart}}">Start setup again</button>
+          </div>
+        </sc-if>
+      </div>
+
+      <!-- Footer -->
+      <div class="flex h-[52px] shrink-0 items-center gap-1.5 border-t border-white/[0.07] px-3">
+        <sc-if value="{{hasMic}}" hint-placeholder-val="{{ true }}">
+          <button type="button" class="{{micCls}}" aria-pressed="{{muted}}" aria-label="{{micAria}}" onClick="{{toggleMute}}">
+            <sc-if value="{{notMuted}}" hint-placeholder-val="{{ true }}"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5 11a7 7 0 0 0 14 0M12 18v3"></path></svg></sc-if>
+            <sc-if value="{{muted}}" hint-placeholder-val="{{ false }}"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M9 9v2a3 3 0 0 0 5.1 2.1M15 10V6a3 3 0 0 0-5.7-1.3M5 11a7 7 0 0 0 11.5 5.4M19 11a7 7 0 0 1-.6 2.8M12 18v3M3 3l18 18"></path></svg></sc-if>
+          </button>
+          <span class="{{micLabelCls}}">{{micLabel}}</span>
+          <button type="button" class="{{typeCls}}" aria-pressed="{{typing}}" aria-label="Type instead of speaking" onClick="{{toggleTyping}}">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="2.5" y="6" width="19" height="12"></rect><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"></path></svg>
+          </button>
+        </sc-if>
+        <sc-if value="{{typing}}" hint-placeholder-val="{{ false }}">
+          <input class="av-input mx-1 h-8 flex-1" placeholder="Type to Avesra, then press Enter" aria-label="Type to Avesra" value="{{draft}}" onChange="{{setDraft}}" onKeyDown="{{draftKey}}">
+        </sc-if>
+        <sc-if value="{{notTyping}}" hint-placeholder-val="{{ true }}"><span class="flex-1"></span></sc-if>
+        <sc-if value="{{canBack}}" hint-placeholder-val="{{ false }}">
+          <button type="button" class="av-btn av-btn-ghost" onClick="{{back}}">Back</button>
+        </sc-if>
+        <sc-if value="{{hasPrimary}}" hint-placeholder-val="{{ true }}">
+          <button type="button" class="av-btn av-btn-primary min-w-[112px]" onClick="{{primary.run}}" disabled="{{primary.disabled}}">{{primary.label}}</button>
+        </sc-if>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"step":{"editor":"enum","options":["install","wake","name","provider","spark","ask","tour","rest"],"default":"install"},"phase":{"editor":"text","default":""},"still":{"editor":"boolean","default":false},"provider":{"editor":"enum","options":["claude","chatgpt","grok","local"],"default":"claude"},"signal":{"editor":null},"jump":{"editor":null},"sim":{"editor":null},"onState":{"editor":null},"$preview":{"width":880,"height":640}}'>
+const ORDER = ['install', 'wake', 'name', 'provider', 'spark', 'ask'];
+const RAIL = [
+  { id: 'install', label: 'Install' },
+  { id: 'wake', label: 'Say hello' },
+  { id: 'name', label: 'Your name' },
+  { id: 'provider', label: 'AI provider' },
+  { id: 'spark', label: 'Your Spark' },
+  { id: 'ask', label: 'Tour' },
+];
+const FIRST = { install: 'ready', wake: 'booting', name: 'listening', provider: 'choose', spark: 'find', ask: 'asking', tour: 'settings', rest: 'rest', closed: 'closed' };
+const PROVIDERS = [
+  { id: 'claude', name: 'Claude', by: 'Anthropic', keyLabel: 'Anthropic API key', note: 'Uses your Anthropic API key for reasoning and tasks.' },
+  { id: 'chatgpt', name: 'ChatGPT', by: 'OpenAI', keyLabel: 'OpenAI API key', note: 'Uses your OpenAI API key for reasoning and tasks.' },
+  { id: 'grok', name: 'Grok', by: 'xAI', keyLabel: 'xAI API key', note: 'Uses your xAI API key for reasoning and tasks.' },
+  { id: 'local', name: 'Local', by: 'Your Spark', keyLabel: '', note: 'Models on your own Spark. Nothing leaves your network.' },
+];
+const CHANGES = {
+  bg: { text: 'Turn the background sound down a bit', setting: 'Galaxy / background', from: '85%', to: '60%', where: 'Saved in Audio & Voice → Voice atmosphere', line: 'Done. The background is down to sixty percent. Say undo if you liked it better before. Now let’s try a real task.' },
+  human: { text: 'Switch to the Human voice', setting: 'Atmosphere preset', from: 'Digital', to: 'Human', where: 'Saved in Audio & Voice → Voice atmosphere', line: 'Switched to Human: closer and plainer. Say undo to go back. Now let’s try a real task.' },
+  nick: { text: 'Call me J instead', setting: 'Your name', from: '{name}', to: 'J', where: 'Saved in People → Your name', line: 'Okay, J it is. Now let’s try a real task.' },
+  top: { text: 'Move to the top of the screen', setting: 'Overlay position', from: 'Bottom center', to: 'Top center', where: 'Remembered on this PC. You can also drag her anywhere.', line: 'Moved to the top. You can drag me anywhere, too. Now let’s try a real task.' },
+};
+const TASKS = [
+  { say: 'Check my latest 10 emails and tell me which need a reply', what: 'Reads your inbox in the browser and summarizes. Never sends without asking.' },
+  { say: 'Open Spotify and play something calm', what: 'Opens apps you’ve allowed her to use.' },
+  { say: 'Read this page and give me the short version', what: 'Reads the browser tab you’re looking at.' },
+  { say: 'What’s on my screen right now?', what: 'Looks once, when you ask. Nothing is recorded.' },
+];
+
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    const step = props.step || 'install';
+    const idx = ORDER.indexOf(step === 'tour' || step === 'rest' ? 'ask' : step);
+    const still = !!props.still;
+    this.state = {
+      step, phase: props.phase || FIRST[step],
+      words: still ? 999 : 0, hold: still ? 99 : 0,
+      userLine: '', userT: 0, pending: null,
+      progress: still ? 62 : 0,
+      name: idx > 2 || (step === 'name' && (props.phase === 'confirm')) ? 'Jordan' : '',
+      draftName: '', rememberName: true, autostart: true,
+      volume: 70, cantHear: false,
+      provider: idx > 3 || (step === 'provider' && props.phase && props.phase !== 'choose') || (step === 'provider' && still) ? (props.provider || 'claude') : null,
+      apiKey: step === 'provider' && props.phase === 'key' ? 'sk-ant-••••••••••••••••' : '',
+      code: step === 'spark' && props.phase === 'pair' && still ? '4829' : '', fpOk: false,
+      sparkSkipped: false,
+      change: step === 'tour' && props.phase === 'applied' ? 'bg' : null, undone: false,
+      muted: false, typing: false, draft: '',
+    };
+    this.key = '';
+  }
+
+  componentDidMount() {
+    if (!this.props.still) this.timer = setInterval(() => this.tick(), 110);
+    const j = this.props.jump;
+    if (j && j.step) this.go(j.step, j.phase || FIRST[j.step]);
+    this.report();
+  }
+  componentWillUnmount() { clearInterval(this.timer); }
+  componentDidUpdate(prev) {
+    const j = this.props.jump, pj = prev.jump;
+    if (j && (!pj || j.n !== pj.n)) this.go(j.step, j.phase || FIRST[j.step]);
+    if (this.props.sim !== prev.sim && this.props.sim) this.simulate();
+    this.report();
+  }
+
+  // ---------- speech ----------
+  prov() { return PROVIDERS.find((p) => p.id === (this.state.provider || 'claude')); }
+  line() {
+    const s = this.state, p = this.prov(), n = s.name || 'there';
+    switch (s.step + '.' + s.phase) {
+      case 'wake.greeting': return 'Hi, I’m Avesra. I’m running on a small starter model on this PC for now, so I’ll be a bit slow until we connect something bigger. Can you hear me okay?';
+      case 'name.listening': return 'Great. What should I call you?';
+      case 'name.confirm': return 'Nice to meet you, ' + n + '. Did I get that right?';
+      case 'provider.choose': return 'Next I need a brain for the hard thinking. Which AI would you like me to use? If you’re not sure, Claude is a good place to start.';
+      case 'provider.key': return 'Paste your ' + p.by + ' API key here. I’ll keep it in Windows Credential Manager and never read it out loud.';
+      case 'provider.testing': return 'One moment.';
+      case 'provider.ready': return 'That works. I’ll use ' + p.name + ' for the hard thinking.';
+      case 'spark.find': return s.provider === 'local'
+        ? 'Local models run on your Spark, so let’s find it. It also runs my listening and my voice on your own hardware.'
+        : 'Now let’s find your Spark. It runs my listening, my voice and local models on your own hardware.';
+      case 'spark.pair': return 'Your Spark is showing a six-digit code. Read it to me or type it in, and check that the fingerprint matches.';
+      case 'spark.verify': return 'Paired. Now I’m checking everything, end to end.';
+      case 'spark.ready': return 'Everything checks out. I’ve moved onto your Spark, so I should sound a lot sharper now.';
+      case 'ask.asking': return 'That’s everything I need, ' + n + '. Want me to show you a few things I can do?';
+      case 'tour.settings': return 'Let’s start with me. I can change my own settings, so you never have to dig through menus. Try saying: turn the background sound down a bit.';
+      case 'tour.applied': { const c = CHANGES[s.change] || CHANGES.bg; return c.line; }
+      case 'tour.tasks': return 'Here are a few things you can ask me. Pick one, or just say it. I’m listening.';
+      case 'rest.rest': return 'No problem. I’ll be here. Just talk when you need me.';
+      default: return '';
+    }
+  }
+  words() { const l = this.line(); return l ? l.split(' ') : []; }
+
+  // ---------- flow ----------
+  go(step, phase, extra) {
+    this.setState(Object.assign({ step, phase: phase || FIRST[step], words: 0, hold: 0, userLine: '', userT: 0, pending: null, progress: 0 }, extra || {}));
+  }
+  reply(text, action) { this.setState({ userLine: text, userT: 11, pending: action, draft: '' }); }
+  act(action) {
+    const s = this.state;
+    if (action === 'heard') return this.go('name', 'listening');
+    if (action === 'name') return this.go('name', 'confirm', { name: s.draftName.trim() || 'Jordan' });
+    if (action === 'nameOk') return this.go('provider', 'choose');
+    if (action === 'pickClaude') return this.go('provider', 'key', { provider: 'claude' });
+    if (action === 'yes') return this.go('tour', 'settings');
+    if (action === 'no') return this.go('rest', 'rest');
+    if (action === 'tasks') return this.go('tour', 'tasks');
+    if (action && action.indexOf('change:') === 0) return this.go('tour', 'applied', { change: action.slice(7), undone: false });
+  }
+  tick() {
+    const s = this.state, total = this.words().length, up = {};
+    if (s.userT > 0) {
+      up.userT = s.userT - 1;
+      if (up.userT === 0) { this.setState(up); return this.act(s.pending); }
+    } else if (s.words < total) up.words = s.words + 1;
+    else up.hold = s.hold + 1;
+    const h = up.hold ?? s.hold;
+    const key = s.step + '.' + s.phase;
+    if (key === 'install.installing') {
+      up.progress = Math.min(100, s.progress + 2.2);
+      if (up.progress >= 100) { up.phase = 'done'; up.hold = 0; }
+    }
+    if (key === 'install.done' && h > 8) return this.go('wake', 'booting');
+    if (key === 'wake.booting') { up.progress = Math.min(100, s.progress + 3.2); if (up.progress >= 100) return this.go('wake', 'greeting'); }
+    if (key === 'provider.testing' && h > 9) return this.go('provider', 'ready');
+    if (key === 'provider.ready' && h > 16) return this.go('spark', 'find');
+    if (key === 'spark.verify' && h > 32) return this.go('spark', 'ready');
+    if (key === 'spark.ready' && h > 16) return this.go('ask', 'asking', { sparkSkipped: false });
+    if (key === 'rest.rest' && h > 26) return this.go('closed', 'closed');
+    this.setState(up);
+  }
+  simulate() {
+    const s = this.state, key = s.step + '.' + s.phase;
+    if (s.userT > 0) return;
+    if (key === 'install.ready') return this.startInstall();
+    if (key === 'wake.greeting') return this.reply('Yes, I can hear you.', 'heard');
+    if (key === 'name.listening') { this.setState({ draftName: 'Jordan' }); return this.reply('Call me Jordan.', 'name'); }
+    if (key === 'name.confirm') return this.reply('Yes, that’s right.', 'nameOk');
+    if (key === 'provider.choose') return this.reply('Let’s use Claude.', 'pickClaude');
+    if (key === 'provider.key') return this.setState({ apiKey: 'sk-ant-••••••••••••••••' }, () => this.go('provider', 'testing'));
+    if (key === 'provider.ready') return this.go('spark', 'find');
+    if (key === 'spark.find') return this.go('spark', 'pair');
+    if (key === 'spark.pair') return this.go('spark', 'verify', { code: '482917', fpOk: true });
+    if (key === 'spark.ready') return this.go('ask', 'asking');
+    if (key === 'ask.asking') return this.reply('Sure, show me.', 'yes');
+    if (key === 'tour.settings') return this.reply(CHANGES.bg.text + '.', 'change:bg');
+    if (key === 'tour.applied') return this.reply('Okay, what else can you do?', 'tasks');
+    if (key === 'tour.tasks') return this.go('closed', 'closed');
+    if (key === 'rest.rest') return this.go('closed', 'closed');
+  }
+  simHint() {
+    const s = this.state, key = s.step + '.' + s.phase;
+    const hints = {
+      'install.ready': 'Clicks Install', 'wake.greeting': 'Says “Yes, I can hear you.”', 'name.listening': 'Says “Call me Jordan.”',
+      'name.confirm': 'Says “Yes, that’s right.”', 'provider.choose': 'Says “Let’s use Claude.”', 'provider.key': 'Pastes a key and tests it',
+      'provider.ready': 'Continues', 'spark.find': 'Picks spark-c8bb', 'spark.pair': 'Enters the code and confirms the fingerprint',
+      'spark.ready': 'Continues', 'ask.asking': 'Says “Sure, show me.”', 'tour.settings': 'Says “Turn the background sound down a bit.”',
+      'tour.applied': 'Asks what else she can do', 'tour.tasks': 'Finishes setup', 'rest.rest': 'Closes setup',
+    };
+    return hints[key] || 'Waits';
+  }
+  signal() {
+    const s = this.state;
+    if (this.props.signal) return this.props.signal;
+    if (s.step === 'install' || (s.step === 'wake' && s.phase === 'booting')) return 'boot';
+    if (s.step === 'closed') return 'idle';
+    if (s.muted) return 'muted';
+    if (s.userT > 0) return 'owner';
+    if (!this.props.still && s.words < this.words().length) return 'avesra';
+    if (s.phase === 'testing' || s.phase === 'verify') return 'thinking';
+    return 'idle';
+  }
+  report() {
+    if (!this.props.onState) return;
+    const s = this.state, sig = this.signal();
+    const key = [s.step, s.phase, sig, this.simHint()].join('|');
+    if (key === this.key) return;
+    this.key = key;
+    this.props.onState({ step: s.step, phase: s.phase, signal: sig, simHint: this.simHint(), closed: s.step === 'closed' });
+  }
+  startInstall() { this.setState({ phase: 'installing', progress: 0, hold: 0 }); }
+  submitText(text) {
+    const s = this.state, t = (text || '').trim();
+    if (!t) return;
+    const key = s.step + '.' + s.phase, low = t.toLowerCase();
+    if (key === 'name.listening') { this.setState({ draftName: t.replace(/^(call me|i'm|i am|my name is)\s+/i, '').replace(/[.!]$/, '') }); return this.reply(t, 'name'); }
+    if (key === 'ask.asking') return this.reply(t, /^(no|not now|nope|later)/.test(low) ? 'no' : 'yes');
+    if (key === 'wake.greeting') return this.reply(t, 'heard');
+    if (key === 'name.confirm') return this.reply(t, 'nameOk');
+    if (key === 'tour.settings') return this.reply(t, 'change:bg');
+    this.setState({ userLine: t, draft: '' });
+  }
+
+  // ---------- view ----------
+  renderVals() {
+    const s = this.state, p = this.prov(), step = s.step, ph = s.phase, key = step + '.' + ph;
+    const railIdx = ORDER.indexOf(step === 'tour' || step === 'rest' || step === 'closed' ? 'ask' : step);
+    const allDone = step === 'closed';
+    const rail = RAIL.map((r, i) => {
+      const done = allDone || i < railIdx, cur = !allDone && i === railIdx;
+      return {
+        n: i + 1, label: r.label, done, notDone: !done, current: cur ? 'step' : 'false',
+        cls: 'flex h-9 items-center gap-2.5 px-2.5 text-[13px] ' + (cur ? 'bg-white/[0.08] text-white shadow-[inset_2px_0_0_var(--color-av-500)]' : done ? 'text-zinc-300' : 'text-zinc-400'),
+        markCls: 'grid size-5 shrink-0 place-items-center font-mono text-[10.5px] ' + (done ? 'bg-av-500/20 text-av-300' : cur ? 'bg-av-700 text-white' : 'text-zinc-500 ring-1 ring-white/12 ring-inset'),
+      };
+    });
+    const words = this.words(), shownN = this.props.still ? words.length : Math.min(s.words, words.length);
+    const sig = this.signal();
+    const speaking = !this.props.still && s.words < words.length && s.userT === 0;
+
+    // Where she runs
+    const onSpark = (step === 'spark' && ph === 'ready') || step === 'ask' || step === 'tour' || step === 'rest' || step === 'closed';
+    const sparkUsed = onSpark && !s.sparkSkipped;
+    const hasBrain = step !== 'install';
+    const brainLabel = sparkUsed ? 'Spark · spark-c8bb' : (s.provider && s.provider !== 'local' && (step === 'spark' || s.sparkSkipped || key === 'provider.ready')) ? 'Starter model + ' + p.name : 'Starter model · this PC';
+
+    // Install
+    const pr = Math.round(s.progress);
+    const installStage = ph === 'done' ? 'Installed' : pr < 35 ? 'Copying files…' : pr < 85 ? 'Unpacking the starter model…' : 'Checking microphone access…';
+    const installItems = [
+      { label: 'Avesra for Windows', at: 35 }, { label: 'Starter model', at: 85 }, { label: 'Microphone and speaker access', at: 100 },
+    ].map((it, i, arr) => {
+      const done = ph === 'done' || pr >= it.at, prevAt = i ? arr[i - 1].at : 0, running = !done && pr >= prevAt;
+      return { label: it.label, done, running, textCls: done ? 'text-zinc-200' : running ? 'text-zinc-200' : 'text-zinc-500',
+        iconCls: 'grid size-4 place-items-center ' + (done ? 'text-av-300' : 'text-zinc-600') };
+    });
+
+    // Provider cards
+    const providers = PROVIDERS.map((pv) => {
+      const sel = s.provider === pv.id;
+      return Object.assign({}, pv, {
+        selected: sel,
+        pick: () => this.setState({ provider: pv.id }),
+        cls: 'flex cursor-pointer flex-col gap-1 p-3.5 text-left ring-1 ring-inset transition-colors focus-visible:outline-1 focus-visible:outline-av-400 ' + (sel ? 'bg-av-500/[0.08] ring-av-500' : 'bg-white/[0.025] ring-white/[0.08] hover:bg-white/[0.05]'),
+        radioCls: 'size-3.5 ring-1 ring-inset ' + (sel ? 'bg-av-500 ring-av-400' : 'ring-white/25'),
+      });
+    });
+
+    // Spark
+    const found = this.props.still || s.hold > 3 || s.words > 4;
+    const codeDigits = (s.code + '      ').slice(0, 6).split('');
+    const codeBoxes = codeDigits.map((d, i) => ({
+      label: 'Digit ' + (i + 1), value: d.trim(),
+      set: (e) => { const v = (e.target.value || '').replace(/\D/g, '').slice(-1); const arr = (this.state.code + '      ').slice(0, 6).split(''); arr[i] = v || ' '; this.setState({ code: arr.join('').replace(/\s+$/, '') }); },
+    }));
+    const codeOk = s.code.replace(/\s/g, '').length === 6;
+    const doneChecks = this.props.still ? (ph === 'verify' ? 3 : 5) : Math.min(5, Math.floor(s.hold / 6));
+    const checks = [
+      { title: 'Encrypted connection', detail: 'Pinned to your Spark’s verified fingerprint' },
+      { title: 'Listening', detail: 'Speech recognition on the Spark' },
+      { title: 'Reasoning', detail: s.provider === 'local' ? 'Local model on the Spark' : p.name + ' through your API key' },
+      { title: 'Voice', detail: 'Speech on the Spark' },
+      { title: 'Round trip', detail: 'Hear, think and answer, start to finish' },
+    ].map((k, i) => {
+      const done = i < doneChecks, running = i === doneChecks;
+      return Object.assign(k, { done, running,
+        iconCls: 'grid size-5 shrink-0 place-items-center ' + (done ? 'bg-av-500/15 text-av-300' : running ? '' : 'ring-1 ring-white/12 ring-inset'),
+        titleCls: 'text-[13.5px] ' + (done || running ? 'text-zinc-100' : 'text-zinc-500'),
+        state: done ? 'Done' : running ? 'Checking…' : 'Waiting',
+        stateCls: 'font-mono text-[11.5px] ' + (done ? 'text-zinc-300' : running ? 'text-av-300' : 'text-zinc-600') });
+    });
+    const runsOn = [
+      { what: 'Listening', where: 'Spark' },
+      { what: 'Reasoning', where: s.provider === 'local' ? 'Spark · local model' : p.name },
+      { what: 'Voice', where: 'Spark' },
+    ];
+
+    // Tour
+    const pendingId = s.userT > 0 && s.pending && s.pending.indexOf('change:') === 0 ? s.pending.slice(7) : null;
+    const ch = s.change ? Object.assign({}, CHANGES[s.change]) : null;
+    if (ch) ch.from = ch.from.replace('{name}', s.name || 'Jordan');
+    const suggestions = Object.keys(CHANGES).map((id, i) => ({
+      text: CHANGES[id].text,
+      say: () => { if (this.state.userT === 0) this.reply(CHANGES[id].text + '.', 'change:' + id); },
+      cls: 'flex cursor-pointer items-baseline gap-0.5 px-3 py-2.5 text-left text-[13.5px] ring-1 ring-inset transition-colors hover:bg-white/[0.05] focus-visible:outline-1 focus-visible:outline-av-400 ' +
+        ((i === 0 && !s.change) || s.change === id ? 'bg-av-500/[0.07] text-zinc-50 ring-av-500/60' : 'text-zinc-300 ring-white/[0.08]'),
+    }));
+
+    // Primary action
+    const P = (label, run, disabled) => ({ label, run: run || (() => {}), disabled: !!disabled });
+    let primary = null;
+    switch (key) {
+      case 'install.ready': primary = P('Install', () => this.startInstall()); break;
+      case 'install.installing': primary = P('Installing…', null, true); break;
+      case 'install.done': case 'wake.booting': primary = P('Starting…', null, true); break;
+      case 'wake.greeting': primary = P('Yes, I can hear you', () => this.reply('Yes, I can hear you.', 'heard'), s.userT > 0); break;
+      case 'name.listening': primary = P('Continue', () => this.reply(s.draftName.trim(), 'name'), !s.draftName.trim() || s.userT > 0); break;
+      case 'name.confirm': primary = P('That’s right', () => this.go('provider', 'choose')); break;
+      case 'provider.choose': primary = P(s.provider === 'local' ? 'Use my Spark' : 'Continue', () => s.provider === 'local' ? this.go('spark', 'find') : this.go('provider', 'key'), !s.provider || s.userT > 0); break;
+      case 'provider.key': primary = P('Test key', () => this.go('provider', 'testing'), !s.apiKey); break;
+      case 'provider.testing': primary = P('Testing…', null, true); break;
+      case 'provider.ready': primary = P('Continue', () => this.go('spark', 'find')); break;
+      case 'spark.find': primary = P('Use this Spark', () => this.go('spark', 'pair'), !found); break;
+      case 'spark.pair': primary = P('Pair securely', () => this.go('spark', 'verify'), !(codeOk && s.fpOk)); break;
+      case 'spark.verify': primary = P('Checking…', null, true); break;
+      case 'spark.ready': primary = P('Continue', () => this.go('ask', 'asking')); break;
+      case 'tour.settings': primary = P('Skip to tasks', () => this.go('tour', 'tasks'), s.userT > 0); break;
+      case 'tour.applied': primary = P('Try a task', () => this.go('tour', 'tasks')); break;
+      case 'tour.tasks': primary = P('Finish setup', () => this.go('closed', 'closed')); break;
+      case 'rest.rest': primary = P('Close setup', () => this.go('closed', 'closed')); break;
+    }
+    const backTo = { 'name.listening': null, 'name.confirm': ['name', 'listening'], 'provider.choose': ['name', 'confirm'], 'provider.key': ['provider', 'choose'], 'spark.find': s.provider === 'local' ? ['provider', 'choose'] : ['provider', 'ready'], 'spark.pair': ['spark', 'find'], 'tour.tasks': ['tour', 'settings'] }[key];
+
+    const micLabel = { avesra: 'Avesra is speaking', owner: 'Hearing you', idle: 'Listening', thinking: 'Working', muted: 'Microphone muted', boot: '' }[sig] || '';
+    const on = (v) => 'av-knob' + (v ? ' translate-x-[18px]' : '');
+
+    return {
+      rail, still: !!this.props.still,
+      bandTone: { avesra: 'assistant', owner: 'owner', thinking: 'thinking', idle: 'background' }[sig] || 'rest',
+      hasLine: words.length > 0, shown: words.slice(0, shownN).join(' '), speaking,
+      hasUser: !!s.userLine, userLine: s.userLine,
+      hasBrain, brainLabel,
+      brainCls: 'av-chip mr-1 gap-1.5 ' + (sparkUsed ? 'text-av-200 ring-av-500/50' : 'text-zinc-300 ring-white/15'),
+      brainDotCls: 'size-1.5 ' + (sparkUsed ? 'bg-av-400' : 'bg-zinc-400'),
+      is: {
+        installReady: key === 'install.ready', installRun: key === 'install.installing' || key === 'install.done',
+        booting: key === 'wake.booting', greeting: key === 'wake.greeting',
+        nameListen: key === 'name.listening', nameConfirm: key === 'name.confirm',
+        providerChoose: key === 'provider.choose', providerKey: key === 'provider.key', providerTesting: key === 'provider.testing', providerReady: key === 'provider.ready',
+        sparkFind: key === 'spark.find', sparkPair: key === 'spark.pair', sparkVerify: key === 'spark.verify', sparkReady: key === 'spark.ready',
+        ask: step === 'ask', tourSettings: key === 'tour.settings' || key === 'tour.applied', tourTasks: key === 'tour.tasks', rest: step === 'rest', closed: step === 'closed',
+      },
+      autostart: s.autostart, autostartKnob: on(s.autostart), toggleAutostart: () => this.setState({ autostart: !this.state.autostart }),
+      installTitle: ph === 'done' ? 'Installed. Starting Avesra…' : 'Installing Avesra',
+      installStage, progress: pr, progressPct: pr + '%', progressW: pr + '%', installItems,
+      volume: s.volume, setVolume: (e) => this.setState({ volume: +e.target.value }),
+      levelCls: 'absolute inset-y-0 left-0 ' + (sig === 'owner' ? 'av-level bg-[#3a5dd8]' : 'bg-zinc-500 w-[6%]'),
+      cantHear: s.cantHear, toggleCantHear: () => this.setState({ cantHear: !this.state.cantHear }),
+      draftName: s.draftName, setDraftName: (e) => this.setState({ draftName: e.target.value }),
+      name: s.name || 'Jordan', spellName: () => this.go('name', 'listening', { draftName: s.name }),
+      rememberName: s.rememberName, rememberKnob: on(s.rememberName), toggleRemember: () => this.setState({ rememberName: !this.state.rememberName }),
+      providers, prov: p, changeProvider: () => this.go('provider', 'choose'),
+      apiKey: s.apiKey, setKey: (e) => this.setState({ apiKey: e.target.value }),
+      searching: !found, found, searchLabel: found ? 'Found 1 Spark on your network' : 'Searching your network…',
+      useSpark: () => this.go('spark', 'pair'), skipSpark: () => this.go('ask', 'asking', { sparkSkipped: true }),
+      sparkRequired: s.provider === 'local',
+      codeBoxes, fpOk: s.fpOk, toggleFp: () => this.setState({ fpOk: !this.state.fpOk }),
+      checks, runsOn,
+      answerYes: () => { if (this.state.userT === 0) this.reply('Yes, show me.', 'yes'); },
+      answerNo: () => { if (this.state.userT === 0) this.reply('Not now.', 'no'); },
+      suggestions, changeEmpty: !ch && !pendingId, changePending: !!pendingId, pendingSetting: pendingId ? CHANGES[pendingId].setting.toLowerCase() : '',
+      changeShown: !!ch && !pendingId, change: ch || {}, undoLabel: s.undone ? 'Redo' : 'Undo', toggleUndo: () => this.setState({ undone: !this.state.undone }),
+      fromCls: s.undone ? 'text-zinc-100' : 'text-zinc-500 line-through', toCls: s.undone ? 'text-zinc-500 line-through' : 'text-av-200',
+      tasks: TASKS,
+      restart: () => this.go('install', 'ready', { name: '', provider: null, apiKey: '', code: '', fpOk: false, change: null, sparkSkipped: false }),
+      hasMic: step !== 'install' && step !== 'closed' && key !== 'wake.booting',
+      muted: s.muted, notMuted: !s.muted, toggleMute: () => this.setState({ muted: !this.state.muted }),
+      micAria: s.muted ? 'Unmute microphone' : 'Mute microphone',
+      micCls: 'av-iconbtn size-9 ' + (s.muted ? 'av-iconbtn-on' : ''),
+      micLabel, micLabelCls: 'w-[132px] truncate text-[12px] ' + (sig === 'owner' ? 'text-[#8fa6ff]' : sig === 'avesra' ? 'text-av-300' : s.muted ? 'text-amber-200' : 'text-zinc-400'),
+      typing: s.typing, notTyping: !s.typing, typeCls: 'av-iconbtn size-9 ' + (s.typing ? 'bg-white/10 text-white' : ''),
+      toggleTyping: () => this.setState({ typing: !this.state.typing }),
+      draft: s.draft, setDraft: (e) => this.setState({ draft: e.target.value }),
+      draftKey: (e) => { if (e.key === 'Enter') { e.preventDefault(); this.submitText(this.state.draft); } },
+      canBack: !!backTo, back: () => backTo && this.go(backTo[0], backTo[1]),
+      hasPrimary: !!primary, primary: primary || { label: '', run: () => {}, disabled: true },
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -19,7 +19,7 @@
       "y": 0
     },
     "OverlayStates.dc.html": {
-      "h": 2300,
+      "h": 2780,
       "title": "Overlay states",
       "w": 1520,
       "x": 0,
@@ -31,7 +31,7 @@
       "title": "Settings · Audio & Voice",
       "w": 880,
       "x": 0,
-      "y": 4080
+      "y": 4560
     },
     "SettingsAwareness.dc.html": {
       "h": 640,
@@ -39,7 +39,7 @@
       "title": "Settings · Observation & Actions",
       "w": 880,
       "x": 960,
-      "y": 4840
+      "y": 5320
     },
     "SettingsMemory.dc.html": {
       "h": 640,
@@ -47,7 +47,7 @@
       "title": "Settings · Memory & Diagnostics",
       "w": 880,
       "x": 1920,
-      "y": 4840
+      "y": 5320
     },
     "SettingsModels.dc.html": {
       "h": 640,
@@ -55,7 +55,7 @@
       "title": "Settings · Models & Drivers",
       "w": 880,
       "x": 960,
-      "y": 4080
+      "y": 4560
     },
     "SettingsProfiles.dc.html": {
       "h": 640,
@@ -63,7 +63,7 @@
       "title": "Settings · Profiles & Machines",
       "w": 880,
       "x": 1920,
-      "y": 4080
+      "y": 4560
     },
     "SettingsPeople.dc.html": {
       "h": 640,
@@ -71,7 +71,136 @@
       "title": "Settings · People & Voice ID",
       "w": 880,
       "x": 0,
-      "y": 4840
+      "y": 5320
+    },
+    "SettingsPeopleYou.dc.html": {
+      "x": 2880,
+      "y": 5320,
+      "w": 880,
+      "h": 640,
+      "title": "Settings · Your voice · hearing you"
+    },
+    "SettingsPeopleOther.dc.html": {
+      "x": 3840,
+      "y": 5320,
+      "w": 880,
+      "h": 640,
+      "title": "Settings · Your voice · someone else"
+    },
+    "OnboardingDemo.dc.html": {
+      "x": 0,
+      "y": 6560,
+      "w": 1440,
+      "h": 940,
+      "title": "Onboarding prototype",
+      "is_interactive": true
+    },
+    "OnboardingFlow.dc.html": {
+      "x": 1520,
+      "y": 6560,
+      "w": 1440,
+      "h": 940,
+      "title": "Onboarding flow map"
+    },
+    "Onboarding.dc.html": {
+      "x": 3040,
+      "y": 6560,
+      "w": 880,
+      "h": 640,
+      "title": "Setup window",
+      "is_interactive": true
+    },
+    "OnboardingStep01Install.dc.html": {
+      "x": 0,
+      "y": 7880,
+      "w": 880,
+      "h": 640,
+      "title": "Onboarding 1 · Install"
+    },
+    "OnboardingStep02Wake.dc.html": {
+      "x": 960,
+      "y": 7880,
+      "w": 880,
+      "h": 640,
+      "title": "Onboarding 2 · Starter model says hello"
+    },
+    "OnboardingStep03Name.dc.html": {
+      "x": 1920,
+      "y": 7880,
+      "w": 880,
+      "h": 640,
+      "title": "Onboarding 3 · Your name"
+    },
+    "OnboardingStep04Provider.dc.html": {
+      "x": 2880,
+      "y": 7880,
+      "w": 880,
+      "h": 640,
+      "title": "Onboarding 4 · Choose an AI provider"
+    },
+    "OnboardingStep05Key.dc.html": {
+      "x": 0,
+      "y": 8640,
+      "w": 880,
+      "h": 640,
+      "title": "Onboarding 4b · Provider connected"
+    },
+    "OnboardingStep06SparkFind.dc.html": {
+      "x": 960,
+      "y": 8640,
+      "w": 880,
+      "h": 640,
+      "title": "Onboarding 5 · Find your Spark"
+    },
+    "OnboardingStep07SparkPair.dc.html": {
+      "x": 1920,
+      "y": 8640,
+      "w": 880,
+      "h": 640,
+      "title": "Onboarding 5b · Pair securely"
+    },
+    "OnboardingStep08SparkVerify.dc.html": {
+      "x": 2880,
+      "y": 8640,
+      "w": 880,
+      "h": 640,
+      "title": "Onboarding 5c · Verify end to end"
+    },
+    "OnboardingStep09Ask.dc.html": {
+      "x": 0,
+      "y": 9400,
+      "w": 880,
+      "h": 640,
+      "title": "Onboarding 6 · Want a tour?"
+    },
+    "OnboardingStep10TourSettings.dc.html": {
+      "x": 960,
+      "y": 9400,
+      "w": 880,
+      "h": 640,
+      "title": "Onboarding Yes · She changes her own settings"
+    },
+    "OnboardingStep11TourTasks.dc.html": {
+      "x": 1920,
+      "y": 9400,
+      "w": 880,
+      "h": 640,
+      "title": "Onboarding Yes · Then tasks"
+    },
+    "OnboardingStep12Rest.dc.html": {
+      "x": 2880,
+      "y": 9400,
+      "w": 880,
+      "h": 640,
+      "title": "Onboarding No · Listens and waits"
+    },
+    "VoiceBars.dc.html": {
+      "x": 2080,
+      "y": 0,
+      "w": 261,
+      "h": 84,
+      "title": "Voice bars (WebGL)",
+      "is_interactive": true
     }
   },
   "createdOnFiles": {
@@ -93,11 +222,11 @@
     },
     "t_settings": {
       "kind": "title1",
-      "maxW": 2800,
+      "maxW": 4720,
       "text": "Settings window",
       "w": 240,
       "x": 0,
-      "y": 3780
+      "y": 4260
     },
     "t_showcase": {
       "kind": "title1",
@@ -106,18 +235,52 @@
       "w": 240,
       "x": 0,
       "y": -300
+    },
+    "t_onboarding": {
+      "kind": "title1",
+      "maxW": 3920,
+      "text": "Onboarding",
+      "w": 240,
+      "x": 0,
+      "y": 6260
+    },
+    "t_onb_steps": {
+      "kind": "title1",
+      "maxW": 3760,
+      "text": "Onboarding · every step",
+      "w": 240,
+      "x": 0,
+      "y": 7620
     }
   },
   "order": [
     "Main.dc.html",
     "Overlay.dc.html",
+    "VoiceBars.dc.html",
     "OverlayStates.dc.html",
     "Settings.dc.html",
     "SettingsModels.dc.html",
     "SettingsProfiles.dc.html",
     "SettingsPeople.dc.html",
     "SettingsAwareness.dc.html",
-    "SettingsMemory.dc.html"
+    "SettingsMemory.dc.html",
+    "SettingsPeopleYou.dc.html",
+    "SettingsPeopleOther.dc.html",
+    "OnboardingDemo.dc.html",
+    "OnboardingFlow.dc.html",
+    "Onboarding.dc.html",
+    "OnboardingStep01Install.dc.html",
+    "OnboardingStep02Wake.dc.html",
+    "OnboardingStep03Name.dc.html",
+    "OnboardingStep04Provider.dc.html",
+    "OnboardingStep05Key.dc.html",
+    "OnboardingStep06SparkFind.dc.html",
+    "OnboardingStep07SparkPair.dc.html",
+    "OnboardingStep08SparkVerify.dc.html",
+    "OnboardingStep09Ask.dc.html",
+    "OnboardingStep10TourSettings.dc.html",
+    "OnboardingStep11TourTasks.dc.html",
+    "OnboardingStep12Rest.dc.html"
   ],
   "pages": [],
   "title": "Avesra Desktop Assistant"

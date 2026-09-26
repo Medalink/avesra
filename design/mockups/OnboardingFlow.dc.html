@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Avesra onboarding flow map</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./avesra.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>body{margin:0;background:#121214}</style>
+</helmet>
+<div class="relative bg-[#121214] font-sans text-zinc-100" style="width: 1440px; height: 940px; box-sizing: border-box;">
+
+  <!-- Connectors -->
+  <svg class="absolute inset-0" width="1440" height="940" viewBox="0 0 1440 940" fill="none" aria-hidden="true">
+    <defs>
+      <marker id="fa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#71717a"></path></marker>
+      <marker id="fr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#ea4f86"></path></marker>
+    </defs>
+    <g stroke="#52525b" stroke-width="1.5">
+      <path d="M292 365H327" marker-end="url(#fa)"></path>
+      <path d="M565 365H600" marker-end="url(#fa)"></path>
+      <path d="M838 365H873" marker-end="url(#fa)"></path>
+      <path d="M1111 365H1146" marker-end="url(#fa)"></path>
+      <path d="M1266 490V540H174V578" marker-end="url(#fa)"></path>
+      <path d="M292 820H338" marker-end="url(#fa)"></path>
+      <path d="M980 820H1018" marker-end="url(#fa)"></path>
+    </g>
+    <g stroke="#ea4f86" stroke-width="1.5">
+      <path d="M292 650H338" marker-end="url(#fr)"></path>
+      <path d="M640 650H678" marker-end="url(#fr)"></path>
+      <path d="M980 650H1018" marker-end="url(#fr)"></path>
+    </g>
+  </svg>
+
+  <!-- Header -->
+  <div class="absolute top-12 left-14 flex w-[1328px] items-end justify-between">
+    <div class="flex flex-col gap-2">
+      <h1 class="m-0 text-[30px] font-semibold tracking-[-0.02em]">Onboarding flow</h1>
+      <p class="m-0 max-w-[760px] text-[14px] leading-[21px] text-zinc-400">From download to first conversation, mostly by voice. Avesra talks from the second step on a small starter model on this PC, then moves onto your Spark once it's verified. Captions and typing work at every step.</p>
+    </div>
+    <div class="flex items-center gap-4 pb-1 text-[12px] text-zinc-400">
+      <span class="flex items-center gap-1.5"><span class="h-3 w-1 bg-av-500"></span>Avesra speaking</span>
+      <span class="flex items-center gap-1.5"><span class="h-3 w-1 bg-[#3a5dd8]"></span>Your voice</span>
+      <span class="flex items-center gap-1.5"><span class="h-3 w-1 bg-zinc-500"></span>Listening</span>
+    </div>
+  </div>
+
+  <!-- Where she runs -->
+  <div class="absolute top-[172px] left-14 flex w-[1328px] flex-col gap-1.5">
+    <span class="av-kicker">Where Avesra runs</span>
+    <div class="flex h-6 gap-[2px] text-[11.5px]">
+      <div class="flex w-[236px] items-center bg-white/[0.04] px-2 text-zinc-500">Installer only</div>
+      <div class="flex w-[972px] items-center bg-white/[0.08] px-2 text-zinc-300">Listening and voice: starter model on this PC</div>
+      <div class="flex flex-1 items-center bg-av-500/25 px-2 text-av-200 ring-1 ring-av-500/50 ring-inset">Spark</div>
+    </div>
+    <div class="flex h-6 gap-[2px] text-[11.5px]">
+      <div class="flex w-[236px] items-center bg-white/[0.04] px-2 text-zinc-500"></div>
+      <div class="flex w-[579px] items-center bg-white/[0.08] px-2 text-zinc-300">Reasoning: starter model</div>
+      <div class="flex flex-1 items-center bg-[#3a5dd8]/20 px-2 text-[#c3cdff] ring-1 ring-[#3a5dd8]/50 ring-inset">Reasoning: your provider (Claude, ChatGPT or Grok), or the Spark for Local</div>
+    </div>
+  </div>
+
+  <!-- Main path -->
+  <div class="absolute top-[240px] left-14 flex gap-[37px]">
+    <div class="av-card flex h-[250px] w-[236px] flex-col gap-2.5 p-4">
+      <div class="flex items-center gap-2"><span class="grid size-6 place-items-center bg-av-700 font-mono text-[11px] text-white">1</span><span class="text-[15px] font-semibold">Install</span></div>
+      <p class="m-0 text-[12.5px] leading-[18px] text-zinc-400">Download and run the installer. It includes a small starter model, so she can talk before anything else is set up.</p>
+      <span class="flex-1"></span>
+      <div class="flex flex-col gap-1 border-t border-white/[0.07] pt-2.5">
+        <span class="av-kicker">You</span>
+        <span class="text-[12.5px] text-[#c3cdff]">Click Install</span>
+      </div>
+    </div>
+    <div class="av-card flex h-[250px] w-[236px] flex-col gap-2.5 p-4">
+      <div class="flex items-center gap-2"><span class="grid size-6 place-items-center bg-av-700 font-mono text-[11px] text-white">2</span><span class="text-[15px] font-semibold">Starter model says hello</span></div>
+      <p class="m-0 text-[12.5px] leading-[18px] text-zinc-200">“Hi, I'm Avesra. I'll be a bit slow until we connect something bigger. Can you hear me okay?”</p>
+      <p class="m-0 text-[12px] leading-[17px] text-zinc-500">Sound check. Captions always on; type instead at any time.</p>
+      <span class="flex-1"></span>
+      <div class="flex flex-col gap-1 border-t border-white/[0.07] pt-2.5">
+        <span class="av-kicker">You</span>
+        <span class="text-[12.5px] text-[#c3cdff]">“Yes, I can hear you.”</span>
+      </div>
+    </div>
+    <div class="av-card flex h-[250px] w-[236px] flex-col gap-2.5 p-4">
+      <div class="flex items-center gap-2"><span class="grid size-6 place-items-center bg-av-700 font-mono text-[11px] text-white">3</span><span class="text-[15px] font-semibold">Your name</span></div>
+      <p class="m-0 text-[12.5px] leading-[18px] text-zinc-200">“What should I call you?”</p>
+      <p class="m-0 text-[12px] leading-[17px] text-zinc-500">She repeats it back to confirm. Remembered for greetings, and editable in People.</p>
+      <span class="flex-1"></span>
+      <div class="flex flex-col gap-1 border-t border-white/[0.07] pt-2.5">
+        <span class="av-kicker">You</span>
+        <span class="text-[12.5px] text-[#c3cdff]">“Call me Jordan.”</span>
+      </div>
+    </div>
+    <div class="av-card flex h-[250px] w-[236px] flex-col gap-2.5 p-4">
+      <div class="flex items-center gap-2"><span class="grid size-6 place-items-center bg-av-700 font-mono text-[11px] text-white">4</span><span class="text-[15px] font-semibold">AI provider</span></div>
+      <p class="m-0 text-[12.5px] leading-[18px] text-zinc-200">“Which AI would you like me to use?”</p>
+      <div class="flex flex-wrap gap-1">
+        <span class="av-chip text-zinc-200 ring-white/15">Claude</span>
+        <span class="av-chip text-zinc-200 ring-white/15">ChatGPT</span>
+        <span class="av-chip text-zinc-200 ring-white/15">Grok</span>
+        <span class="av-chip text-zinc-200 ring-white/15">Local</span>
+      </div>
+      <p class="m-0 text-[12px] leading-[17px] text-zinc-500">Cloud: paste an API key, tested before moving on. Local: continue to the Spark.</p>
+      <span class="flex-1"></span>
+      <div class="flex flex-col gap-1 border-t border-white/[0.07] pt-2.5">
+        <span class="av-kicker">You</span>
+        <span class="text-[12.5px] text-[#c3cdff]">Pick one, paste a key</span>
+      </div>
+    </div>
+    <div class="av-card flex h-[250px] w-[236px] flex-col gap-2.5 p-4">
+      <div class="flex items-center gap-2"><span class="grid size-6 place-items-center bg-av-700 font-mono text-[11px] text-white">5</span><span class="text-[15px] font-semibold">Your Spark</span></div>
+      <p class="m-0 text-[12.5px] leading-[18px] text-zinc-200">“Now let's find your Spark.”</p>
+      <ol class="m-0 flex list-none flex-col gap-1 p-0 text-[12px] leading-[17px] text-zinc-400">
+        <li><span class="font-mono text-zinc-500">a</span> Find it on your network</li>
+        <li><span class="font-mono text-zinc-500">b</span> Pair: code + fingerprint</li>
+        <li><span class="font-mono text-zinc-500">c</span> Verify all five services</li>
+        <li><span class="font-mono text-zinc-500">d</span> She moves onto the Spark</li>
+      </ol>
+      <span class="flex-1"></span>
+      <div class="flex flex-col gap-1 border-t border-white/[0.07] pt-2.5">
+        <span class="av-kicker">You</span>
+        <span class="text-[12.5px] text-[#c3cdff]">Read the code, confirm</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Decision -->
+  <div class="absolute top-[580px] left-14 flex h-[260px] w-[236px] flex-col gap-2.5 bg-av-500/[0.06] p-4 ring-1 ring-av-500/50 ring-inset">
+    <div class="flex items-center gap-2"><span class="grid size-6 place-items-center bg-av-700 font-mono text-[11px] text-white">6</span><span class="text-[15px] font-semibold">Want a tour?</span></div>
+    <p class="m-0 text-[12.5px] leading-[18px] text-zinc-200">“That's everything I need, Jordan. Want me to show you a few things I can do?”</p>
+    <span class="flex-1"></span>
+    <div class="flex flex-col gap-1.5 border-t border-white/[0.07] pt-2.5">
+      <span class="text-[12.5px] text-av-200">Yes → short tour</span>
+      <span class="text-[12.5px] text-zinc-300">No → she listens and waits</span>
+    </div>
+  </div>
+
+  <!-- Yes lane -->
+  <span class="av-kicker absolute top-[556px] left-[340px] text-av-300">Yes path</span>
+  <div class="av-card absolute top-[580px] left-[340px] flex h-[140px] w-[300px] flex-col gap-2 p-4">
+    <div class="flex items-center gap-2"><span class="font-mono text-[11px] text-av-300">Y1</span><span class="text-[14px] font-semibold">Her own settings first</span></div>
+    <p class="m-0 text-[12.5px] leading-[18px] text-zinc-200">“I can change my own settings. Try: turn the background sound down a bit.”</p>
+    <p class="m-0 text-[12px] leading-[17px] text-zinc-500">The change shows with before and after, plus undo.</p>
+  </div>
+  <div class="av-card absolute top-[580px] left-[680px] flex h-[140px] w-[300px] flex-col gap-2 p-4">
+    <div class="flex items-center gap-2"><span class="font-mono text-[11px] text-av-300">Y2</span><span class="text-[14px] font-semibold">Then tasks</span></div>
+    <ul class="m-0 flex list-none flex-col gap-1 p-0 text-[12px] leading-[17px] text-zinc-300">
+      <li>“Check my latest 10 emails…”</li>
+      <li>“Open Spotify and play something calm”</li>
+      <li>“Read this page and give me the short version”</li>
+    </ul>
+  </div>
+  <div class="absolute top-[580px] left-[1020px] flex h-[140px] w-[364px] flex-col justify-center gap-2 border border-dashed border-white/20 bg-white/[0.02] p-4">
+    <span class="av-kicker">End</span>
+    <span class="text-[14px] font-medium">Setup closes. The overlay takes over.</span>
+    <span class="text-[12.5px] leading-[18px] text-zinc-400">Listening, ready for the first real task.</span>
+  </div>
+
+  <!-- No lane -->
+  <span class="av-kicker absolute top-[738px] left-[340px]">No path</span>
+  <div class="av-card absolute top-[760px] left-[340px] flex h-[120px] w-[640px] flex-col gap-2 p-4">
+    <div class="flex items-center gap-2"><span class="font-mono text-[11px] text-zinc-400">N</span><span class="text-[14px] font-semibold">Listens and waits</span></div>
+    <p class="m-0 text-[12.5px] leading-[18px] text-zinc-200">“No problem. I'll be here. Just talk when you need me.”</p>
+    <p class="m-0 text-[12px] leading-[17px] text-zinc-500">No more questions. The tour stays one sentence away: “Avesra, show me what you can do.”</p>
+  </div>
+  <div class="absolute top-[760px] left-[1020px] flex h-[120px] w-[364px] flex-col justify-center gap-2 border border-dashed border-white/20 bg-white/[0.02] p-4">
+    <span class="av-kicker">End</span>
+    <span class="text-[14px] font-medium">Setup closes. Overlay only, passive.</span>
+    <span class="text-[12.5px] leading-[18px] text-zinc-400">Grey listening lines, no text, controls on hover.</span>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":940}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>
