@@ -2,7 +2,7 @@
 
 ## Status and intent
 
-- Status: IN PROGRESS (implementation explicitly authorized by the owner, 2026-09-26). Draft PR14 now includes the protected native foundation and mock-aligned Your voice renderer (5b43c37). Source/static review passed; combined production build and actual rendering proof are pending. Portrait capture and full acceptance remain outstanding. This is not a completion claim.
+- Status: IN PROGRESS (implementation explicitly authorized by the owner, 2026-09-26). Draft PR14 includes the protected native foundation and mock-aligned Your voice renderer (5b43c37). Source/static review and combined production builds passed. Installed People card geometry and its honest unavailable state were observed at b7815d4 and1eab298. No current owner/microphone-bound Personal observations exist in the inspected store, so a genuine rendered avatar, repeatability, portrait capture and full acceptance remain outstanding. This is not a completion claim. See [the real-app parity ledger](003-ui-parity-status-2026-09-26.md).
 - Priority: P2 product identity. Effort: M, staged. Risk: low to medium; it touches protected speaker storage and enrollment capture, not action authority.
 - Depends on: Plan 001's protected owner and enrollment flow (`docs/owner-identity.md`, `docs/enrollment.md`) and the People & Voice ID screen in the design mockups.
 - Owner request: generate a unique-to-the-user "avatar" graph and animation of their voice, built from their real voice. The same user must get the same avatar every time. Suggested starting point: have them say about 20 words.
