@@ -65,6 +65,14 @@ def inspect(container):
 def fingerprint(value):
     # Hash potentially private environment values without persisting or logging them.
     selected = {key: value[key] for key in ("Id", "Name", "Image", "Created", "Path", "Args", "Config", "HostConfig", "Mounts")}
+    host = dict(selected["HostConfig"])
+    oom = host["OomKillDisable"]
+    if oom is not None and type(oom) is not bool:
+        raise ValueError("Invalid audio OOM policy")
+    # Docker defaults nil to false, and may clear false on first start when the
+    # kernel lacks this optional knob. Never erase an explicit true policy.
+    host["OomKillDisable"] = False if oom is None else oom
+    selected["HostConfig"] = host
     mounts = selected["Mounts"]
     if not isinstance(mounts, list) or any(
         not isinstance(mount, dict) or not isinstance(mount.get("Destination"), str)

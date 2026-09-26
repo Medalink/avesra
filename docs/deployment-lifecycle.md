@@ -174,6 +174,15 @@ environment, UID, mounts, device/resource/network settings and image. It checks
 every mount field but canonicalizes the semantically unordered Docker `Mounts`
 array by its unique destination before hashing. Duplicate or malformed mount
 destinations are refused; no fields are omitted and no other arrays are reordered.
+The nullable Docker `HostConfig.OomKillDisable` field alone canonicalizes null
+to false: both mean the OOM killer is not disabled. True remains distinct, and
+non-boolean/non-null values are rejected. Actual first-start inspection on
+2026-09-26 changed only this field from false to null; Docker's daemon defaults
+null to false, then clears it on kernels without that optional capability
+([daemon source](https://github.com/moby/moby/blob/v28.3.3/daemon/daemon_unix.go#L351)).
+This correction applies to newly prepared owners only. Never rewrite existing
+manifest fingerprints or replace their pinned supervisor in place; retain the
+original operation evidence and explicitly prepare a reconciled replacement.
 Two fresh inspections of the stopped speaker and TTS containers on 2026-09-26
 differed only in mount order, confirming the original order-sensitive fingerprint
 could incorrectly refuse an unchanged container. Existing prepared owners remain
