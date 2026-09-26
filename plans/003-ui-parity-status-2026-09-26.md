@@ -37,7 +37,12 @@ silenced. Never switch desktops, inject global input, synthesize private state,
 unlock the owner's protected stores, or substitute screenshots for functionality.
 
 Plan003, application-wide parity, beta readiness and Plan001 remain **IN PROGRESS**.
-The current installed integration build is4da17b0. PR24 adds the inset setup rail; PR25
+The current installed integration build is49cf90c; its exact source and matched
+desktop/controller identities are retained in `artifacts/ui-parity-49cf90c`.
+The latest reviewed source additionally includes optional portrait PRs34–35 and
+People read-coordination PR33, whose installed proof is pending. See the
+[Plan003 acceptance matrix](003-acceptance-matrix.md) for observed49 failures and
+actual native timing records. PR24 adds the inset setup rail; PR25
 matches the grouped Chimes card,24px input meter and SVG progress arc; PR26 adds
 Overlay status geometry and a real Collapse/Pause/Resume footer. PR27 adds the
 mock preview bars through an exact native-issued output receipt, matching current

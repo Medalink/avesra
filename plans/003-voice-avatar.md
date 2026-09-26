@@ -36,7 +36,7 @@ Lossy keyed projection is not a proved biometric inversion or unlinkability defe
 These limits must remain explicit in product and evidence claims; they cannot be
 converted into passing acceptance results by relabeling the foundation as complete.
 Personal learning must not redraw an existing portrait. Source changes require an
-explicit future redraw; changed owner revision fails closed.
+explicit protected redraw; changed owner revision fails closed on ordinary reads.
 
 ### Current mock authority and remaining portrait work
 
@@ -49,12 +49,12 @@ the original visual-layer proposal below is not authority to alter the mock.
 Personal sources and exact candidate-bound phrase summaries remain distinct.
 Unavailable live scores, check results and dates must not be fabricated.
 
-Optional two-batch capture work is parked, unfinished and excluded from the
-current integration build. Its intended next native slice uses actual received-sample prompt
+Optional two-batch capture was reviewed and integrated in PRs34–35 at `878ca13`.
+It is not covered by the installed49 evidence. The native slice uses actual received-sample prompt
 progress, original management lifetime, selected-device ownership and retained
 worker retirement. Current ASR supplies no word timestamps. Energy islands in
 800ms prompt slots may provide bounded acoustic features, not lexical verification;
-ambiguous slots remain missing. Version2 typed petals will carry actual edge and
+ambiguous slots remain missing. Version2 typed petals carry actual edge and
 energy geometry while retaining the v1 reader and stable ring. Prompt pace is not
 measured syllable rate. No portrait or verification requirement may be added to
 ordinary Personal conversation.
