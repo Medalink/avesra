@@ -1,5 +1,33 @@
 # Sourced private memory
 
+## Settings Memory presentation
+
+The saved-record list follows the card hierarchy in
+`design/mockups/Settings.dc.html` lines 964–1015: 14-pixel horizontal/12-pixel
+vertical padding, source-kind badge, 13-pixel content, 11-pixel source/date and
+compact correction/deletion controls. Only real current snapshot records appear.
+Facts are labeled Stated (an owner assertion); routines retain their actual
+candidate/verified-invocation/disabled state. Neither label implies inferred
+knowledge, playback or a fresh successful action. Exact source identifiers remain
+available in expandable source details, and accepted named-fact source inspection
+keeps its existing protected reader and exact ID/revision checks.
+
+Add opens the existing verified-task form explicitly. Correct opens that same
+editor with the actual current entry, retaining its named-fact limits and routine
+disable option. Closing the form only hides it and preserves local input; the
+visible Continue action reopens it. Cancel correction retains the existing clear
+semantics. Successful save or deletion of the edited record closes the editor.
+Lock/hide/context invalidation clears it with the existing private-memory state.
+No new memory search, inferred records, undo, source selection, native command or
+authorization path is added. SetupLock, pending deletion approval, error/status,
+Teaching and source-history views remain accessible outside the collapsed form.
+
+Only PrivateMemory's presentation and local form visibility change. Its existing
+refresh/save/correct/delete/source-read entry points, Hello and grant admission,
+source/revision binding, busy gates, retained command ownership and stale-result
+checks are unchanged. Source review and a focused frontend check cover this slice;
+no automated tests or installed private-record proof are claimed.
+
 ## Explicit verified-task records
 
 The first product writer supports explicit owner facts and one-step routines
