@@ -57,6 +57,8 @@ pub struct Packet {
     pub sample_offset: u32,
     /// Original oldest native sample age at send, rounded up; at most 500 ms.
     pub captured_age_ms: u16,
+    /// Native acknowledgment receipt to send, rounded down; original 20-s bound.
+    pub elapsed_since_ack_ms: u32,
     pub pcm_s16le: String,
     pub r#final: bool,
 }

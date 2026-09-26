@@ -37,10 +37,14 @@ oldest native frame's monotonic age immediately before sending. Reject future
 capture or age above 500 ms. This includes PCM buffered while the previous actual
 stream retires and the next one opens; do not discard it or stamp it fresh.
 The server anchors one capture origin from its first packet receipt minus that
-native age assertion. It also freezes a conservative transit uncertainty equal
-to the entire interval from acknowledgment send initiation to first packet
-receipt. This includes native gathering time as well as network time; it is
-subtracted from every projected capture timestamp, never waived or renewed.
+native age assertion. Each packet also carries `elapsed_since_ack_ms`, floored
+from the actual native acknowledgment receipt to the same send observation.
+The server freezes a conservative transit uncertainty equal to its interval
+from acknowledgment send initiation to first packet receipt minus that native
+elapsed time. This bounds both acknowledgment-out and packet-in transit without
+counting microphone startup or sample gathering twice. An impossible, decreasing,
+or over-lifetime native elapsed value fails. The fixed uncertainty is subtracted
+from every projected capture timestamp, never waived or renewed.
 Later receipt-minus-age claims must agree with the fixed
 origin plus immutable sample offset within 100 ms of transport/clock tolerance.
 The earlier of those two times, minus that fixed uncertainty, feeds the private

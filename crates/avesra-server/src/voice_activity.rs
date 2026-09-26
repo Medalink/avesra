@@ -119,6 +119,7 @@ async fn run(socket: &mut WebSocket, auth: Shared, device: Uuid) -> Result<(), E
     .await?;
     let mut capture_origin: Option<Instant> = None;
     let mut transit_uncertainty: Option<Duration> = None;
+    let mut previous_native_elapsed = 0;
     let mut next = 1;
     let mut total = 0u32;
     loop {
@@ -135,6 +136,8 @@ async fn run(socket: &mut WebSocket, auth: Shared, device: Uuid) -> Result<(), E
             || packet.sample_offset != total
             || packet.pcm_s16le.len() > 8536
             || packet.captured_age_ms > 500
+            || packet.elapsed_since_ack_ms >= 20_000
+            || packet.elapsed_since_ack_ms < previous_native_elapsed
         {
             return Err(ErrorCode::Malformed);
         }
@@ -160,7 +163,13 @@ async fn run(socket: &mut WebSocket, auth: Shared, device: Uuid) -> Result<(), E
             .checked_sub(Duration::from_millis(u64::from(packet.captured_age_ms)))
             .ok_or(ErrorCode::Expired)?;
         let origin = *capture_origin.get_or_insert(claimed);
-        let uncertainty = *transit_uncertainty.get_or_insert(received.duration_since(acknowledged));
+        let native_elapsed = Duration::from_millis(u64::from(packet.elapsed_since_ack_ms));
+        let transit_bound = received
+            .duration_since(acknowledged)
+            .checked_sub(native_elapsed)
+            .ok_or(ErrorCode::Expired)?;
+        let uncertainty = *transit_uncertainty.get_or_insert(transit_bound);
+        previous_native_elapsed = packet.elapsed_since_ack_ms;
         let expected = origin
             .checked_add(capture_start)
             .ok_or(ErrorCode::Expired)?;
@@ -170,9 +179,9 @@ async fn run(socket: &mut WebSocket, auth: Shared, device: Uuid) -> Result<(), E
             .ok_or(ErrorCode::Expired)?;
         // The first packet can contain genuine capture from before this WSS ack.
         // Thereafter the origin is immutable; age assertions cannot slide it.
-        // Receipt-minus-age excludes network transit. The entire first ack-to-
-        // packet interval conservatively bounds that missing initial transit;
-        // retaining it also covers subsequent transit through the fixed origin.
+        // Receipt-minus-age excludes transit. Removing only the floored actual
+        // native ack-to-send duration leaves a conservative first round-trip
+        // bound; the fixed origin also preserves later packet transit age.
         let captured = expected
             .min(claimed)
             .checked_sub(uncertainty)

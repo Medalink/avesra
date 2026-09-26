@@ -18,6 +18,7 @@ pub struct Stream {
     session: SessionIdentity,
     request: Uuid,
     started: Instant,
+    acknowledged: Instant,
     sequence: u64,
     samples: u32,
     frames: u32,
@@ -59,6 +60,7 @@ impl Stream {
                 .await
                 .ok_or("Activity disconnected")?
                 .map_err(|_| "Activity connection lost")?;
+            let acknowledged = Instant::now();
             let Message::Text(text) = reply else {
                 return Err("Invalid activity acknowledgment");
             };
@@ -72,9 +74,9 @@ impl Stream {
             {
                 return Err("Activity acknowledgment changed");
             }
-            Ok(())
+            Ok(acknowledged)
         };
-        tokio::time::timeout(Duration::from_secs(3), work)
+        let acknowledged = tokio::time::timeout(Duration::from_secs(3), work)
             .await
             .map_err(|_| "Activity start timed out")??;
         Ok(Self {
@@ -82,6 +84,7 @@ impl Stream {
             session,
             request,
             started,
+            acknowledged,
             sequence: 1,
             samples: 0,
             frames: 0,
@@ -128,6 +131,7 @@ impl Stream {
             sequence: self.sequence,
             sample_offset: self.samples,
             captured_age_ms: 0,
+            elapsed_since_ack_ms: 0,
             pcm_s16le: STANDARD.encode(frame.pcm),
             r#final: frame.final_chunk,
         };
@@ -141,6 +145,11 @@ impl Stream {
                 .filter(|age| *age <= Duration::from_millis(500))
                 .ok_or("Activity capture expired before send")?;
             packet.captured_age_ms = age.as_micros().div_ceil(1000) as u16;
+            let elapsed = now.duration_since(self.acknowledged);
+            if elapsed >= Duration::from_secs(20) {
+                return Err("Activity stream expired before send");
+            }
+            packet.elapsed_since_ack_ms = elapsed.as_millis() as u32;
             self.socket
                 .send(Message::Text(
                     serde_json::to_string(&packet)
