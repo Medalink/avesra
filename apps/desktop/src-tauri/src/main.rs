@@ -6,18 +6,23 @@ mod connection;
 mod discovery;
 mod media;
 mod microphone_check;
+mod model_health;
+mod notifications;
 mod output;
 mod owner;
+mod performance;
 mod phrase_capture;
 pub mod planner;
 mod playback_signal;
 mod preview;
 mod profiles;
+mod qualification;
 mod setup;
 mod shortcuts;
 mod sound;
 pub mod speech;
 mod startup_greeting;
+pub mod tasks;
 mod voice;
 mod voice_check;
 mod voices;
@@ -63,9 +68,11 @@ struct WriteSettings {
     reply: oneshot::Sender<Result<(), String>>,
 }
 struct Runtime {
+    performance: std::sync::Arc<performance::State>,
     discovery: discovery::Discovery,
     browser: browser::BrowserSetup,
     catalog: catalog::CatalogSetup,
+    tasks: tasks::State,
     turns: Mutex<avesra_core::voice::TurnGate>,
     planner: planner::NativePlanner,
     acknowledged_session: Mutex<Option<connection::SessionIdentity>>,
@@ -81,6 +88,7 @@ struct Runtime {
     pairing: tokio::sync::Mutex<()>,
     health: tokio::sync::Mutex<()>,
     voice_check: voice_check::State,
+    qualification: qualification::State,
     preview: std::sync::Arc<tokio::sync::Mutex<()>>,
     voice_panel: Mutex<Option<uuid::Uuid>>,
     hotkeys: Mutex<Option<avesra_windows::shortcuts::Hotkeys>>,
@@ -92,6 +100,7 @@ struct Runtime {
 impl Runtime {
     fn publish(&self, local: &LocalState) {
         if local.locked || !local.connected {
+            self.tasks.invalidate();
             self.catalog.invalidate();
             self.browser.invalidate();
         }
@@ -112,6 +121,7 @@ impl Runtime {
             local.capture_epoch,
             self.connection_generation.load(Ordering::SeqCst),
         );
+        self.qualification.observe(self, local);
         self.media.publish(local);
         self.effects.observe(
             local.action_epoch,
@@ -140,6 +150,8 @@ fn runtime_snapshot(state: tauri::State<'_, Runtime>) -> Result<LocalState, Stri
         .clone())
 }
 fn invalidate_settings(app: &tauri::AppHandle) {
+    app.state::<Runtime>().tasks.invalidate();
+    app.state::<Runtime>().qualification.settings_hidden();
     microphone_check::stop(app, None);
     app.state::<Runtime>().discovery.invalidate();
     app.state::<Runtime>().catalog.invalidate();
@@ -168,10 +180,10 @@ async fn audio_devices() -> Result<Vec<avesra_windows::AudioDevice>, String> {
     .map_err(|_| "Device enumeration failed")?
 }
 #[tauri::command]
-async fn speaker_health(
+async fn audio_lane_health(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
-) -> Result<connection::SpeakerHealth, String> {
+) -> Result<connection::AudioLaneHealth, String> {
     if window.label() != "settings" || !window.is_visible().map_err(|_| "Settings unavailable")? {
         return Err("Open Settings to inspect deployments".into());
     }
@@ -210,7 +222,7 @@ async fn speaker_health(
     }
     let value = tokio::time::timeout(
         std::time::Duration::from_secs(4),
-        connection::speaker_health(&record),
+        connection::audio_lane_health(&record),
     )
     .await
     .map_err(|_| "Deployment probe timed out")??;
@@ -585,9 +597,22 @@ fn apply_interface_scale(app: &tauri::AppHandle, percent: u16) -> tauri::Result<
     Ok(())
 }
 fn main() {
+    #[cfg(windows)]
+    if let Err(error) = avesra_windows::output_recording::configure_from_args() {
+        eprintln!("{error}");
+        std::process::exit(2);
+    }
     let _ = rustls::crypto::ring::default_provider().install_default();
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            // Diagnostic launch arguments never turn an existing audible process
+            // into a recording process or activate a window on another desktop.
+            #[cfg(windows)]
+            if avesra_windows::output_recording::enabled()
+                || args.iter().any(|arg| arg.starts_with("--capture-output"))
+            {
+                return;
+            }
             // Keep explicitly headless inspection configurations invisible.
             if !app
                 .config()
@@ -684,9 +709,11 @@ fn main() {
             )?;
             let initial_shortcuts = local.settings.shortcuts.clone();
             app.manage(Runtime {
+                performance: std::sync::Arc::new(performance::State::default()),
                 discovery: discovery::Discovery::default(),
                 browser: browser::BrowserSetup::default(),
                 catalog: catalog::CatalogSetup::default(),
+                tasks: tasks::State::default(),
                 turns: Mutex::new(avesra_core::voice::TurnGate::default()),
                 acknowledged_session: Mutex::new(None),
                 setup: setup::Setup::default(),
@@ -701,6 +728,7 @@ fn main() {
                 pairing: tokio::sync::Mutex::new(()),
                 health: tokio::sync::Mutex::new(()),
                 voice_check: voice_check::State::default(),
+                qualification: qualification::State::default(),
                 preview: std::sync::Arc::new(tokio::sync::Mutex::new(())),
                 voice_panel: Mutex::new(None),
                 hotkeys: Mutex::new(None),
@@ -710,6 +738,8 @@ fn main() {
                 shortcut_recording: Mutex::new(None),
                 shortcut_focus_generation: std::sync::atomic::AtomicU64::new(1),
             });
+            notifications::start(app.handle().clone());
+            model_health::init(app.handle());
             // Receiver is independent of the selected transport. No worker
             // emits an accepted-read offer until the full dispatch is wired.
             browser::start_read_preparation(app.handle().clone())
@@ -838,6 +868,16 @@ fn main() {
             microphone_check::stop_microphone_check,
             voice_check::check_saved_voice,
             voice_check::cancel_voice_check,
+            qualification::freeze_voice_calibration,
+            qualification::discard_voice_calibration,
+            qualification::voice_calibration_status,
+            qualification::annotate_voice_activity,
+            qualification::review_voice_admission,
+            qualification::review_development_voice,
+            qualification::revalidate_voice_admission,
+            qualification::revoke_voice_admission,
+            notifications::notification_status,
+            model_health::reasoning_health,
             discovery::discover_sparks,
             discovery::cancel_spark_discovery,
             discovery::pair_discovered_spark,
@@ -871,6 +911,19 @@ fn main() {
             catalog::app_aliases,
             catalog::remember_app,
             catalog::forget_app_alias,
+            tasks::open_action_panel,
+            performance::performance_snapshot,
+            tasks::close_action_panel,
+            tasks::action_status,
+            tasks::grant_app_action,
+            tasks::grant_volume_action,
+            tasks::grant_diagnostic_action,
+            tasks::grant_browser_read_action,
+            tasks::change_private_memory,
+            tasks::inspect_prompt_surface,
+            tasks::bind_prompt_project,
+            tasks::revoke_action_permission,
+            tasks::cancel_action_task,
             shortcuts::shortcut_status,
             owner::owner_status,
             owner::create_owner,
@@ -898,7 +951,7 @@ fn main() {
             runtime_snapshot,
             playback_signal::playback_signal_clock,
             audio_devices,
-            speaker_health,
+            audio_lane_health,
             local_control,
             save_settings,
             sound::update_sound,

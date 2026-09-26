@@ -1,5 +1,13 @@
 # Spark audio lanes
 
+The optional `activity.config.json` lane uses the existing NeMo/ASR image recipe
+with a separate pinned Sortformer artifact and supervisor. It supplies bounded
+four-speaker activity scores for explicitly requested VoiceCheck recordings; it
+does not classify owner identity or grant voice readiness. See
+[activity measurements](../../docs/voice-activity.md) for exact artifact, private
+deployment configuration and the isolated 2026-09-25 model load/generated-audio
+observation. Activity quality and controller/native integration remain unqualified.
+
 Current generated-voice setup uses `voice-design.config.json` and `tts-voices.config.json` as separate lanes, with a shared absolute `/voices` mount owned by the service UID and mode0700. The controller needs both corresponding private deployment files; connection alone cannot create those services. See the2026-09-25 [operations record](../../docs/operations.md) for deployed image, actual generated-candidate evidence and remaining cold-start/readiness limits. This supersedes historical statements below that generated assets cannot be persisted or selected.
 
 The Python 3.12 supervisor serves one separately configured lane per process over a private Unix socket. No LAN audio port, microphone capture, authorization, identity decision, ambient history, or raw-media persistence is implemented here. Deployed images use bounded whole-utterance inference and advertise `streaming: false`. New opt-in ASR and TTS streaming source is described below; no streaming path has been qualified. M3 remains incomplete.

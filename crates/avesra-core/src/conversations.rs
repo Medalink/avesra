@@ -14,7 +14,8 @@ pub use planner::{
     PlannerAuthority, PlannerCancellation, PlannerClaim, PlannerRequest, PlannerRetirement,
     PlannerSummary, StoredReply,
 };
-pub use tasks::{AppTaskRequest, LinkedTask, TaskAuthority, TaskResolution};
+pub(crate) use tasks::verified_task_source;
+pub use tasks::{ExactTaskRequest, LinkedTask, TaskAuthority, TaskResolution, TaskView};
 pub(crate) use tasks::{SCHEMA as TASK_SCHEMA, validate_dispatch as validate_linked_dispatch};
 
 const MAX_BODY: usize = 65_536;

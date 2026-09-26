@@ -10,7 +10,7 @@ use std::{path::Path, time::Duration};
 
 const MAX_RECORDS: usize = 32;
 const MAX_BODY: usize = 4096;
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Grant {
     pub id: Id,

@@ -2,7 +2,7 @@
 use crate::ErrorCode;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-pub const VERSION: u16 = 1;
+pub const VERSION: u16 = 2;
 pub const MAX_BUDGET_MS: u64 = 30_000;
 pub const MAX_REQUEST_BYTES: usize = 32_768;
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -84,20 +84,53 @@ impl Cancel {
     }
 }
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(
-    tag = "kind",
-    content = "text",
-    rename_all = "snake_case",
-    deny_unknown_fields
-)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Response {
-    Answer(String),
-    NeedsInput(String),
+    Answer { text: String },
+    NeedsInput { text: String },
+    Proposal { action: Proposal },
+}
+/// Logical arguments only; resolution and grants belong to the native owner.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Proposal {
+    LaunchApp { alias: String },
+    SetVolume { percent: u8 },
+}
+impl Proposal {
+    pub fn validate(&self) -> Result<(), ErrorCode> {
+        let valid = match self {
+            Self::LaunchApp { alias } => {
+                !alias.is_empty()
+                    && alias.trim() == alias
+                    && alias.len() <= 256
+                    && alias.chars().count() <= 64
+                    && alias
+                        .chars()
+                        .all(|v| v.is_alphanumeric() || matches!(v, ' ' | '-' | '\''))
+            }
+            Self::SetVolume { percent } => *percent <= 100,
+        };
+        if valid {
+            Ok(())
+        } else {
+            Err(ErrorCode::Malformed)
+        }
+    }
 }
 impl Response {
+    /// A proposal has no speakable response. Call validate for all reply shapes.
     pub fn text(&self) -> &str {
         match self {
-            Self::Answer(text) | Self::NeedsInput(text) => text,
+            Self::Answer { text } | Self::NeedsInput { text } => text,
+            Self::Proposal { .. } => "",
+        }
+    }
+    pub fn validate(&self) -> Result<(), ErrorCode> {
+        match self {
+            Self::Proposal { action } => action.validate(),
+            _ if valid_text(self.text()) => Ok(()),
+            _ => Err(ErrorCode::Malformed),
         }
     }
 }
@@ -126,9 +159,6 @@ impl Reply {
         if self.context != *expected {
             return Err(ErrorCode::Stale);
         }
-        if !valid_text(self.response.text()) {
-            return Err(ErrorCode::Malformed);
-        }
-        Ok(())
+        self.response.validate()
     }
 }

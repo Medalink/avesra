@@ -1,5 +1,73 @@
 # Operations
 
+2026-09-25 final streaming-preview checkpoint: matching desktop/controller binaries
+are installed, respectively SHA256
+`20BB7DA12B8DDD7E1CA9B608135D654FF3F1331FCC2FED5F99885F41109FF8D4` and
+`7b144ddf84dbd2226b68971b41c0822fc93c33922ccb642a35911dfe5cbc7ec7`.
+Actual default/custom silent UI runs completed; first submitted speech was
+397.0/407.6ms after removing the measured whole-utterance pre-ready buffer.
+See [matching media and checks](evidence/streaming-preview-2026-09-25.md).
+No automatic recognition or action readiness is claimed; the previous records
+below retain their historical binary/media identity.
+
+2026-09-25 subsequent native performance checkpoint: canonical desktop SHA256
+`3B5B69FED9E14CC293BF4B6F3758BAB3970CEE3FBBB197789F7DF6A8FC17F9E4`
+completed a real silent preview and rendered its actual stage timings. Both local
+schema10 databases were backed up consistently before the observed schema11 startup;
+the protected task view read successfully without grants or effects. See
+[exact evidence and the measured pre-ready delay](evidence/performance-preview-2026-09-25.md).
+The controller was unchanged. This supersedes the canonical desktop identity below,
+not the earlier media's recorded provenance or unfinished acceptance boundaries.
+
+2026-09-25 later background proof: the owner requested noninterrupting actual
+screenshots/audio/video and a reusable procedure. See
+[the runbook](background-evidence.md) and [revision-matched native evidence](evidence/background-preview-2026-09-25.md).
+The current proven canonical desktop SHA256 is
+`C9A8988A44C92A89EBF2C22F5EB8E52C807858C7EA7E465AF94BF621A2F2F839`;
+controller SHA256 is `cf13e5cdbc18a31ac7e509b4559ad45207a983c7be493014c3c88519583db12b`.
+Default/custom Settings previews completed in a separate non-input desktop with
+native postmix recording and silent hardware buffers. The stale saved SPDIF
+selection was corrected through Settings. ASR/speaker/TTS status now comes from
+the paired controller; a separate loaded activity service is configured with its
+exact revision. No general voice/task readiness is claimed. Later source changes
+require new checks; the older records below describe their historical binaries.
+
+2026-09-25 editable voice test: the owner requested a default test phrase that can
+be edited and played, then explicitly approved closing Avesra and updating its
+existing Spark controller. Audio & Voice now has Test selected voice, Play text
+and Use default; candidate reference playback remains separate. See
+[generated-voices.md](generated-voices.md#editable-voice-test) for the contract.
+
+Windows workspace formatting/locked Clippy and frontend type checks passed;
+Svelte reported zero errors and warnings. The Windows release initially compiled
+the new desktop binary but could not replace the canonical executable because the
+owner had opened Avesra during the build. The exact canonical process was closed
+after approval; the full release build retry passed, exit 0, in 3m20s. Canonical
+`E:\Dev\Avesra\target\release\avesra-desktop.exe` is 24,912,384 bytes, SHA256
+`BB34EEB3F5BAED9D96933B88C22418A14AD45C3B40F478102EDAB88F147E7DE4`.
+The bundled frontend is `index-CDDpRTjH.js`. No automated tests or agent playback ran.
+
+The exact changed-source snapshot is under
+`artifacts/editable-voice-test-20260925/source.tar`, SHA256
+`83747C7D0841EF00B2E2CCABD5DFA9313E5D13B1424887D5C0135167163324B4`.
+On actual ARM64 Spark2, the pinned Rust compiler used for Plan 001 ran
+`scripts/verify.sh static` and `scripts/verify.sh build`, both exit 0 (4.43 seconds
+checking, 32.93 seconds release compilation). The source and verification log are
+under `avesra-build/editable-voice-test-20260925` on Spark2. Independent source
+review found no actionable validation, correlation or ownership issue.
+
+After approval, the matching controller replaced only
+`ui-discovery-20260925/avesra-server`; the previous binary is retained as
+`editable-voice-test-20260925/previous-avesra-server`. Restarted only
+`avesra-controller-enrollment-preflight.service`. The active process binary SHA256
+is `04e27af004cfeaf94939a4f327cded8495c910e63940ec54cfbc6125fcd9240a`.
+Pinned-certificate HTTPS health succeeded and an unauthenticated HTTP/1.1
+WebSocket handshake to `/voice-preview` returned 401. Health reports protocol 2; normal voice remains
+unavailable and actions disabled, independently of explicit Settings preview.
+The certificate hash remained unchanged. No pairing/owner/settings/voice store
+was replaced and no model service was restarted. Avesra is left closed for the
+owner to launch; audible custom-text playback remains unverified.
+
 2026-09-25 startup greeting: built the canonical Windows release executable with
 the launch-only greeting and People > Your name memory field. SHA256:
 `d9a1d21508de92e8f89f2898396e0011cbe1688bfda8701fdb580c644567e4ae`.

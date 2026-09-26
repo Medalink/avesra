@@ -46,6 +46,8 @@ export type Settings = {
   learning_chime: boolean;
   action_chime: boolean;
   chime_volume: number;
+  learning_chime_volume: number | null;
+  action_chime_volume: number | null;
   speech_volume: number;
   speech_rate: number;
   explicit_mute: boolean;

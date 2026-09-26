@@ -1,5 +1,21 @@
 # Submitted playback signal
 
+The process-local Performance view additionally consumes the same validated
+off-callback reference metadata for first submitted speech timing. It copies no
+samples and adds no callback locks or allocation. See `performance.md` for bounded
+retention, missing-reference handling and the distinction from audible delivery.
+
+An explicit whole-gate assistant-playback trial also owns one native rejection
+observation, separate from display events. The validated off-callback postmix
+consumer records at most 2,048 nonzero speech submission intervals over twelve
+seconds for one exact native output UUID and epoch. The probe exists before
+capture and stores no samples. Only overlap with the completed endpoint's
+original capture interval supplies conservative output-overlap rejection; it
+cannot assert acoustic echo, clean audio, audible delivery or external replay
+resistance. Webview telemetry is never accepted as evidence. See `turn-gating.md`.
+
+Explicit native `--capture-output` launches are the diagnostic exception: references and waveform events describe the real post-format mix before hardware silencing, while every hardware buffer is zeroed. Such recordings/screenshots must be identified as silent diagnostic callback observations, never audible-device evidence. See `playback.md` for bounded recording, provenance and unchanged authority.
+
 ## Local microphone check
 
 Audio & Voice provides an explicit Check microphone / Stop check control. Merely opening the page never starts capture. A check uses the existing native MediaWorker, selected endpoint, Capture timing/gates and capture signal event for at most30seconds. It requires visible Settings, an unlocked Windows session, a selected input and unmuted/unpaused/undeafened local controls; Spark pairing and voice enrollment are not prerequisites. It cannot overlap an enrollment session or qualified normal capture. It never sets voice readiness, sends audio to Spark, stores PCM or queues samples for inference.
@@ -38,6 +54,7 @@ The approved references are design/README.md, design/tailwind/input.css, Overlay
 | App output event/runtime/visibility/expiry | Covered: exact identity, ordered retirement, conservative age, independent capture lane |
 | Overlay/Signal/Settings meter | Covered: approved speaking geometry, purpose, reduced motion identity; capture-only meter |
 | Preview and normal speech ingress | Unchanged: telemetry cannot admit audio or widen their separate authority |
-| Echo/identity/planner/activity/history | Out of scope: samples do not qualify these lanes or create task state |
+| Native playback rejection observation | Exact owned submission intervals may reject an overlapping explicit held-out endpoint; no clean-audio assertion |
+| Acoustic echo/identity/planner/activity/history | Samples do not qualify these lanes or create task state |
 
 Implementation proceeds under the user's specs-and-code-only override: no tests or fixture harness. Static compilation/type checks and source/design comparison are the available checks. No device, model, UI or visual inspection is invoked while the gaming restriction remains. Normal accepted speech stays dormant until its separate qualification/producer boundary exists.

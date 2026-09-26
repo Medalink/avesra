@@ -1,4 +1,6 @@
 <script lang="ts">
+  import Performance from "./Performance.svelte";
+  import Notifications from "./Notifications.svelte";
   import { tick } from "svelte";
   import Icon from "./Icon.svelte";
   import SetupOverview from "./SetupOverview.svelte";
@@ -11,6 +13,8 @@
   import OwnerName from "./OwnerName.svelte";
   import MicrophoneMeter from "./MicrophoneMeter.svelte";
   import AppCatalog from "./AppCatalog.svelte";
+  import ActionTasks from "./ActionTasks.svelte";
+  import PrivateMemory from "./PrivateMemory.svelte";
   import BrowserSetup from "./BrowserSetup.svelte";
   import type { SignalFrame } from "./Signal.svelte";
   import type { Runtime, Settings, AudioDevice } from "./runtime";
@@ -64,37 +68,55 @@
     if (target) document.getElementById(target)?.scrollIntoView({ block: "start" });
   }
   let tab = $state("Memory");
-  type SpeakerHealth = {state: string; model_revision: string; busy: boolean; streaming: boolean};
-  let speakerHealth = $state<SpeakerHealth | null>(null);
+  type AudioHealth = {state: string; model_revision: string; busy: boolean; streaming: boolean};
+  type LaneObservation = {state: "not_configured" | "unavailable" | "incompatible"} | {state: "observed"; health: AudioHealth};
+  type AudioLaneHealth = {version: 1; asr: LaneObservation; speaker: LaneObservation; tts: LaneObservation};
+  let audioHealth = $state<AudioLaneHealth | null>(null);
+  type ReasoningHealth = {state: "loaded_unqualified"; artifact_revision: string; engine_incarnation: string; quality_fingerprint_available: boolean};
+  let reasoningHealth = $state<ReasoningHealth | null>(null);
+  let reasoningError = $state("");
   let healthError = $state("");
   let probing = $state(false);
   let refreshHealth = $state<() => void>(() => {});
   const healthActive = $derived(section === "models" || (section === "memory" && tab === "Health"));
-  const speakerStatus = $derived(speakerHealth?.state === "loaded_unqualified" ? "Loaded · unqualified" : speakerHealth?.state === "loading" ? "Loading" : speakerHealth?.state === "termination_pending" ? "Stopping" : "Unavailable");
+  function laneStatus(value: LaneObservation | undefined) {
+    if (!value) return "Not probed";
+    if (value.state === "not_configured") return "Not configured";
+    if (value.state === "incompatible") return "Incompatible";
+    if (value.state === "unavailable") return "Unavailable";
+    if (value.state !== "observed") return "Unavailable";
+    return value.health.state === "loaded_unqualified" ? "Loaded · unqualified" : value.health.state === "loading" ? "Loading" : value.health.state === "termination_pending" ? "Stopping" : "Unavailable";
+  }
+  const speakerStatus = $derived(laneStatus(audioHealth?.speaker));
   $effect(() => {
     const active = healthActive;
     const connected = runtime?.connected;
     const epoch = runtime?.capture_epoch;
+    const locked = runtime?.locked;
     let disposed = false;
     let pending = false;
     let visibilityGeneration = 0;
-    speakerHealth = null;
+    audioHealth = null;
+    reasoningHealth = null; reasoningError = "";
     healthError = "";
     probing = false;
     const probe = async () => {
-      if (disposed || pending || !active || !connected || !epoch || !native || document.visibilityState !== "visible") return;
-      pending = true; probing = true; speakerHealth = null; healthError = "";
+      if (disposed || pending || !active || !connected || locked || !epoch || !native || document.visibilityState !== "visible") return;
+      pending = true; probing = true; audioHealth = null; healthError = ""; reasoningHealth = null; reasoningError = "";
       const generation = visibilityGeneration;
       try {
-        const result = await command<SpeakerHealth>("speaker_health");
-        if (!disposed && generation === visibilityGeneration) speakerHealth = result;
+        const [audio, reasoning] = await Promise.allSettled([command<AudioLaneHealth>("audio_lane_health"), command<ReasoningHealth>("reasoning_health")]);
+        if (!disposed && generation === visibilityGeneration) {
+          if (audio.status === "fulfilled") audioHealth = audio.value; else healthError = String(audio.reason);
+          if (reasoning.status === "fulfilled") reasoningHealth = reasoning.value; else reasoningError = String(reasoning.reason);
+        }
       } catch (error) { if (!disposed && generation === visibilityGeneration) healthError = String(error); }
       finally { pending = false; if (!disposed) probing = false; }
     };
     refreshHealth = () => { void probe(); };
     void probe();
     const interval = setInterval(() => { void probe(); }, 15000);
-    const visibility = () => { visibilityGeneration += 1; speakerHealth = null; if (!disposed) void probe(); };
+    const visibility = () => { visibilityGeneration += 1; audioHealth = null; reasoningHealth = null; reasoningError = ""; if (!disposed) void probe(); };
     document.addEventListener("visibilitychange", visibility);
     return () => { disposed = true; clearInterval(interval); document.removeEventListener("visibilitychange", visibility); };
   });
@@ -134,7 +156,7 @@
     [
       "Speech recognition",
       "Transcribes speech into words.",
-      "Streaming ASR service is not configured.",
+      "Probe the paired Spark for configured speech recognition metadata.",
     ],
     [
       "Voice identity",
@@ -144,12 +166,12 @@
     [
       "Conversation & planning",
       "Plans accepted requests and responds.",
-      "Pair Spark and probe a reasoning deployment.",
+      "Inspect the paired controlled reasoning deployment without running inference. Loaded status does not grant voice or action permission.",
     ],
     [
       "Screen understanding",
       "Interprets selected, fresh screen observations.",
-      "Pair Spark and probe a vision deployment.",
+      "The screen-understanding driver is not integrated. External model availability is not inspected here.",
     ],
     [
       "Voice synthesis",
@@ -159,14 +181,47 @@
     [
       "Decision evaluation",
       "Chooses between typed, permitted options.",
-      "Local decision driver is not connected.",
+      "The local decision driver is not integrated.",
     ],
     [
       "Memory processing",
       "Proposes sourced facts and routines.",
-      "Background memory driver is not connected.",
+      "The background memory driver is not integrated.",
     ],
   ];
+  const laneKeys = ["asr", "speaker", null, null, "tts", null, null] as const;
+  const knownModels: Record<string, string> = {
+    ebe59e5a817142986528bbbee5dba8db7b38ed50: "Nemotron Speech",
+    "0f99f2d0ebe89ac095bcc5903c4dd8f72b367286": "ECAPA-TDNN",
+    "5d83992436eae1d760afd27aff78a71d676296fc": "Qwen3-TTS Base",
+  };
+  const laneCards = $derived(lanes.map((lane, index) => {
+    const key = laneKeys[index];
+    const observation = key ? audioHealth?.[key] : undefined;
+    const health = observation?.state === "observed" ? observation.health : null;
+    if (index === 2) return {
+      title: lane[0], description: lane[1], supported: true,
+      status: reasoningHealth ? "Loaded · unqualified" : reasoningError ? "Unavailable · unverified" : "Not probed",
+      driver: reasoningHealth ? "Controlled reasoning driver" : "Not verified",
+      model: reasoningHealth ? "Observed configured artifact" : "Not verified",
+      revision: reasoningHealth?.artifact_revision ?? "",
+      machine: reasoningHealth ? "Paired Spark" : "Not verified",
+      detail: reasoningHealth ? `${reasoningHealth.artifact_revision} · engine ${reasoningHealth.engine_incarnation} · ${reasoningHealth.quality_fingerprint_available ? "complete quality fingerprint observed" : "quality fingerprint unavailable"} · qualification required` : reasoningError || lane[2],
+    };
+    return {
+      title: lane[0], description: lane[1], supported: !!key,
+      status: key ? laneStatus(observation) : index === 2 ? "Not inspected" : "Not integrated",
+      driver: health ? "Dedicated audio service" : observation?.state === "not_configured" ? "Not configured" : key ? "Not verified" : index === 2 ? "Status not integrated" : "Not integrated",
+      model: health ? knownModels[health.model_revision] ?? "Configured audio model" : "Not verified",
+      revision: health?.model_revision ?? "",
+      machine: health ? "Paired Spark" : "Not verified",
+      detail: health ? `${health.model_revision} · ${health.streaming ? "streaming advertised" : "batch only"} · ${health.busy ? "busy" : "idle"} · qualification required`
+        : observation?.state === "not_configured" ? "No deployment is configured for this lane on the paired controller."
+        : observation?.state === "incompatible" ? "Configured service returned incompatible metadata."
+        : observation?.state === "unavailable" ? "Configured service is unavailable; probe again after checking its deployment."
+        : lane[2],
+    };
+  }));
   const meta = $derived(section === "setup" ? ["setup", "Get started", "Your setup, one step at a time."] : sections.find((s) => s[0] === section)!);
   const s = $derived(runtime?.settings);
   const interfaceScales = [100, 110, 125, 150, 175];
@@ -281,7 +336,7 @@
                         : ""}</option
                     >{/each}</select
                 ><span class="av-hint"
-                  >Playback is unavailable until voice setup.</span
+                  >Automatic responses require voice setup. Voice previews are available with a selected output.</span
                 >
               </div>
             </div>
@@ -352,67 +407,70 @@
                   ></span></button
                 >
               </div>{/each}
+            {#each ["learning_chime_volume", "action_chime_volume"] as volume}
             <div class="flex items-center gap-3 px-3.5 py-2.5">
-              <label class="av-label w-[120px]" for="chimevol"
-                >Chime volume</label
+              <label class="av-label w-[120px]" for={volume}
+                >{volume === "learning_chime_volume" ? "Learning volume" : "Action volume"}</label
               >
               <input
-                id="chimevol"
+                id={volume}
                 type="range"
                 min="0"
                 max="100"
                 step="1"
                 class="av-range flex-1"
-                value={s?.chime_volume ?? 15}
+                value={s?.[volume as "learning_chime_volume" | "action_chime_volume"] ?? s?.chime_volume ?? 15}
                 disabled={!s || saving}
                 onchange={(e) =>
-                  update({ chime_volume: Number(e.currentTarget.value) })}
+                  update({ [volume]: Number(e.currentTarget.value) })}
               />
               <span
                 class="w-10 text-right font-mono text-[11.5px] text-zinc-300"
-                >{s?.chime_volume ?? 15}%</span
+                >{s?.[volume as "learning_chime_volume" | "action_chime_volume"] ?? s?.chime_volume ?? 15}%</span
               >
             </div>
+            {/each}
             <p class="av-hint">
-              Preferences are saved; chime playback is not yet available.
+              Only committed events can sound. Learning batches coalesce at most once per minute; active speech, recording, pause and Deafen take precedence.
             </p>
           </section>
+          <Notifications {runtime} />
         {:else if section === "models"}
           <div class="warning">
-            {runtime?.connected ? "Connected service metadata does not establish voice readiness. Complete owner setup and qualification before listening." : "Connect Spark to inspect configured services. Model downloads alone do not establish readiness."}
+            {runtime?.voice_ready ? "Automatic listening is enabled. This development build has not completed release validation." : runtime?.connected ? "Complete owner setup and the short live voice check in People & Voice ID to enable development listening." : "Connect Spark to inspect configured services. Model downloads alone do not establish readiness."}
           </div>
           <div class="flex items-center gap-3">
-            <p class="av-hint flex-1" role="status">{probing ? "Checking connected service…" : healthError || "Speaker status is read from the paired Spark. Other lane probes are not connected."}</p>
-            <button class="av-btn av-btn-secondary av-btn-sm" disabled={!runtime?.connected || probing} onclick={refreshHealth}>Refresh status</button>
+            <p class="av-hint flex-1" role="status">{probing ? "Inspecting configured audio and reasoning services…" : healthError || "Audio and controlled reasoning metadata comes from the paired Spark. Probe reads status without running inference."}</p>
+            <button class="av-btn av-btn-secondary av-btn-sm" disabled={!native || !runtime?.connected || runtime?.locked || probing} onclick={refreshHealth}>Refresh status</button>
           </div>
           <div class="flex flex-col gap-2">
-            {#each lanes as lane, index}<div class="av-card p-3">
+            {#each laneCards as lane}<div class="av-card p-3">
                 <div class="flex items-start gap-3">
                   <div class="flex-1">
-                    <h2>{lane[0]}</h2>
-                    <p class="av-hint mt-0.5">{lane[1]}</p>
+                    <h2>{lane.title}</h2>
+                    <p class="av-hint mt-0.5">{lane.description}</p>
                   </div>
                   <span
                     class="av-chip bg-amber-400/10 text-amber-200 ring-amber-400/25"
-                    >{index === 1 ? speakerStatus : "Not probed"}</span
+                    >{lane.status}</span
                   >
                 </div>
                 <div class="mt-3 grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.4fr)_minmax(0,0.9fr)_auto] items-end gap-3">
                   <div class="flex min-w-0 flex-col gap-0.5">
                     <span class="text-[10.5px] text-zinc-400">Driver</span>
-                    <span class="truncate text-[12.5px] text-zinc-200">{index === 1 && speakerHealth ? "SpeechBrain" : "Not connected"}</span>
+                    <span class="truncate text-[12.5px] text-zinc-200">{lane.driver}</span>
                   </div>
                   <div class="flex min-w-0 flex-col gap-0.5">
                     <span class="text-[10.5px] text-zinc-400">Model · limits</span>
-                    <span class="truncate text-[12.5px] text-zinc-200" title={index === 1 ? speakerHealth?.model_revision : undefined}>{index === 1 && speakerHealth ? "ECAPA-TDNN" : "Not probed"}</span>
+                    <span class="truncate text-[12.5px] text-zinc-200" title={lane.revision}>{lane.model}</span>
                   </div>
                   <div class="flex min-w-0 flex-col gap-0.5">
                     <span class="text-[10.5px] text-zinc-400">Machine</span>
-                    <span class="truncate text-[12.5px] text-zinc-200">{index === 1 && speakerHealth ? "Paired Spark" : "Unverified"}</span>
+                    <span class="truncate text-[12.5px] text-zinc-200">{lane.machine}</span>
                   </div>
-                  <button class="av-btn av-btn-ghost av-btn-sm" disabled={index !== 1 || !runtime?.connected || probing} onclick={refreshHealth}>Probe</button>
+                  <button class="av-btn av-btn-ghost av-btn-sm" disabled={!lane.supported || !native || !runtime?.connected || runtime?.locked || probing} onclick={refreshHealth}>Probe</button>
                 </div>
-                <p class="mt-1.5 font-mono text-[10.5px] text-zinc-500">{index === 1 && speakerHealth ? `16 kHz mono · ${speakerHealth.busy ? "busy" : "idle"} · identity qualification required` : lane[2]}</p>
+                <p class="mt-1.5 break-words font-mono text-[10.5px] text-zinc-500">{lane.detail}</p>
               </div>{/each}
           </div>
         {:else if section === "profiles"}
@@ -548,7 +606,8 @@
             </p>
           </section>
           <AppCatalog {runtime} />
-          <section class="section"><span class="av-kicker">Routines</span><p class="av-hint">Routine learning is unavailable.</p></section>
+          <ActionTasks {runtime} />
+          <section class="section"><span class="av-kicker">Routines</span><p class="av-hint">Save and inspect sourced one-step routines in Memory.</p></section>
         {:else if section === "memory"}
           <div
             class="av-seg self-start"
@@ -563,38 +622,13 @@
                 onclick={() => (tab = t)}>{t}</button
               >{/each}
           </div>
-          {#if tab === "Memory"}<div class="empty">
-              <h2>No memories yet</h2>
-              <p class="av-hint">
-                Useful facts and routines will appear with their source and
-                date. Accepted history is retained until you delete it; raw
-                audio and screenshots are transient.
-              </p>
-            </div>{:else if tab === "History"}<div class="empty">
+          {#if tab === "Memory"}<PrivateMemory {runtime} />{:else if tab === "History"}<div class="empty">
               <h2>No accepted requests</h2>
               <p class="av-hint">
                 History begins after owner setup. Unknown voices are not saved
                 as conversations.
               </p>
-            </div>{:else if tab === "Performance"}<div
-              class="grid grid-cols-3 gap-3"
-            >
-              {#each ["Median", "p95", "p99"] as metric}<div
-                  class="av-card p-4"
-                >
-                  <span class="av-kicker">{metric}</span>
-                  <p class="mt-2 font-mono text-xl text-zinc-400">—</p>
-                  <p class="av-hint mt-1">No measured requests</p>
-                </div>{/each}
-            </div>
-            <div class="empty">
-              <h2>Measurements unavailable</h2>
-              <p class="av-hint">
-                Per-stage latency, queue time, errors and sample counts will
-                appear after the pipeline is connected. No performance result is
-                simulated.
-              </p>
-            </div>{:else}<div class="av-card p-4">
+            </div>{:else if tab === "Performance"}<Performance {runtime} />{:else}<div class="av-card p-4">
               <div class="row">
                 <h2>Local companion</h2>
                 <span class="av-chip text-zinc-300 ring-white/15"
@@ -609,6 +643,8 @@
               </div>
               <div class="line my-3"></div>
               <div class="row"><span>Speaker service</span><span class="text-amber-200">{speakerStatus}</span></div>
+              <div class="row"><span>Speech recognition</span><span class="text-amber-200">{laneStatus(audioHealth?.asr)}</span></div>
+              <div class="row"><span>Voice synthesis</span><span class="text-amber-200">{laneStatus(audioHealth?.tts)}</span></div>
               <p class="av-hint mt-3" role="status">{healthError || runtime?.reason || "Local runtime unavailable."}</p>
             </div>
             <p class="av-hint">

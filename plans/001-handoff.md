@@ -1,6 +1,43 @@
 # Plan 001 handoff — 2026-09-25
 
-## Current isolated plan execution — 2026-09-25
+## Latest owner priority: usable development build
+
+Latest delivery checkpoint: [development voice](../docs/evidence/development-voice-2026-09-26.md).
+The short-setup desktop was built and installed; matching ARM controller was
+built/staged. The owner requested a Spark reboot and Avesra-only background
+recovery, then requested merging current main into the feature branch and opening
+a PR. Do not push this continuation directly to main. Current recovery must prove
+the new boot, not reuse pre-reboot readiness.
+
+The owner explicitly rejected hours of recordings before they can try features.
+The large voice corpus is now release validation, separated from development
+activation based on existing enrollment, a short genuine live check, explicit
+consent and unchanged protected action grants. See the latest override in Plan001.
+Do not restore the old500-case activation gate or substitute push-to-talk.
+Full-plan completion still requires actual evidence. Spark unexpectedly restarted
+during this work; the [kernel-failure investigation](../docs/evidence/spark-restart-2026-09-25.md)
+records the observed MST/PCI failure and uncertain reboot/cable attribution.
+
+## Historical background evidence checkpoint — 2026-09-25 evening
+
+Latest matching deployment and scoped proof:
+[streaming preview correction](../docs/evidence/streaming-preview-2026-09-25.md).
+Canonical desktop SHA256 is `20BB7DA12B8DDD7E1CA9B608135D654FF3F1331FCC2FED5F99885F41109FF8D4`;
+controller SHA256 is `7b144ddf84dbd2226b68971b41c0822fc93c33922ccb642a35911dfe5cbc7ec7`.
+Default/custom previews completed through actual Settings with 397.0/407.6ms to
+first submitted speech. The isolated app is closed and its debugger listener gone.
+Source/build-ready calibration tooling was not invoked with microphone or labels.
+No new owner qualification, grants or PC effects were invented or exercised.
+
+Primary `main` and `origin/main` were published at `1704d2badf40f5521de372d162d2f420e6bdcb6c` after the owner requested commit/push. Subsequent preview, qualification, activity, reasoning and action work is dirty in `E:\Dev\Avesra`; inspect current ownership and status before copying or committing. The sibling checkout remains at that published baseline and supplies a warm build cache.
+
+Later whole-plan continuation: [qualification and diagnostics checkpoint](../docs/evidence/qualification-diagnostics-2026-09-25.md) records reviewed source and passed matching Windows/ARM builds. The corrected normal voice stream now awaits final retirement instead of cancelling its model on each endpoint. Missing measurements cannot satisfy qualification rejection quotas. A separately owned reasoning controller is being prepared because the existing Local Studio owner reports the Spark GPU as non-shared; the existing controller/source/model remain unchanged. Three idle Avesra model loads were released, so activity requires explicit reload before use. Durable qualification, schema13 memory/routines, Claude/browser semantic operations and installation work are concurrent and must be frozen/reviewed together before deployment. The current installed binaries above have not changed at this checkpoint.
+
+The owner requested real screenshots/audio/video without interrupting their computer use and asked that the method be retained. Follow [the background evidence runbook](../docs/background-evidence.md). Actual default/custom text previews completed through the production Settings UI, paired services and native mixer, with a separate Win32 desktop and deliberately silent hardware output. [The evidence record](../docs/evidence/background-preview-2026-09-25.md) contains exact source/binary identities, real faults corrected, screenshots, media and limitations. Preserve the normal saved voice, effects/music and corrected currently enumerated output endpoint. No microphone or owner qualification was performed. Only exact owned inspection processes were stopped; the owner-facing app was left closed.
+
+Plan 001 remains IN PROGRESS. These recordings do not prove automatic listening, qualified reasoning/actions, OW1-OW3 or the release soak. Later streaming/action source is outside the recorded binary and needs its own checks. The no-automated-tests instruction remains in force. Active-desktop interaction is still prohibited; the later isolated background authorization supersedes older blanket launch/inspection restrictions below only within its explicit scope.
+
+## Historical isolated plan execution — 2026-09-25 before publication
 
 The owner resumed `/improve execute 01`, required committing existing work first, and authorized subagents. All eleven existing changed/untracked files were committed on primary `main` as `de2e8c8`. New source commits `3347a48`, `4aa1fa1` and review correction `e986d76` are isolated on `codex/plan-001-completion` in `E:\Dev\Avesra-plan-001-completion`. They implement bounded speech segmentation and browser-read lifecycle ownership, and reconcile directed requests without a mandatory wake word. Voice effects, background music and the shared native renderer are preserved. Nothing was merged, pushed, deployed or launched; the canonical user executable was not replaced.
 

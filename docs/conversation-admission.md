@@ -1,5 +1,38 @@
 # Durable accepted conversation and planner admission
 
+## Typed planner proposal handoff
+
+Planner wire version 2 distinguishes an answer, clarification text and one typed
+application-launch or absolute speaker-volume proposal. A proposal contains only
+an alias or bounded percentage; it cannot choose native identities, grants,
+paths, commands or approvals. On the original ledger worker, finalization resolves
+the alias against the actor's current catalog and the exact existing permission.
+It independently parses the whole accepted request using a closed grammar:
+open/launch/start plus one exact alias, or set [the] [speaker/speakers/system/output]
+volume to an integer followed by percent or %. One optional Avesra address,
+can/could/would-you prefix, please prefix/suffix and final period/question mark
+are allowed. The proposed operation and exact alias/percentage must equal that
+native interpretation. Negated, compound and unrecognized requests stay
+needs-input; a model suggestion and grant alone never establish intent.
+The correlated reply, frozen action/intent/source linkage and task are committed
+in one transaction, after current registration/session/cancellation checks. A
+proposal with no unique current target and grant records `waiting_input`, never
+an answer, success or another planner attempt. Supported proposals remain ordinary
+policy-checked actions; proposing launch cannot fill or submit an application.
+
+The native coordinator retains the original published reply while the linked
+effect is owned. Its original caller, planner and effect share one withdrawal
+signal. The final precommit callback uses the original planner deadline; linking
+does not reconstruct an accepted-turn handle or renew planning authority. Actual
+dispatch caps the action deadline to the original remaining planner budget and
+retains the observed-result contract. Expiry withdraws queued/precommit work;
+already committed effects still require their actual observed result.
+History can inspect strictly decoded version-1 answer/clarification records, but
+cannot recreate a claim, publish a reply or dispatch a proposal from them. Wire
+requests and new durable plans use only version 2.
+
+C3's first-action coordinator now precedes planner claiming: the same opaque accepted turn is offered once to a bounded native exact app/absolute-volume resolver under existing explicit ledger grants. A linked result runs through the existing dispatch owner; an unresolved result transfers that original handle to C2. It never accepts frontend text or model-supplied payloads. See `native-actions.md` for typed target provenance, protected permission management, actor-filtered status and cancellation. Typed model action proposals now use the original planner completion transaction described above; a qualified live accepted-turn producer remains a separate prerequisite.
+
 The current TurnGate can only abstain because no qualified runtime profile is available. Its opaque AcceptedConversation/Conversation types nevertheless define the input boundary for this implementation slice. Neither selected enrollment metadata, an ASR transcript, a model confidence value, a Settings permission record nor a browser result may construct accepted authority. This work adds product code, not a qualification report importer, evaluation runner or alternate manual acceptance path.
 
 ## Linearization and ownership
@@ -76,7 +109,7 @@ This is native product code and a dormant first producer, not a model planner or
 
 ## Source checkpoint: schema 6 and linked cancellation
 
-`AppTaskRequest` consumes a DurableTurn and starts its five-second monotonic processing budget before the native queue. The exact resolver reads and cross-checks indexed source provenance, matches the whole supported grammar, resolves the actor-owned immutable alias, and checks an existing ledger grant before the single sealed-plan transaction. Unsupported grammar or an unresolved alias returns native NeedsInput with the original opaque turn retained for an explicit future consumer; it cannot be serialized back into authority. A successful return is queued-task metadata, not permission to skip dispatch checks. No actual producer caller or qualified runtime adapter is wired yet.
+`ExactTaskRequest` (originally the app-only request) consumes a DurableTurn and starts its five-second monotonic processing budget before the native queue. The exact resolver reads and cross-checks indexed source provenance, matches the whole supported grammar, resolves the actor-owned immutable alias, and checks an existing ledger grant before the single sealed-plan transaction. Unsupported grammar or an unresolved alias returns native NeedsInput with the original opaque turn retained for an explicit future consumer; it cannot be serialized back into authority. A successful return is queued-task metadata, not permission to skip dispatch checks. The C3 native coordinator now consumes this result before planner claiming; its qualified live accepted-turn producer remains absent.
 
 Schema 6 creates a unique turn/task linkage table with exact SQL, indexes and no unexpected attached objects. The stored link freezes exact Action plus alias and app revisions. Both claim_action and validate_dispatch compare that exact Action and accepted actor/device/session/frozen capture/action provenance. Existing non-linked management APIs retain their previous trusted-native boundary; absence of a link is not a speech acceptance constructor. Recovery preserves linkage, and original outcomes continue to come only from native execution finalization.
 

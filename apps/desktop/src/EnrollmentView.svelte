@@ -6,7 +6,7 @@
   import { ensureManagementVerification } from "./setup";
   import { latestRead } from "./latest-read";
   import { readSpeakerStore, type SpeakerCandidate as Candidate } from "./speaker-profiles";
-  import { automaticVoiceLimitation, type RegistrationView } from "./owner-setup";
+  import { type RegistrationView } from "./owner-setup";
   let { runtime, navigate, control }: { runtime: Runtime | null; navigate: (section: string, target?: string) => void; control: (value: string) => Promise<void> } = $props();
   type Status = { enrollment: string; completed_segments: number; next_segment: string | null; reason: string };
   let status = $state<Status | null>(null);
@@ -155,12 +155,12 @@
 </script>
 <section class="section">
   {#if runtime?.enrolled && runtime.voice_ready}
-    <div class="av-card flex flex-col gap-2 p-3.5"><h2 class="text-[14px] font-medium">Owner voice is ready</h2><p class="av-hint">Your owner setup is complete. Local mute, deafen and pause controls still apply.</p></div>
+    <div class="av-card flex flex-col gap-2 p-3.5"><h2 class="text-[14px] font-medium">Automatic listening is enabled</h2><p class="av-hint">Local mute, deafen and pause controls still apply. Development permission does not establish release-validated speaker, replay or overlap reliability.</p></div>
   {:else}
     <div class="flex flex-col gap-2 border border-amber-400/25 bg-amber-400/[0.04] p-3.5" role="status">
-      <h2 class="text-[14px] font-medium text-amber-200">{allSaved ? "Your owner and voice are saved. Automatic listening isn't ready yet." : "Automatic listening isn't implemented yet"}</h2>
-      <p class="text-[12.5px] leading-relaxed text-zinc-200">{automaticVoiceLimitation}</p>
-      <p class="av-hint">{allSaved ? "You've finished the available setup steps. Keep your saved voice; no more recording or Windows verification is needed now." : savedVoice ? "Your six voice phrases are already saved. Only incomplete steps below need your attention." : "You can save your setup below while this feature is being built. Windows verification appears automatically when a step needs it."}</p>
+      <h2 class="text-[14px] font-medium text-amber-200">{allSaved ? "Your saved voice is ready for a live check" : "Set up automatic voice interaction"}</h2>
+      <p class="text-[12.5px] leading-relaxed text-zinc-200">Use six saved phrases and one genuine eight-second check to enable development listening with your permission. Full release validation is optional for your own testing.</p>
+      <p class="av-hint">{allSaved ? "Keep your saved recordings. Continue with the short check below." : savedVoice ? "Your six voice phrases are already saved. Complete the remaining owner and Spark setup, then use the short check." : "Save your owner setup and voice below. Windows verification appears when a protected step needs it."}</p>
     </div>
   {/if}
 
@@ -203,12 +203,11 @@
   {/if}
 
   {#if savedVoice}
-    <details class="av-card p-3.5">
-      <summary class="cursor-pointer text-[12.5px] font-medium">Optional: check your microphone and transcription</summary>
-      <p class="av-hint mt-3">Use this only to troubleshoot what Avesra hears. It is not required to save your owner setup and will not unlock automatic listening.</p>
+    <div class="av-card p-3.5">
+      <h2 class="text-[12.5px] font-medium">04 · Live check and listening permission</h2>
       {#if enrollmentBlock}<p class="av-hint mt-2 text-amber-200">{enrollmentBlock}</p><button class="av-btn av-btn-secondary av-btn-sm mt-2" disabled={acting} onclick={restoreAudio}>{audioAction?.label ?? "Open audio settings"}</button>{/if}
-      <VoiceCheck id={savedVoice.id} revision={savedVoice.revision} {runtime} blocked={acting || !!status || !!enrollmentBlock} onbusy={value => busy = value} />
-    </details>
+      <VoiceCheck id={savedVoice.id} revision={savedVoice.revision} {runtime} blocked={acting || !!status || !!enrollmentBlock || !ownerComplete || registration.state !== "registered"} onbusy={value => busy = value} />
+    </div>
   {/if}
   <details class="av-card p-3.5">
     <summary class="cursor-pointer text-[12.5px] font-medium">Manage saved voice · advanced</summary>
@@ -218,7 +217,7 @@
     {#each candidates as candidate, i (candidate.revision)}
       <div class="flex flex-col gap-2 border-t border-white/10 py-3">
         <span class="text-[12.5px] font-medium">Saved voice {i + 1} · {candidate.segments === 6 ? "6 phrases" : "Could not read"}{candidate.state === "selected_quality_unqualified" ? " · selected" : ""}</span>
-        <p class="av-hint">Selecting a voice stores your preference for future recognition. Automatic listening remains unavailable in this build.</p>
+        <p class="av-hint">Selecting a voice stores your recognition preference. Use the live check and listening-permission step to activate it.</p>
         {#if candidate.read_error}<p class="av-hint text-amber-200">{candidate.read_error}. The saved file has not been changed.</p>{/if}
         <div class="flex flex-wrap gap-2"><button class="av-btn av-btn-secondary av-btn-sm" disabled={acting || candidate.state !== "candidate_quality_unqualified"} onclick={() => select(candidate)}>Select this saved voice</button><button class="av-btn av-btn-ghost av-btn-sm" disabled={acting} onclick={() => remove(candidate)}>Delete saved voice…</button></div>
       </div>

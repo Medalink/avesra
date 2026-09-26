@@ -25,6 +25,15 @@
   let operation = 0;
   let publication = 0;
   const referenceText = "Hello I am Avesra, A Very Effective Smart Reasoning Assistant. I am designed to help you manage your thoughts and ideas.";
+  let testText = $state(referenceText);
+  const testBytes = $derived(new TextEncoder().encode(testText).length);
+  const testTextError = $derived(!testText.trim() ? "Enter something for Avesra to say." : testBytes > 512 ? "Shorten the text to 512 bytes or fewer." : /[\p{Cc}\p{Cs}]/u.test(testText.replace(/[\n\t]/g, "")) ? "Remove unsupported control characters from the text." : "");
+  function sameVoice(a: Identity | null | undefined, b: Identity | null | undefined) {
+    return !!a && !!b && a.id === b.id && a.revision === b.revision && a.audio_sha256 === b.audio_sha256 && a.metadata_sha256 === b.metadata_sha256;
+  }
+  const testVoiceReady = $derived(status?.selection_state === "available" && status.active_state === "available"
+    && sameVoice(status.selected, status.active_voice)
+    && status.candidates.some(c => c.state === "available" && sameVoice(c.identity, status?.selected)));
   const selected = $derived(status?.candidates.find(c => c.identity?.id === status?.selected?.id && c.identity?.revision === status?.selected?.revision) ?? null);
   const shown = $derived(candidate ?? selected);
   const available = $derived(native && !!panel && !!runtime?.connected && !runtime?.locked);
@@ -124,6 +133,17 @@
     catch (e) { if (mounted && token === operation && visible === publication) error = String(e); }
     finally { if (mounted && token === operation) { busy = ""; repeating = false; } }
   }
+  async function playText() {
+    if (!available || busy || playbackBlock || !testVoiceReady || !status?.selected || testTextError) return;
+    const voice = { ...status.selected }; const text = testText;
+    const token = ++operation; const visible = publication; busy = "test"; error = ""; note = "";
+    try {
+      const result = await command<string>("preview_voice", { panel, voice, text });
+      if (mounted && token === operation && visible === publication) note = result;
+    }
+    catch (e) { if (mounted && token === operation && visible === publication) error = String(e); }
+    finally { if (mounted && token === operation) busy = ""; }
+  }
   async function openPanel() {
     if (!native || busy || panel) return;
     busy = "opening"; error = "";
@@ -159,6 +179,19 @@
     <button type="button" class={`av-btn av-btn-sm ${repeating ? "av-btn-primary" : "av-btn-secondary"}`} disabled={!repeating && (!available || !!busy || !shown?.identity || !!playbackBlock)} onclick={() => { if (repeating) repeating = false; else void preview(true); }}>{repeating ? "Stop repeating" : "Repeat preview"}</button>
     <span class="av-hint">{repeating ? "Tune below while it repeats. Stop finishes this take." : "Reuses this saved take. No voice regeneration."}</span>
   </div>
+  <div class="av-card flex flex-col gap-2.5 p-3.5">
+    <label class="av-label" for="voice-test-text">Test selected voice</label>
+    <textarea id="voice-test-text" rows="3" maxlength="512" class={`av-input av-textarea resize-none${testTextError ? " av-invalid" : ""}`} bind:value={testText} disabled={!!busy} aria-invalid={!!testTextError} aria-describedby="voice-test-help voice-test-count"></textarea>
+    <div class="flex items-center justify-between gap-3">
+      <span id="voice-test-help" class={`text-[11.5px] leading-4 ${testTextError ? "text-red-400" : "text-zinc-400"}`}>{testTextError || "Uses your selected voice with its effects and atmosphere. Doesn’t change your saved voice."}</span>
+      <span id="voice-test-count" class={`shrink-0 font-mono text-[10.5px] ${testBytes > 512 ? "text-red-400" : "text-zinc-400"}`}>{testBytes} / 512 bytes</span>
+    </div>
+    <div class="flex flex-wrap items-center gap-2">
+      <span class="av-hint flex-1">{!testVoiceReady ? "Select an available voice and refresh status to test it." : playbackBlock}</span>
+      <button type="button" class="av-btn av-btn-ghost av-btn-sm" disabled={!!busy} onclick={() => { testText = referenceText; }}>Use default</button>
+      <button type="button" class="av-btn av-btn-secondary av-btn-sm" disabled={!available || !!busy || !!playbackBlock || !testVoiceReady || !!testTextError} onclick={playText}>{busy === "test" ? "Synthesizing and playing…" : "Play text"}</button>
+    </div>
+  </div>
   {#if previewText}<div class={`flex h-11 items-center gap-3 px-3 ring-1 ring-inset transition-colors ${busy === "preview" ? "bg-red-500/[0.06] ring-red-500/30" : "bg-black/20 ring-white/[0.06]"}`}><span class="min-w-0 flex-1 truncate text-[12px] leading-[17px] text-zinc-300" title={previewText}>“{previewText}”</span><span class="shrink-0 font-mono text-[10.5px] text-zinc-400">{busy === "preview" ? "Reference preview" : "Generated reference"}</span></div>{/if}
   {#if designerOpen}
     <div class="av-rise av-card flex flex-col gap-2.5 p-3.5">
@@ -183,10 +216,10 @@
       </div>
     </div>
   {/if}
-  {#if busy === "generate" || busy === "preview"}
+  {#if busy === "generate" || busy === "preview" || busy === "test"}
     <div class="flex items-center gap-3 border border-rose-500/30 bg-rose-500/5 p-3" role="status" aria-live="polite">
       <span class="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-rose-400/30 border-t-rose-400 motion-reduce:animate-none" aria-hidden="true"></span>
-      <span class="av-hint">{busy === "generate" ? "Generating your voice… It will play automatically when ready." : "Playing preview… Your selected voice stays unchanged."}</span>
+      <span class="av-hint">{busy === "generate" ? "Generating your voice… It will play automatically when ready." : busy === "test" ? "Synthesizing and playing your test text…" : "Playing preview… Your selected voice stays unchanged."}</span>
     </div>
   {/if}
   {#if shown?.identity && playbackBlock}<p class="av-hint text-amber-200">{playbackBlock}</p>{/if}

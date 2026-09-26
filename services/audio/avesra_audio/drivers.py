@@ -4,6 +4,7 @@ import math
 from pathlib import Path
 
 REVISIONS = {
+    "activity": "cd03eee90fbec18297ac31b8c21546e596b7f71c",
     "speaker": "0f99f2d0ebe89ac095bcc5903c4dd8f72b367286",
     "asr": "ebe59e5a817142986528bbbee5dba8db7b38ed50",
     "tts": "5d83992436eae1d760afd27aff78a71d676296fc",
@@ -61,7 +62,10 @@ class Driver:
         torch.set_num_threads(2)
         if not torch.cuda.is_available():
             raise ValueError("spark_gpu_unavailable")
-        if self.lane == "speaker":
+        if self.lane == "activity":
+            from .activity import load
+            self.model = load(model_path)
+        elif self.lane == "speaker":
             from speechbrain.inference.speaker import EncoderClassifier
 
             self.model = EncoderClassifier.from_hparams(
@@ -179,7 +183,7 @@ class Driver:
             if self.stream is not None:
                 raise ValueError("stream_active")
             return self.infer(envelope["payload"])
-        if self.lane != "asr":
+        if self.lane not in {"asr", "activity"}:
             raise ValueError("streaming_unsupported")
         from .streaming_asr import StreamingAsr
         import numpy as np
@@ -195,7 +199,11 @@ class Driver:
         if envelope["first"]:
             if self.stream is not None:
                 raise ValueError("stream_active")
-            self.stream = StreamingAsr(self.model, self.torch, envelope["deadline"])
+            if self.lane == "activity":
+                from .streaming_activity import StreamingActivity
+                self.stream = StreamingActivity(self.model, self.torch, envelope["deadline"])
+            else:
+                self.stream = StreamingAsr(self.model, self.torch, envelope["deadline"])
         if self.stream is None:
             raise ValueError("stream_missing")
         try:
@@ -207,6 +215,11 @@ class Driver:
 
     def infer(self, payload):
         with self.torch.inference_mode():
+            if self.lane == "activity":
+                if set(payload) != {"pcm_s16le"}:
+                    raise ValueError("invalid_arguments")
+                from .activity import measure
+                return measure(self.model, self.torch, pcm(payload["pcm_s16le"]))
             if self.lane == "speaker":
                 if set(payload) != {"pcm_s16le"}:
                     raise ValueError("invalid_arguments")

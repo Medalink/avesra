@@ -18,9 +18,16 @@ The owner must be able to speak these requests and see Avesra complete them on t
 
 These are mandatory live end-to-end outcomes. A model server, overlay, passing unit tests, mocked app, or dispatched click is not proof of completion. See `owner-workflows` and acceptance cases A24–A26 in Plan 001.
 
-Handoff and next-step boundaries: [Plan 001 handoff](001-handoff.md). The owner resumed implementation on 2026-09-25 with a focus on real UI and screenshots; see [native UI evidence](../docs/evidence/companion-ui.md). The recorded restriction prohibits Computer Use; any permitted hidden native inspection must follow the handoff, including canonical physical-store verification. Full assistant qualification remains incomplete.
+Handoff and next-step boundaries: [Plan 001 handoff](001-handoff.md). The owner resumed implementation on 2026-09-25 with a focus on real UI and screenshots. Later that day the owner explicitly authorized obtaining media without interruption. Follow the [background evidence procedure](../docs/background-evidence.md), including canonical physical-store verification, a non-input desktop and silent native output. The [actual default/custom preview recordings](../docs/evidence/background-preview-2026-09-25.md) prove that scoped path. Full assistant qualification remains incomplete.
 
 ## Execution order
+
+Latest owner priority: ship working development features promptly for the owner's
+own testing. The large voice corpus remains release validation and must no longer
+block initial use for hours. Follow the explicit development-admission override
+in [Plan001](001-single-spark-assistant.md#later-owner-override-ship-development-features-for-owner-testing).
+Saved enrollment plus a short genuine live check, explicit listening consent and
+existing action grants remain required; do not claim completed release evidence.
 
 | Plan | Outcome | Priority | Effort | Dependencies | Status |
 | --- | --- | --- | --- | --- | --- |
@@ -33,26 +40,30 @@ Read the entire plan before implementation. Execute the remaining slices in [sec
 
 ## Current completion order — 2026-09-25
 
-The planning refresh was followed by isolated execution from the owner's requested baseline commit `de2e8c8`. Current source is on `codex/plan-001-completion` in `E:\Dev\Avesra-plan-001-completion`; it has not been merged, pushed or deployed. The [execution review](001-execution-2026-09-25.md) separates source/static/build evidence from pending live acceptance and records preservation of the existing voice effects/background music.
+The planning refresh was followed by isolated execution from the owner's requested baseline commit `de2e8c8`. That checkpoint was subsequently fast-forwarded and pushed to `origin/main` at `1704d2badf40f5521de372d162d2f420e6bdcb6c`. Current follow-up work is uncommitted in the primary `E:\Dev\Avesra` checkout; the sibling worktree is retained for its build cache. The [execution review](001-execution-2026-09-25.md) records the historical source checks. The newer [background preview evidence](../docs/evidence/background-preview-2026-09-25.md) identifies its exact frozen dirty-source archive, deployed binaries, actual native UI/audio/video results and preservation of effects/background music. Source written after that archive is not covered by those recordings.
+
+The preview checkpoint corrected hard-coded model status and a stale saved output endpoint. Both default and typed text completed through the actual Settings controls and native mixer on a separate desktop, with physical output deliberately silenced. Native qualification tooling, activity streaming and action integration remain work in progress; none closes C1, C2, C3, OW1-OW3 or overall acceptance.
+
+The later [streaming preview correction and fresh media](../docs/evidence/streaming-preview-2026-09-25.md) also removed an observed full-utterance buffer: actual default/custom first submitted speech was 397.0/407.6ms versus 6,816.3ms in the preceding default run. These individual native observations do not establish release percentiles or full assistant readiness. The procedure is retained for future direct proof; never substitute a build or private service response for that proof.
 
 | Slice | Required outcome | Dependencies | Current boundary |
 | --- | --- | --- | --- |
-| C0 | Reconcile live source/worktree ownership, normal-user store and verification baseline | — | Source/worktree ownership and immutable Windows/ARM baseline checks complete; prior normal-user store evidence retained without runtime access |
-| C1 | Qualified owner recognition, continuous endpointing and directed intent without a mandatory wake word | C0 | Request/follow-up contract reconciled; activation BLOCKED on calibrated native qualification owner and measured adapters; native producer still abstains |
-| C2 | Qualified local reasoning and one real accepted spoken response | C0; C1 for activation | Bounded reply segmentation implemented; activation BLOCKED on immutable loaded-artifact/route/context/terminal qualification; startup still has no reasoning capability |
-| C3 | Accepted app/volume actions with observed effects | C1, C2 | Native adapters exist; full qualified ingress pending |
+| C0 | Reconcile live source/worktree ownership, normal-user store and verification baseline | — | Source/worktree ownership and immutable Windows/ARM baseline checks complete; later background runs directly verified the physical normal-user store |
+| C1 | Qualified owner recognition, continuous endpointing and directed intent without a mandatory wake word | C0 | Native calibration measurement tooling and optional batch/activity-streaming adapters implemented; generated-input observations do not qualify the owner, endpointing or directness. Activation still incomplete; native producer abstains |
+| C2 | Qualified local reasoning and one real accepted spoken response | C0; C1 for activation | Bounded reply segmentation and controlled engine adapter implemented. Startup is configuration-gated; no qualified deployment configuration or accepted spoken-response proof exists |
+| C3 | Accepted app/volume actions with observed effects | C1, C2 | Exact app/volume coordinator, protected permissions and durable task projection integrated. Schema migration and empty read view observed; qualified ingress, typed model proposals/clarification and real effects remain unproven |
 | C4 | Owned browser publication, content, cleanup and settlement | C0; C1-C3 for live admission | Source lifecycle integrated through `e986d76`; qualified task producer and concrete C5 consumer absent, so no live admission/read proof |
 | C5 | Claude/IRIS exact draft, latest ten emails and X ready state | C3, C4 | Required OW1-OW3 proof remains absent |
 | C6 | Sourced learning/history, routines and event-grounded chimes | C3, C4; C5 for supported workflow reuse | Remaining integration and direct proof |
 | C7 | Bounded diagnostics and actual configured VPN | C3, C6 | Exact VPN surface and live proof pending |
-| C8 | Profiles, packaging/recovery and complete per-stage metrics | Instrument C1-C7 as built; finalize after C7 | Existing partial capabilities do not satisfy release gates |
+| C8 | Profiles, packaging/recovery and complete per-stage metrics | Instrument C1-C7 as built; finalize after C7 | Bounded process-local preview/activity instrumentation implemented; actual preview measurements exposed the pre-ready buffering delay. Full tracing/profiles/recovery/release gates remain incomplete |
 | C9 | Revision-matched A01-A29 evidence and eight-hour soak | C1-C8 | Release incomplete until all required direct gates pass |
 
 C2/C4 source can proceed while C1 live qualification is pending, but activation cannot bypass it. C6 follows C5 in the recommended execution order. The owner's no-automated-tests override is reflected in the current command table and done criteria: use build/static checks and direct observations; do not implement an acceptance runner or report verifier. Old checkpoints below preserve history and must not override this current sequence.
 
 Historical execution instructions, 2026-09-24: the owner requested `/improve execute 001`, emphasized matching the approved designs, and then instructed "no tests here either, just specs and code!" The plan records this override: no automated tests or test harnesses; use build/static checks and direct inspection, and report unverified live behavior explicitly. That execution used `C:\Users\medal\.codex\worktrees\avesra-plan-001\Avesra`; rediscover current worktrees rather than assuming it still exists.
 
-The owner subsequently prohibited Computer Use until they explicitly finish gaming. Background source/spec work continues; native/browser interaction and further visual inspection are deferred. A general "continue" does not lift that restriction.
+The owner prohibited Computer Use while gaming, then explicitly authorized noninterrupting background media proof. Active-desktop input, foreground automation and ambient screen/audio capture remain prohibited. Only isolated application inspection following the runbook is permitted; a general "continue" does not expand that scope.
 
 ## Historical milestone checkpoints
 
