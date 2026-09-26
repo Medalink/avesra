@@ -454,13 +454,15 @@
           {#if draft.changes.speaker}<p class="av-hint text-amber-200">Voice previews currently use {actualSpeaker}; Save changes to switch.</p>{/if}
           <div id="voice-designer"><VoiceDesigner {runtime} /></div>
           <VoiceAtmosphere {runtime} />
-          <section class="section">
+          <section class="flex flex-col gap-2">
             <span class="av-kicker">Learning & action chimes</span
-            >{#each [["learning_chime", "Learning chime", "After a useful memory is committed."], ["action_chime", "Action chime", "After an action outcome is verified."]] as item}<div
-                class="row"
+            >
+            <div class="av-card flex flex-col divide-y divide-white/[0.06]">
+            {#each [["learning_chime", "Learning chime", "After a useful memory is committed."], ["action_chime", "Action chime", "After an action outcome is verified."]] as item}<div
+                class="flex items-center gap-3 px-3.5 py-2.5"
               >
-                <div>
-                  <h2>{item[1]}</h2>
+                <div class="flex min-w-0 flex-1 flex-col">
+                  <span class="text-[12.5px] text-zinc-100">{item[1]}</span>
                   <p class="av-hint">{item[2]}</p>
                 </div>
                 <button
@@ -509,6 +511,7 @@
               >
             </div>
             {/each}
+            </div>
             <p class="av-hint">
               Only committed events can sound. Learning batches coalesce at most once per minute; active speech, recording, pause and Deafen take precedence.
             </p>
