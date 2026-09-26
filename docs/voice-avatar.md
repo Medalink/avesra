@@ -19,9 +19,10 @@ The first available real representation is frozen into one actor-bound avatar
 record. Candidate ID/revision and a SHA-256 source digest, or Personal voice ID
 and its actual observation-snapshot digest, identify that source privately.
 Personal learning after this point does not redraw the avatar. A changed selected
-source is reported explicitly; it is not silently substituted. A later explicit
-portrait/redraw operation will replace the immutable record, keeping its actor
-ring. Owner revision changes fail closed and never transfer an old record.
+source is reported explicitly; it is not silently substituted. The explicit
+prepare/confirm redraw operation below can replace that same actor's immutable
+record, keeping its ring. Owner revision changes fail closed on ordinary reads;
+redraw requires the actual current owner-bound source and a fresh management proof.
 
 The webview receives only version 1, 24 six-bit shape values, 20 optional petal
 slots, a 16-digit lowercase hexadecimal ring, integer rotation in 1/256 turns,
@@ -97,8 +98,8 @@ removal; an owner revision mismatch already blocks reading prior parameters.
 | Personal learning/startup | unchanged; no new key, portrait, capture or enrollment prerequisite |
 | avatar storage and derivation | bounded native-only keyed inputs, integer public parameters, retained owner and original deadline |
 
-Portrait capture/DSP, redraw UI, other-person management, live matching animation
-and runtime repeatability evidence follow this foundation; empty slots are honest
+Portrait capture/DSP, other-person management, live matching animation
+and runtime repeatability evidence remain incomplete; empty slots are honest
 absence, not completion. Verification follows the owner's no-tests override:
 source review, static checks/builds when released, then separately authorized real
 app observations. No test fixtures, imported evidence or generated voice identity.
@@ -181,3 +182,53 @@ reads resume only after ordinary visibility/focus. A capture-only epoch transiti
 clears avatar presentation but retains the actual diagnostic component/source
 through its own recording. Owner/action/device/lock/hide transitions still retire
 that diagnostic. Owner-name editing remains inside advanced tools.
+
+## Explicit same-actor redraw
+
+Redraw is an optional visual-only operation. It never selects a speaker candidate,
+changes Personal admission, opens audio, or advances audio/action epochs. It uses
+the current actual owner-bound Personal source, including a changed selected
+candidate only when that Personal record really binds it. An existing validated
+same-actor ring/key registry is required; missing keys are never regenerated.
+The version-one 24-value shape and approved 192-point display stay unchanged as
+formats. No petals, tempo, live match, or lexical evidence is introduced.
+
+`prepare_voice_avatar_redraw()` consumes the existing Windows Hello management
+proof in visible Settings. It returns `{version:1,ticket,remaining_ms,preview}`;
+preview is an ordinary strictly decoded VoiceAvatar but is pending, not saved.
+One native ticket retains the original proof, owner/control/session context,
+exact source digest, previous actor-record digest and actual proposed parameters.
+Confirmation expires at the earlier of the original 60-second proof and 30 seconds
+from preparation start. Each file operation also has its own original 12-second
+budget. Neither a response, confirmation nor retry renews these clocks.
+
+`confirm_voice_avatar_redraw({ticket})` consumes that ticket once. The actual
+blocking owner retains owner-management admission through source reread, protected
+staging and publication, even after caller withdrawal. It requires the identical
+current owner/source and previous record, holds candidate/avatar file locks, then
+rechecks current native proof/context under Runtime.local across the atomic rename.
+The actor ring/counter/rotation are preserved. Learning or source changes between
+preparation and confirmation refuse the stale proposal; prepare again explicitly.
+The protected replacement uses the existing bounded vault and temporary-file
+sync rules. A lost reply after rename is an uncertain presentation outcome: read
+actual saved state before proposing again, never blindly repeat confirmation.
+
+`cancel_voice_avatar_redraw({ticket})` withdraws only that Settings ticket. Hide,
+lock and management/context invalidation also withdraw it; expired or abandoned
+tickets cannot block a later fresh preparation. No timer is a grant, and no
+frontend actor/vector/source/parameter input is accepted. Preparation publishes
+only while the original caller is still current. Confirmation never recreates a
+removed actor registry or changes another actor's record.
+
+Affected entry points are these three commands, Setup invalidation, and the native
+avatar prepare/replace helpers. Existing avatar reading/initial creation, source
+selection/deletion and Personal startup remain unchanged. Optional acoustic
+capture and additional-person management remain outside this slice. Native phase
+timing is integrated separately with the shared content-free observer; parameters,
+digests, tickets and biometric sources are never timing attributes.
+
+Manual proof remains unrun: with a genuine saved source and explicit owner Hello,
+inspect pending preview, cancel without publication, save, and reopen/restart to
+compare saved integer parameters. Also withdraw via hide/lock and change source
+between prepare/confirm; stale publication must fail. This source work does not
+access private stores or run capture, automated tests, fixtures or harnesses.

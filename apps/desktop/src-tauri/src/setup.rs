@@ -1,4 +1,6 @@
 //! Local management proof stays native and never grants voice/action authority.
+#[path = "avatar_redraw.rs"]
+pub(crate) mod redraw;
 use crate::Runtime;
 use serde::Serialize;
 use std::{
@@ -47,6 +49,7 @@ impl ManagementProof {
 }
 #[derive(Default)]
 pub struct Setup {
+    redraw: redraw::State,
     pub(crate) recording: tokio::sync::Mutex<()>,
     enrollment: Mutex<Option<avesra_core::enrollment::Enrollment>>,
     context: Mutex<Option<(u64, u64)>>,
@@ -102,6 +105,7 @@ impl Setup {
         }
     }
     pub fn invalidate(&self) {
+        self.redraw.invalidate();
         self.generation.fetch_add(1, Ordering::SeqCst);
         if let Ok(mut proof) = self.proof.lock() {
             *proof = None;
