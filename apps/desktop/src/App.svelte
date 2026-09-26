@@ -4,7 +4,6 @@
   import { listen } from "@tauri-apps/api/event";
   import {
     getCurrentWindow,
-    Window,
     LogicalSize,
   } from "@tauri-apps/api/window";
   import SettingsView from "./SettingsView.svelte";
@@ -21,7 +20,6 @@
     native,
     type Runtime,
     type AudioDevice,
-    type Settings,
   } from "./runtime";
   let runtime = $state<Runtime | null>(null);
   let devices = $state<AudioDevice[]>([]);
@@ -42,7 +40,6 @@
   }
   let error = $state("");
   let notice = $state("");
-  let saving = $state(false);
 
   let expanded = $state(false);
 
@@ -60,34 +57,14 @@
       error = String(e);
     }
   }
-  async function update(patch: Partial<Settings>) {
-    if (!s || saving) return;
-    saving = true;
-    error = "";
-    notice = "";
-    try {
-      acceptSnapshot(
-        await command<Runtime>("save_settings", {
-          settings: { ...s, ...patch },
-        }),
-      );
-      notice = "Preferences saved on this PC.";
-    } catch (e) {
-      error = String(e);
-    } finally {
-      saving = false;
-    }
-  }
   async function hide() {
     if (native) {
-      await command("hide_window");
+      try { await command("hide_window"); } catch (e) { error = String(e); }
     }
   }
   async function showSettings() {
     if (native) {
-      const w = await Window.getByLabel("settings");
-      await w?.show();
-      await w?.setFocus();
+      try { await command("show_settings"); } catch (e) { error = String(e); }
     }
   }
   // Both webviews are zoomed natively to the interface size; the overlay window
@@ -235,9 +212,8 @@
     {refreshDevices}
     {error}
     {notice}
-    {saving}
     {control}
-    {update}
+    accept={acceptSnapshot}
     {hide}
     {drag}
   />{:else}<Overlay
