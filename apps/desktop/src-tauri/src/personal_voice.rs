@@ -20,6 +20,47 @@ use tauri::{Emitter, Manager};
 use uuid::Uuid;
 const ASR: &str = "ebe59e5a817142986528bbbee5dba8db7b38ed50";
 const SPEAKER: &str = "0f99f2d0ebe89ac095bcc5903c4dd8f72b367286";
+const PERSONAL_INTENT: &str = "personal-native-conversation-v1";
+
+pub enum StartError {
+    Waiting(&'static str),
+    Blocked(String),
+    RegistrationUncertain,
+}
+impl StartError {
+    pub fn retryable(&self) -> bool {
+        matches!(self, Self::Waiting(_))
+    }
+}
+impl From<String> for StartError {
+    fn from(value: String) -> Self {
+        Self::Blocked(value)
+    }
+}
+impl From<&str> for StartError {
+    fn from(value: &str) -> Self {
+        Self::Blocked(value.into())
+    }
+}
+impl From<crate::connection::VoicePreparationError> for StartError {
+    fn from(value: crate::connection::VoicePreparationError) -> Self {
+        match value {
+            crate::connection::VoicePreparationError::Waiting(value) => Self::Waiting(value),
+            crate::connection::VoicePreparationError::Blocked(value) => Self::Blocked(value),
+        }
+    }
+}
+impl std::fmt::Display for StartError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Waiting(value) => write!(f, "Waiting for voice preparation: {value}"),
+            Self::Blocked(value) => write!(f, "Voice preparation blocked: {value}"),
+            Self::RegistrationUncertain => f.write_str(
+                "Owner registration result uncertain; reconnect to reconcile its actual status",
+            ),
+        }
+    }
+}
 
 #[derive(Clone)]
 struct Start {
@@ -62,7 +103,7 @@ impl Start {
         &self,
         pairing: &PairingRecord,
         request: &actors::Request,
-    ) -> Result<actors::Reply, String> {
+    ) -> Result<actors::Reply, StartError> {
         self.check()?;
         let future = crate::connection::actor_operation(pairing, request);
         tokio::pin!(future);
@@ -84,25 +125,31 @@ impl Start {
             )
             .await;
             return Err(
-                "Owner registration result uncertain; reconnect to reconcile its actual status"
-                    .into(),
+                if matches!(request.command, actors::Command::Register { .. }) {
+                    StartError::RegistrationUncertain
+                } else {
+                    StartError::Blocked(
+                        "Owner registration status was not confirmed; reconnect to reconcile it"
+                            .into(),
+                    )
+                },
             );
         }
-        result
+        result.map_err(StartError::Blocked)
     }
 }
 pub async fn start_personal(
     app: &tauri::AppHandle,
     pairing: PairingRecord,
     session: SessionIdentity,
-) -> Result<bool, String> {
+) -> Result<bool, StartError> {
     let state = app.state::<Runtime>();
     let mutation = state
         .qualification
         .1
         .clone()
         .try_lock_owned()
-        .map_err(|_| "Voice management is busy")?;
+        .map_err(|_| StartError::Waiting("Voice management is busy"))?;
     if !state.qualification.can_restore() {
         return Ok(false);
     }
@@ -110,7 +157,7 @@ pub async fn start_personal(
         .owner_setup
         .clone()
         .try_lock_owned()
-        .map_err(|_| "Owner management is busy")?;
+        .map_err(|_| StartError::Waiting("Owner management is busy"))?;
     let cancelled = Arc::new(AtomicBool::new(false));
     let _caller = crate::output::Caller(cancelled.clone());
     let start = Start {
@@ -119,6 +166,12 @@ pub async fn start_personal(
         started: Instant::now(),
         cancelled,
     };
+    start.check()?;
+    // No registration/write has started: these reads can safely be attempted
+    // again after bounded backoff if a configured lane is still loading.
+    crate::connection::personal_analysis_available(&pairing).await?;
+    start.check()?;
+    crate::connection::personal_activity_available(&pairing, true).await?;
     start.check()?;
     let directory = app
         .path()
@@ -173,14 +226,10 @@ pub async fn start_personal(
             }
         };
         start.check()?;
-        crate::connection::voice_analysis_available(&pairing).await?;
-        crate::connection::voice_activity_available(&pairing,true).await?;
-        start.check()?;
         let consent=voice.id;
         let context=voice::Context{device:session.device,session:session.id,capture_epoch:session.epoch,action_epoch:session.action_epoch,microphone:voice.microphone.clone(),actor:Some(identity.actor),grant_revision:Some(consent)};
-        let directed=crate::connection::directedness::metadata(&pairing,session,&context,||start.check()).await?;
         let binding=Binding{candidate:voice.id,revision:voice.id,actor:identity.actor,owner_revision:identity.owner_revision,registration,microphone:voice.microphone.clone(),device:session.device,session:session.id,generation:session.generation,action_epoch:session.action_epoch,asr_revision:ASR,speaker_revision:SPEAKER,activity_revision:Some(avesra_contracts::activity::REVISION),activity_streaming:true};
-        let profile=voice.clone().admit(&context,[ASR.into(),SIGNAL_REVISION.into(),directed.adapter_revision.clone(),SIGNAL_REVISION.into(),OUTPUT_REVISION.into()]).map_err(|_|"Personal voice evidence invalid")?;
+        let profile=voice.clone().admit(&context,[ASR.into(),SIGNAL_REVISION.into(),PERSONAL_INTENT.into(),SIGNAL_REVISION.into(),OUTPUT_REVISION.into()]).map_err(|_|"Personal voice evidence invalid")?;
         let root=directory.clone(); let writer=start.clone();
         let (owner,mutation)=(_owner,_mutation);
         tokio::task::spawn_blocking(move || {
@@ -193,14 +242,14 @@ pub async fn start_personal(
                 if writer.cancelled.load(Ordering::SeqCst) || local.capture_epoch!=session.epoch || !binding.current(&state,&local) || slot.revoked || slot.suspended || slot.active.is_some() { return Err("Personal voice activation withdrawn".into()); }
                 std::fs::rename(temporary,destination).map_err(|_|"Personal voice publication failed")?;
                 let learning=voice.learning();
-                slot.active=Some(Session{id:Uuid::new_v4(),binding:binding.clone(),created:Instant::now(),saved_held_out:Vec::new(),threshold:None,observations:Vec::new(),activity:super::activity::Calibration::default(),gate:None,consent:Some(consent),directed:Some(directed.clone()),profile:profile.take(),capture:None});
+                slot.active=Some(Session{id:Uuid::new_v4(),binding:binding.clone(),created:Instant::now(),saved_held_out:Vec::new(),threshold:None,observations:Vec::new(),activity:super::activity::Calibration::default(),gate:None,consent:Some(consent),directed:None,profile:profile.take(),capture:None});
                 local.enrolled=true; local.voice_ready=true;
                 local.personal_voice=avesra_core::state::PersonalVoiceStatus{state:if learning{avesra_core::state::PersonalVoicePhase::Learning}else{avesra_core::state::PersonalVoicePhase::Listening},reason:if learning{"Listening and learning your voice from natural conversation. Personal recognition is provisional."}else{"Listening with your saved voice. Personal recognition is provisional."}.into()};
                 drop(slot); local.capture_epoch=local.capture_epoch.saturating_add(1); local.refresh(); state.publish(&local); let _=writer.app.emit("runtime-state",local.clone());
                 Ok(())
             })
         }).await.map_err(|_|"Personal voice writer stopped")??;
-        Ok(true)
+        Ok::<_,StartError>(true)
     }).await.map_err(|_|"Personal voice startup coordinator stopped")?
 }
 

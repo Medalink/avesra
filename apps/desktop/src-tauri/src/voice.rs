@@ -21,6 +21,11 @@ use uuid::Uuid;
 mod continuous;
 
 pub struct Worker(tauri::async_runtime::JoinHandle<()>);
+struct RestoreAttempt {
+    key: (Uuid, u64),
+    failures: usize,
+    next: Option<Instant>,
+}
 impl Drop for Worker {
     fn drop(&mut self) {
         self.0.abort();
@@ -39,7 +44,7 @@ pub fn spawn(app: tauri::AppHandle, record: PairingRecord, generation: u64) -> W
             }
             return;
         }
-        let mut restore_attempt = None;
+        let mut restore_attempt: Option<RestoreAttempt> = None;
         let mut personal_playback = continuous::Playback::default();
         loop {
             tokio::time::sleep(Duration::from_millis(100)).await;
@@ -65,22 +70,62 @@ pub fn spawn(app: tauri::AppHandle, record: PairingRecord, generation: u64) -> W
                 (session.generation == generation && session.epoch == local.capture_epoch)
                     .then_some(session)
             })();
-            if let Some(session) = restore
-                && restore_attempt != Some((session.id, session.epoch))
-            {
-                restore_attempt = Some((session.id, session.epoch));
+            if let Some(session) = restore {
+                let key = (session.id, session.epoch);
+                if restore_attempt
+                    .as_ref()
+                    .is_none_or(|attempt| attempt.key != key)
+                {
+                    restore_attempt = Some(RestoreAttempt {
+                        key,
+                        failures: 0,
+                        next: Some(Instant::now()),
+                    });
+                }
+                let Some(attempt) = restore_attempt.as_mut() else {
+                    continue;
+                };
+                if attempt.next.is_none_or(|next| Instant::now() < next) {
+                    continue;
+                }
+                // Set before awaiting: a blocked/uncertain mutation cannot be
+                // repeated unless a new current capture/session is established.
+                attempt.next = None;
                 if let Err(error) =
                     crate::qualification::start_personal(&app, record.clone(), session).await
                 {
-                    if let Ok(mut local) = state.local.lock() {
-                        local.personal_voice.reason = error.clone();
+                    let delay = if error.retryable() {
+                        let seconds = [2, 5, 15, 30][attempt.failures.min(3)];
+                        attempt.failures = (attempt.failures + 1).min(3);
+                        let delay = Duration::from_secs(seconds);
+                        attempt.next = Some(Instant::now() + delay);
+                        Some(seconds)
+                    } else {
+                        None
+                    };
+                    if let Ok(mut local) = state.local.lock()
+                        && local.capture_epoch == session.epoch
+                        && local.connected
+                        && !local.locked
+                        && !local.settings.explicit_mute
+                        && !local.settings.paused
+                        && !local.settings.deafened
+                    {
+                        local.personal_voice.state =
+                            avesra_core::state::PersonalVoicePhase::Unavailable;
+                        local.personal_voice.reason = match delay {
+                            Some(seconds) => format!("{error}. Retrying in {seconds} seconds."),
+                            None => error.to_string(),
+                        };
                         state.publish(&local);
                         let _ = app.emit("runtime-state", local.clone());
+                        if delay.is_none() {
+                            let _ = app.emit(
+                                "runtime-error",
+                                format!("Personal voice unavailable: {error}"),
+                            );
+                        }
                     }
-                    let _ = app.emit(
-                        "runtime-error",
-                        format!("Personal voice unavailable: {error}"),
-                    );
                 }
                 continue;
             }
@@ -128,7 +173,7 @@ pub fn spawn(app: tauri::AppHandle, record: PairingRecord, generation: u64) -> W
                 state
                     .qualification
                     .directed_current(admission.session, &observed)?;
-                if observed != admission.directed {
+                if admission.directed.as_ref() != Some(&observed) {
                     return Err("Directedness incarnation changed".into());
                 }
                 let quiet = quiet.ok_or("Quiet capture evidence missing")?;

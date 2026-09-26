@@ -612,7 +612,7 @@ pub struct Admission {
     pub session: Uuid,
     pub context: avesra_core::voice::Context,
     pub policy: avesra_core::voice::utterance::Policy,
-    pub directed: crate::connection::directedness::Binding,
+    pub directed: Option<crate::connection::directedness::Binding>,
     pub registration: actors::Binding,
 }
 impl State {
@@ -734,12 +734,17 @@ impl State {
             .as_ref()
             .filter(|v| v.binding.current(state, local))?;
         let profile = session.profile.as_ref().filter(|v| v.valid())?;
+        if profile.kind() != avesra_core::voice::AdmissionKind::Personal
+            && session.directed.is_none()
+        {
+            return None;
+        }
         Some(Admission {
             kind: profile.kind(),
             session: session.id,
             context: session.context(local.capture_epoch),
             policy: profile.endpoint_policy(),
-            directed: session.directed.clone()?,
+            directed: session.directed.clone(),
             registration: session.binding.registration.clone(),
         })
     }

@@ -435,7 +435,12 @@ impl SpeakerHealth {
             )
             || self.permission_authority
             || (self.streaming && !matches!(lane, "asr" | "tts" | "activity"))
-            || self.cancellation != "terminate_process"
+            || !matches!(
+                self.cancellation.as_str(),
+                "terminate_process" | "cooperative_reset_or_terminate"
+            )
+            || (self.cancellation == "cooperative_reset_or_terminate"
+                && !matches!(lane, "tts" | "activity"))
             || self
                 .last_inference_ms
                 .is_some_and(|v| !v.is_finite() || !(0.0..=30000.0).contains(&v))
@@ -537,6 +542,66 @@ pub async fn speaker_available(record: &PairingRecord) -> Result<(), String> {
     Ok(())
 }
 pub async fn voice_analysis_available(record: &PairingRecord) -> Result<(), String> {
+    personal_analysis_available(record)
+        .await
+        .map_err(|error| error.to_string())
+}
+pub enum VoicePreparationError {
+    Waiting(&'static str),
+    Blocked(String),
+}
+impl From<String> for VoicePreparationError {
+    fn from(value: String) -> Self {
+        Self::Blocked(value)
+    }
+}
+impl From<&str> for VoicePreparationError {
+    fn from(value: &str) -> Self {
+        Self::Blocked(value.into())
+    }
+}
+impl std::fmt::Display for VoicePreparationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Waiting(value) => f.write_str(value),
+            Self::Blocked(value) => f.write_str(value),
+        }
+    }
+}
+fn preparation_status(status: reqwest::StatusCode) -> Result<(), VoicePreparationError> {
+    if status.is_success() {
+        return Ok(());
+    }
+    if matches!(status.as_u16(), 408 | 429 | 502 | 503 | 504) {
+        return Err(VoicePreparationError::Waiting(
+            "Spark voice service is temporarily unavailable or busy",
+        ));
+    }
+    Err(VoicePreparationError::Blocked(
+        "Spark voice preflight was rejected or unsupported".into(),
+    ))
+}
+async fn preparation_body(
+    mut response: reqwest::Response,
+) -> Result<serde_json::Value, VoicePreparationError> {
+    preparation_status(response.status())?;
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| VoicePreparationError::Waiting("Voice health response was interrupted"))?
+    {
+        if chunk.len() > 16_384usize.saturating_sub(bytes.len()) {
+            return Err("Voice health response exceeded its size limit".into());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&bytes)
+        .map_err(|_| VoicePreparationError::Blocked("Invalid voice health JSON".into()))
+}
+pub async fn personal_analysis_available(
+    record: &PairingRecord,
+) -> Result<(), VoicePreparationError> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Health {
@@ -553,14 +618,8 @@ pub async fn voice_analysis_available(record: &PairingRecord) -> Result<(), Stri
         .bearer_auth(&record.credential)
         .send()
         .await
-        .map_err(|_| "Voice services are unreachable")?;
-    if !response.status().is_success() {
-        return Err(
-            "Spark speech recognition or speaker service is unavailable. No recording started."
-                .into(),
-        );
-    }
-    let value: Health = serde_json::from_value(bounded_response(response).await?)
+        .map_err(|_| VoicePreparationError::Waiting("Voice services are unreachable"))?;
+    let value: Health = serde_json::from_value(preparation_body(response).await?)
         .map_err(|_| "Invalid voice service metadata")?;
     if value.version != 1 {
         return Err("Incompatible voice services".into());
@@ -575,8 +634,8 @@ pub async fn voice_analysis_available(record: &PairingRecord) -> Result<(), Stri
     ] {
         health.validate(lane, revision)?;
         if health.state != "loaded_unqualified" || health.busy {
-            return Err(format!(
-                "Spark {lane} is busy, unloaded or incompatible. No recording started."
+            return Err(VoicePreparationError::Waiting(
+                "Spark ASR or speaker model is busy or not loaded",
             ));
         }
     }
@@ -592,6 +651,14 @@ pub async fn voice_activity_available(
     record: &PairingRecord,
     streaming: bool,
 ) -> Result<(), String> {
+    personal_activity_available(record, streaming)
+        .await
+        .map_err(|error| error.to_string())
+}
+pub async fn personal_activity_available(
+    record: &PairingRecord,
+    streaming: bool,
+) -> Result<(), VoicePreparationError> {
     let response = speaker_client(record)?
         .get(
             endpoint(&record.url)?
@@ -601,18 +668,19 @@ pub async fn voice_activity_available(
         .bearer_auth(&record.credential)
         .send()
         .await
-        .map_err(|_| "Speech activity service is unreachable")?;
-    let value: SpeakerHealth = serde_json::from_value(bounded_response(response).await?)
+        .map_err(|_| VoicePreparationError::Waiting("Speech activity service is unreachable"))?;
+    let value: SpeakerHealth = serde_json::from_value(preparation_body(response).await?)
         .map_err(|_| "Invalid activity service metadata")?;
     value.validate_metadata("activity")?;
-    if value.state != "loaded_unqualified"
-        || value.busy
-        || (streaming && !value.streaming)
+    if (streaming && !value.streaming)
         || value.model_revision != avesra_contracts::activity::REVISION
     {
-        return Err(
-            "Configured activity service is unavailable or busy. No recording started.".into(),
-        );
+        return Err("Configured activity revision or streaming capability is incompatible".into());
+    }
+    if value.state != "loaded_unqualified" || value.busy {
+        return Err(VoicePreparationError::Waiting(
+            "Spark activity model is busy or not loaded",
+        ));
     }
     Ok(())
 }

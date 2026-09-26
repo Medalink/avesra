@@ -1,5 +1,33 @@
 # Personal conversation during native playback
 
+Normal startup retries only definitely read-only audio health preflight and local
+management contention while the same connected, unlocked, unmuted, unpaused,
+non-deafened session/capture epoch remains eligible. One attempt is outstanding;
+backoff is 2, 5, 15, then 30 seconds, capped at 30 seconds thereafter. The visible
+status names the waiting reason, without repeated error notifications. HTTP
+temporary-unavailability/busy/timeout and validated busy/unloaded lane states are
+retryable; invalid metadata, unsupported versions/revisions, authentication,
+owner/storage failures and attempted registration uncertainty are not. ASR and
+activity health preflight occurs before possible registration mutation. A failed
+registration is never blindly repeated; reconnect/owner management must reconcile
+its actual status and original native registration intent. Current controls cancel
+eligibility without renewing any accepted-turn or capture deadline.
+Audio metadata follows the controller's exact cancellation contract: ASR/speaker
+require `terminate_process`; TTS/activity additionally permit
+`cooperative_reset_or_terminate` (including their non-streaming configurations).
+This describes observed worker cleanup capability, not permission or readiness.
+Interrupted bounded health-response transport is retryable; malformed JSON,
+oversized bodies and invalid typed metadata are blocked.
+
+Personal intent is the explicit provisional native conversation policy. Startup
+does not inspect or require a strict directedness model that this admission kind
+never calls. Its profile uses a fixed native policy revision and stores no invented
+directedness model/artifact/incarnation. Development and ReleaseQualified admission
+still require their exact observed directedness binding. Current Windows owner,
+paired actor registration, saved voice source, ASR/speaker revisions and streaming
+activity readiness remain required; reasoning availability is checked by the
+ordinary accepted planner when an actual request needs it.
+
 Personal admission follows its live native session instead of expiring after
 twelve hours. Its private profile lifetime has no wall-clock deadline; only the
 Personal kind permits that representation. This does not make saved identity or
