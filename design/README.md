@@ -58,7 +58,7 @@ The build scans `../mockups` for class names and is deterministic. It shares the
   - Original / Atmosphere comparison during a repeating preview.
   - More sound controls: the effect and background layers; Bass, Reverb, Echo, Harmonizer and Compression; Harmony pitch; background texture; left/right echo spacing.
   - Digital shows the owner-approved factory tune. Human disables the controls it ignores.
-  - The overlay's one-click toggle uses `av-iconbtn-accent` (Ruby) while on, not amber, because amber means input is off. The app uses the same class, and atmosphere is on by default.
+  - Atmosphere is on by default and is controlled only from Settings; the compact overlay has no atmosphere button. `av-iconbtn-accent` (Ruby) remains the style for any icon toggle that switches a feature on, since amber means input is off.
 - **Signal hooks:** the simulated signal lives in `Overlay.dc.html`:
   - `signalLevel()`: overall loudness.
   - `updateBars()`: one value per frequency band.
