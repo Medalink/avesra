@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { fragmentShader } from "./signal-shader";
+  import { VoiceBarsRenderer, barLevels, type Tone } from "./voice-bars";
   export type SignalFrame = {
     kind: "human" | "thinking" | "speaking";
     source: "owner" | "other" | "background" | "assistant";
@@ -18,12 +18,19 @@
   let {
     frame = null,
     visible = true,
-  }: { frame?: SignalFrame | null; visible?: boolean } = $props();
+    count = 44,
+    height = 76,
+    tone: forcedTone = undefined,
+  }: { frame?: SignalFrame | null; visible?: boolean; count?: number; height?: number; tone?: Tone } = $props();
+
   let canvas: HTMLCanvasElement;
+  let renderer = $state<VoiceBarsRenderer | null>(null);
   let failed = $state(false);
   let reduced = $state(false);
   let pageVisible = $state(true);
+  let expired = $state(false);
   let frozenFrame = $state<SignalFrame | null>(null);
+  // Reduced motion holds one frame per source and output instead of following every update.
   $effect(() => {
     if (!reduced || !frame) {
       frozenFrame = null;
@@ -38,267 +45,115 @@
     }
   });
   const effectiveFrame = $derived(reduced ? (frozenFrame ?? frame) : frame);
-  let render = $state<((value: SignalFrame | null) => void) | undefined>();
-  const color = $derived(
-    frame?.kind === "speaking" || frame?.kind === "thinking"
-      ? "#e0115f"
-      : frame?.source === "owner"
-        ? "#3a5dd8"
-        : frame?.source === "other"
-          ? "#8ede4a"
-          : "#71717a",
-  );
-  const fallbackPath = $derived.by(() => {
-    if (!effectiveFrame?.samples.length) return "M0 44H424";
-    const values = effectiveFrame.samples;
-    return values
-      .map(
-        (value, i) =>
-          `${i ? "L" : "M"}${(i * 424) / Math.max(1, values.length - 1)},${44 - Math.min(1, Math.max(-1, value)) * 35}`,
-      )
-      .join(" ");
-  });
+  // Each frame keeps its calibrated display expiry; an expired frame falls back to the resting line.
   $effect(() => {
-    const value = effectiveFrame;
-    const draw = render;
-    if (!visible || !pageVisible || !draw) return;
-    draw(value);
-    if (reduced || value?.kind !== "speaking") return;
-    let animation = 0;
-    const animate = () => {
-      if (value.displayExpiresAt !== undefined && performance.now() >= value.displayExpiresAt) {
-        draw(null);
-        return;
-      }
-      draw(value);
-      animation = requestAnimationFrame(animate);
-    };
-    animation = requestAnimationFrame(animate);
-    return () => cancelAnimationFrame(animation);
+    const expires = effectiveFrame?.displayExpiresAt;
+    expired = false;
+    if (expires === undefined) return;
+    const wait = expires - performance.now();
+    if (wait <= 0) {
+      expired = true;
+      return;
+    }
+    const timer = setTimeout(() => (expired = true), wait);
+    return () => clearTimeout(timer);
   });
+  const shown = $derived.by(() => {
+    const value = visible && !expired ? effectiveFrame : null;
+    if (!value || !value.samples.length || value.samples.length > 512 || value.samples.some((v) => !Number.isFinite(v))) return null;
+    return value;
+  });
+  const tone = $derived<Tone>(
+    !shown
+      ? "rest"
+      : (forcedTone ??
+        (shown.kind === "speaking" || shown.source === "assistant" ? "assistant" : shown.kind === "thinking" ? "thinking" : shown.source)),
+  );
+  const levels = $derived(barLevels(shown?.samples ?? [], count, tone));
+
   onMount(() => {
     const media = matchMedia("(prefers-reduced-motion: reduce)");
     reduced = media.matches;
-    const motion = () => {
-      reduced = media.matches;
-      if (visible && pageVisible) render?.(effectiveFrame);
-    };
-    const visibility = () => {
-      pageVisible = !document.hidden;
-      if (pageVisible && visible) render?.(effectiveFrame);
-    };
+    const motion = () => (reduced = media.matches);
+    const visibility = () => (pageVisible = !document.hidden);
     media.addEventListener("change", motion);
     document.addEventListener("visibilitychange", visibility);
-    const gl = canvas.getContext("webgl", {
-      alpha: true,
-      premultipliedAlpha: true,
-      antialias: false,
-    });
-    if (!gl) {
-      failed = true;
-      return () => {
-        media.removeEventListener("change", motion);
-        document.removeEventListener("visibilitychange", visibility);
-      };
-    }
-    const shaders: WebGLShader[] = [];
-    const compile = (type: number, source: string) => {
-      const shader = gl.createShader(type);
-      if (!shader) throw Error("Shader allocation failed");
-      shaders.push(shader);
-      gl.shaderSource(shader, source);
-      gl.compileShader(shader);
-      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS))
-        throw Error("Shader compilation failed");
-      return shader;
-    };
-    let program: WebGLProgram | null = null;
-    let buffer: WebGLBuffer | null = null;
-    let texture: WebGLTexture | null = null;
     const lost = (event: Event) => {
       event.preventDefault();
       failed = true;
-      render = undefined;
+      renderer?.dispose();
+      renderer = null;
     };
     canvas.addEventListener("webglcontextlost", lost);
     try {
-      program = gl.createProgram();
-      if (!program) throw Error("Program unavailable");
-      gl.attachShader(
-        program,
-        compile(
-          gl.VERTEX_SHADER,
-          "attribute vec2 p;void main(){gl_Position=vec4(p,0.0,1.0);}",
-        ),
-      );
-      gl.attachShader(program, compile(gl.FRAGMENT_SHADER, fragmentShader));
-      gl.linkProgram(program);
-      if (!gl.getProgramParameter(program, gl.LINK_STATUS))
-        throw Error("Program linking failed");
-      gl.useProgram(program);
-      buffer = gl.createBuffer();
-      gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-      gl.bufferData(
-        gl.ARRAY_BUFFER,
-        new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]),
-        gl.STATIC_DRAW,
-      );
-      const position = gl.getAttribLocation(program, "p");
-      gl.enableVertexAttribArray(position);
-      gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
-      texture = gl.createTexture();
-      gl.bindTexture(gl.TEXTURE_2D, texture);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-      const u: Record<string, WebGLUniformLocation | null> = {};
-      for (const name of [
-        "uBars",
-        "uN",
-        "uRes",
-        "uDpr",
-        "uGlow",
-        "uMode",
-        "uTime",
-        "uCore",
-        "uLow",
-        "uHigh",
-      ])
-        u[name] = gl.getUniformLocation(program, name);
-      gl.uniform1i(u.uBars, 0);
-
-      render = (value) => {
-        if (!visible || document.hidden) return;
-        const dpr = Math.min(devicePixelRatio, 2);
-        const width = Math.round(canvas.clientWidth * dpr);
-        const height = Math.round(canvas.clientHeight * dpr);
-        if (canvas.width !== width) canvas.width = width;
-        if (canvas.height !== height) canvas.height = height;
-        gl.viewport(0, 0, canvas.width, canvas.height);
-        gl.clearColor(0, 0, 0, 0);
-        gl.clear(gl.COLOR_BUFFER_BIT);
-        if (
-          !value ||
-          !value.samples.length ||
-          value.samples.length > 512 ||
-          value.samples.some((v) => !Number.isFinite(v))
-        )
-          return;
-
-        const values = value.samples;
-        const n =
-          value.kind === "thinking"
-            ? Math.round(canvas.clientWidth)
-            : values.length;
-        const bytes = new Uint8Array(n);
-        for (let i = 0; i < n; i++) {
-          const sample =
-            values[
-              Math.min(values.length - 1, Math.floor((i * values.length) / n))
-            ];
-          bytes[i] = Math.round(
-            255 *
-              (value.kind === "thinking"
-                ? (Math.max(-1, Math.min(1, sample)) + 1) / 2
-                : Math.max(0, Math.min(1, Math.abs(sample)))),
-          );
-        }
-        gl.texImage2D(
-          gl.TEXTURE_2D,
-          0,
-          gl.LUMINANCE,
-          n,
-          1,
-          0,
-          gl.LUMINANCE,
-          gl.UNSIGNED_BYTE,
-          bytes,
-        );
-        gl.uniform1f(u.uN, n);
-        gl.uniform2f(u.uRes, canvas.width, canvas.height);
-        gl.uniform1f(u.uDpr, dpr);
-        gl.uniform1f(u.uGlow, 1);
-        gl.uniform1f(
-          u.uMode,
-          value.kind === "thinking" ? 1 : value.kind === "speaking" ? 3 : 2,
-        );
-        gl.uniform1f(u.uTime, reduced ? 0 : (value.kind === "speaking" ? performance.now() : value.capturedAt) / 1000);
-        const rgb =
-          value.kind !== "human"
-            ? [0.88, 0.07, 0.37]
-            : value.source === "owner"
-              ? [0.227, 0.365, 0.847]
-              : value.source === "other"
-                ? [0.557, 0.871, 0.29]
-                : [0.44, 0.44, 0.48];
-        gl.uniform3fv(u.uLow, rgb);
-        gl.uniform3fv(
-          u.uHigh,
-          value.kind === "speaking" ? [1, 0.15, 0.28] : rgb,
-        );
-        gl.uniform3fv(
-          u.uCore,
-          rgb.map((v) => Math.min(1, v + 0.3)),
-        );
-        gl.drawArrays(gl.TRIANGLES, 0, 6);
-      };
-      render(effectiveFrame);
+      renderer = new VoiceBarsRenderer(canvas, count, height);
     } catch {
       failed = true;
     }
     return () => {
-      render = undefined;
       media.removeEventListener("change", motion);
       document.removeEventListener("visibilitychange", visibility);
       canvas.removeEventListener("webglcontextlost", lost);
-      for (const shader of shaders) gl.deleteShader(shader);
-      gl.deleteProgram(program);
-      gl.deleteBuffer(buffer);
-      gl.deleteTexture(texture);
+      renderer?.dispose();
+      renderer = null;
     };
   });
+
+  // Draw every animation frame while visible; reduced motion draws one still per change.
+  $effect(() => {
+    const draw = renderer;
+    if (!draw || !visible || !pageVisible) return;
+    draw.setTone(tone, performance.now());
+    draw.setLevels(levels);
+    if (reduced) {
+      draw.draw(performance.now(), true);
+      return;
+    }
+    let animation = requestAnimationFrame(function step(now) {
+      draw.draw(now);
+      animation = requestAnimationFrame(step);
+    });
+    return () => cancelAnimationFrame(animation);
+  });
+
+  // CSS fallback: the same bars without WebGL.
+  const toneClass: Record<Tone, string> = {
+    owner: "av-listen bg-[#3a5dd8]",
+    other: "av-listen bg-[#8ede4a]",
+    background: "av-listen bg-zinc-500",
+    assistant: "av-speak bg-av-500",
+    thinking: "av-breathe bg-av-300",
+    rest: "bg-white/20",
+  };
+  const fallbackBars = $derived(
+    levels.map((level, i) => {
+      const envelope = Math.sin((Math.PI * (i + 0.5)) / count);
+      const span = height - 6;
+      const size =
+        tone === "rest" ? 2
+        : tone === "thinking" ? 4 + envelope * 20 * (0.45 + 0.55 * level)
+        : tone === "background" ? 3 + envelope * 14 * (0.3 + 0.7 * level)
+        : tone === "other" ? 5 + envelope * span * 0.72 * level
+        : 6 + envelope * span * level;
+      return {
+        height: Math.round(size * 10) / 10,
+        opacity: Math.round((0.35 + 0.65 * envelope) * 100) / 100,
+        duration: tone === "assistant" ? 1300 : 900 + ((i * 137) % 700),
+        delay: -((i * 97) % 1100),
+        ripple: Math.round(Math.abs(i - (count - 1) / 2) * 9),
+      };
+    }),
+  );
 </script>
 
-<canvas
-  bind:this={canvas}
-  class:hidden={failed}
-  class="absolute inset-0 h-full w-full"
-  aria-hidden="true"
-></canvas>
-{#if failed}<svg
-    class="absolute inset-0 h-full w-full"
-    viewBox="0 0 424 88"
-    aria-hidden="true"
-    style:color
-    ><path
-      d={fallbackPath}
-      fill="none"
-      stroke="currentColor"
-      stroke-width="1.5"
-    />{#if frame?.kind === "human"}<path
-        d={`${fallbackPath} L424 44 L0 44 Z`}
-        fill="currentColor"
-        opacity="0.25"
-        transform="translate(0 88) scale(1 -1)"
-      />{:else if frame?.kind === "speaking"}<path
-        d={fallbackPath}
-        fill="none"
-        stroke="currentColor"
-        stroke-width="1"
-        transform="translate(0 7)"
-      /><path
-        d={fallbackPath}
-        fill="none"
-        stroke="currentColor"
-        stroke-width="1"
-        transform="translate(0 -7)"
-      />{:else if frame?.kind === "thinking"}<path
-        d={fallbackPath}
-        fill="none"
-        stroke="currentColor"
-        stroke-dasharray="4 3"
-        transform="translate(0 3)"
-      />{/if}</svg
-  >{/if}
+<canvas bind:this={canvas} class:hidden={failed} class="pointer-events-none absolute inset-0 h-full w-full" aria-hidden="true"></canvas>
+{#if failed}<div class="pointer-events-none absolute inset-0 flex items-center justify-center gap-[3px]" aria-hidden="true">
+    {#each fallbackBars as bar, i (i)}<span
+        class="block w-[3px] shrink-0 transition-[height,background-color,opacity] duration-[420ms] ease-out {toneClass[tone]}"
+        style:height="{bar.height}px"
+        style:opacity={bar.opacity}
+        style:animation-duration="{bar.duration}ms"
+        style:animation-delay="{bar.delay}ms"
+        style:transition-delay="{bar.ripple}ms"
+      ></span>{/each}
+  </div>{/if}

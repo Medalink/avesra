@@ -62,9 +62,7 @@
   >
     {#if speaking || ["passive", "recognizing", "accepted", "thinking", "speaking", "enrolling"].includes(status)}<span
         class="relative flex h-[88px] w-full items-center"
-        ><Signal frame={signal} />{#if !signal}<span
-            class="h-px w-full bg-white/15"
-          ></span>{/if}</span
+        ><Signal frame={signal} /></span
       >{:else}<span
         class="flex w-full items-center gap-3 {status === 'disconnected'
           ? 'text-red-500'
