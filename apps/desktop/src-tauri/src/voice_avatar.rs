@@ -27,6 +27,10 @@ struct Timings {
     withdrawn: Cell<bool>,
 }
 impl Timings {
+    fn withdrawal(&self, message: &str) -> String {
+        self.withdrawn.set(true);
+        message.to_owned()
+    }
     fn phase<T>(
         &self,
         phase: Portrait,
@@ -527,12 +531,26 @@ pub(crate) fn prepare_redraw(
     microphone: &str,
     authorize: &mut dyn FnMut() -> Result<(), String>,
 ) -> Result<Redraw, String> {
+    observed(Portrait::RedrawPrepare, authorize, |timings, authorize| {
+        prepare_redraw_observed(directory, microphone, authorize, timings)
+    })
+}
+fn prepare_redraw_observed(
+    directory: &Path,
+    microphone: &str,
+    authorize: &mut dyn FnMut() -> Result<(), String>,
+    timings: &Timings,
+) -> Result<Redraw, String> {
     let _candidates = super::lock_directory(&directory.join("speaker-candidates"))?;
     authorize()?;
-    let source =
-        resolve(directory, microphone)?.ok_or("No current owner-bound voice is available")?;
+    let source = timings.phase(Portrait::SourceLoad, || {
+        resolve(directory, microphone)?
+            .ok_or_else(|| "No current owner-bound voice is available".to_owned())
+    })?;
     let _avatars = super::lock_directory(&directory.join("voice-avatars"))?;
-    let vault = load(directory)?.ok_or("View your voice avatar before redrawing it")?;
+    let vault = timings.phase(Portrait::VaultLoad, || {
+        load(directory)?.ok_or_else(|| "View your voice avatar before redrawing it".to_owned())
+    })?;
     let actor = vault
         .actors
         .iter()
@@ -548,12 +566,14 @@ pub(crate) fn prepare_redraw(
     {
         return Err("Avatar record capacity reached".into());
     }
-    let parameters = shape::build(
-        &vault.key,
-        &source.representation,
-        actor.ring.clone(),
-        actor.rotation,
-    )?;
+    let parameters = timings.phase(Portrait::Derive, || {
+        shape::build(
+            &vault.key,
+            &source.representation,
+            actor.ring.clone(),
+            actor.rotation,
+        )
+    })?;
     authorize()?;
     Ok(Redraw {
         actor: source.actor,
@@ -566,6 +586,11 @@ pub(crate) fn prepare_redraw(
         parameters,
     })
 }
+/// Typed observer classification only; the original error remains caller-facing.
+pub(crate) enum FinalizeError {
+    Withdrawn(String),
+    Failed(String),
+}
 /// The caller holds owner management admission. finalize retains native current
 /// context across the rename; file locks retain exact source/previous-record state.
 pub(crate) fn confirm_redraw(
@@ -573,33 +598,54 @@ pub(crate) fn confirm_redraw(
     microphone: &str,
     expected: &Redraw,
     authorize: &mut dyn FnMut() -> Result<(), String>,
-    finalize: &mut dyn FnMut(&Path, &Path) -> Result<(), String>,
+    finalize: &mut dyn FnMut(&Path, &Path) -> Result<(), FinalizeError>,
+) -> Result<View, String> {
+    observed(Portrait::RedrawConfirm, authorize, |timings, authorize| {
+        confirm_redraw_observed(
+            directory, microphone, expected, authorize, finalize, timings,
+        )
+    })
+}
+fn confirm_redraw_observed(
+    directory: &Path,
+    microphone: &str,
+    expected: &Redraw,
+    authorize: &mut dyn FnMut() -> Result<(), String>,
+    finalize: &mut dyn FnMut(&Path, &Path) -> Result<(), FinalizeError>,
+    timings: &Timings,
 ) -> Result<View, String> {
     let _candidates = super::lock_directory(&directory.join("speaker-candidates"))?;
     authorize()?;
-    let source =
-        resolve(directory, microphone)?.ok_or("The proposed avatar source is unavailable")?;
-    if source.actor != expected.actor
-        || source.revision != expected.owner_revision
-        || source.source != expected.source
-        || source.binding_digest != expected.binding_digest
-        || source.source_digest != expected.source_digest
-    {
-        return Err("Your voice source changed; prepare a new redraw".into());
-    }
+    timings.phase(Portrait::SourceLoad, || {
+        let source = resolve(directory, microphone)?
+            .ok_or_else(|| timings.withdrawal("The proposed avatar source is unavailable"))?;
+        if source.actor != expected.actor
+            || source.revision != expected.owner_revision
+            || source.source != expected.source
+            || source.binding_digest != expected.binding_digest
+            || source.source_digest != expected.source_digest
+        {
+            return Err(timings.withdrawal("Your voice source changed; prepare a new redraw"));
+        }
+        Ok(())
+    })?;
     let _avatars = super::lock_directory(&directory.join("voice-avatars"))?;
-    let mut vault =
-        load(directory)?.ok_or("The avatar registry is unavailable; it was not replaced")?;
-    let index = vault
-        .actors
-        .iter()
-        .position(|value| value.actor == expected.actor)
-        .ok_or("The avatar signature was removed")?;
-    if hash(&vault.key) != expected.key_digest
-        || actor_digest(&vault.actors[index])? != expected.previous
-    {
-        return Err("The saved avatar changed; prepare a new redraw".into());
-    }
+    let (mut vault, index) = timings.phase(Portrait::VaultLoad, || {
+        let vault = load(directory)?.ok_or_else(|| {
+            timings.withdrawal("The avatar registry is unavailable; it was not replaced")
+        })?;
+        let index = vault
+            .actors
+            .iter()
+            .position(|value| value.actor == expected.actor)
+            .ok_or_else(|| timings.withdrawal("The avatar signature was removed"))?;
+        if hash(&vault.key) != expected.key_digest
+            || actor_digest(&vault.actors[index])? != expected.previous
+        {
+            return Err(timings.withdrawal("The saved avatar changed; prepare a new redraw"));
+        }
+        Ok((vault, index))
+    })?;
     if vault.actors[index].record.is_none()
         && vault
             .actors
@@ -620,38 +666,49 @@ pub(crate) fn confirm_redraw(
         source_digest: expected.source_digest.clone(),
         parameters: expected.parameters.clone(),
     });
-    // No key/marker initialization or ring mutation is permitted by redraw.
-    let clear = Zeroizing::new(serde_json::to_vec(&vault).map_err(|_| "Avatar encoding failed")?);
-    if clear.len() > 65536 {
-        return Err("Avatar storage capacity reached".into());
-    }
-    let protected =
-        avesra_windows::credentials::protect(&clear).map_err(|_| "Avatar protection failed")?;
-    let temporary = directory.join("voice-avatars/.vault.pending");
-    match std::fs::remove_file(&temporary) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(_) => return Err("Interrupted avatar write cannot be retired".into()),
-    }
-    let result = (|| {
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-            .map_err(|_| "Avatar writer unavailable")?;
-        file.write_all(&protected)
-            .and_then(|_| file.sync_all())
-            .map_err(|_| "Avatar write failed")?;
-        drop(file);
-        authorize()?;
-        if crate::owner::identity(directory).map_err(|_| "Avatar owner unavailable")?
-            != (expected.actor, expected.owner_revision)
-        {
-            return Err("Avatar owner changed".into());
+    timings.phase(Portrait::Publish, || {
+        // No key/marker initialization or ring mutation is permitted by redraw.
+        let clear =
+            Zeroizing::new(serde_json::to_vec(&vault).map_err(|_| "Avatar encoding failed")?);
+        if clear.len() > 65536 {
+            return Err("Avatar storage capacity reached".into());
         }
-        finalize(&temporary, &directory.join("voice-avatars/vault.dpapi"))?;
-        Ok(expected.view())
-    })();
-    let _ = std::fs::remove_file(temporary);
-    result
+        let protected =
+            avesra_windows::credentials::protect(&clear).map_err(|_| "Avatar protection failed")?;
+        let temporary = directory.join("voice-avatars/.vault.pending");
+        match std::fs::remove_file(&temporary) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err("Interrupted avatar write cannot be retired".into()),
+        }
+        let result = (|| {
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temporary)
+                .map_err(|_| "Avatar writer unavailable")?;
+            file.write_all(&protected)
+                .and_then(|_| file.sync_all())
+                .map_err(|_| "Avatar write failed")?;
+            drop(file);
+            authorize()?;
+            if crate::owner::identity(directory).map_err(|_| "Avatar owner unavailable")?
+                != (expected.actor, expected.owner_revision)
+            {
+                return Err(timings.withdrawal("Avatar owner changed"));
+            }
+            finalize(&temporary, &directory.join("voice-avatars/vault.dpapi")).map_err(
+                |error| match error {
+                    FinalizeError::Withdrawn(message) => {
+                        timings.withdrawn.set(true);
+                        message
+                    }
+                    FinalizeError::Failed(message) => message,
+                },
+            )?;
+            Ok(expected.view())
+        })();
+        let _ = std::fs::remove_file(temporary);
+        result
+    })
 }

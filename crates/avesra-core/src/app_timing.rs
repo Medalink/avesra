@@ -24,6 +24,8 @@ pub enum View {
 #[serde(rename_all = "snake_case")]
 pub enum Portrait {
     Prepare,
+    RedrawPrepare,
+    RedrawConfirm,
     SourceLoad,
     VaultLoad,
     Derive,

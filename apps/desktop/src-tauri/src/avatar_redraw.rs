@@ -2,7 +2,7 @@
 use super::ManagementProof;
 use crate::{
     Runtime,
-    profiles::voice_avatar::{self, Redraw, View},
+    profiles::voice_avatar::{self, FinalizeError, Redraw, View},
 };
 use avesra_core::state::LocalState;
 use serde::Serialize;
@@ -271,10 +271,18 @@ pub(crate) async fn confirm_voice_avatar_redraw(
             &mut || ticket.context.current(&app, started),
             &mut |temporary: &Path, destination: &Path| {
                 let state = app.state::<Runtime>();
-                let local = state.local.lock().map_err(|_| "Local state unavailable")?;
-                ticket.context.current_locked(&state, &local, started)?;
+                let local = state
+                    .local
+                    .lock()
+                    .map_err(|_| FinalizeError::Failed("Local state unavailable".to_owned()))?;
+                ticket
+                    .context
+                    .current_locked(&state, &local, started)
+                    .map_err(FinalizeError::Withdrawn)?;
                 std::fs::rename(temporary, destination).map_err(|_| {
-                    "Avatar publication failed; refresh saved state before retrying".to_owned()
+                    FinalizeError::Failed(
+                        "Avatar publication failed; refresh saved state before retrying".to_owned(),
+                    )
                 })
             },
         );
