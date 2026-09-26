@@ -22,6 +22,8 @@ pub mod prompt;
 #[cfg(windows)]
 mod resampling;
 #[cfg(windows)]
+pub mod resources;
+#[cfg(windows)]
 pub mod session;
 #[cfg(windows)]
 pub mod shortcuts;

@@ -335,6 +335,7 @@ struct ReplyRecord {
 }
 /// Only a successful current ledger commit constructs this normal-output source.
 pub struct StoredReply {
+    mailbox_lifetime: Option<MailboxLifetime>,
     binding: Binding,
     publication: PlannerCancellation,
     revision: Uuid,
@@ -342,6 +343,10 @@ pub struct StoredReply {
     task: Option<super::tasks::LinkedTask>,
     started: Instant,
     provenance: Provenance,
+}
+pub(super) struct MailboxLifetime {
+    deadline: Instant,
+    current: Box<dyn Fn() -> bool + Send + Sync>,
 }
 impl Drop for StoredReply {
     fn drop(&mut self) {
@@ -355,8 +360,25 @@ impl StoredReply {
     pub fn proposed_task(&self) -> Option<&super::tasks::LinkedTask> {
         self.task.as_ref()
     }
+    pub fn output_deadline(&self) -> Option<Instant> {
+        self.mailbox_lifetime.as_ref().map(|v| v.deadline)
+    }
     pub fn remaining_ms(&self) -> Result<u64, ErrorCode> {
         self.publication.check()?;
+        if let Some(lifetime) = &self.mailbox_lifetime {
+            if !(lifetime.current)() {
+                return Err(ErrorCode::Stale);
+            }
+            let ms = lifetime
+                .deadline
+                .saturating_duration_since(Instant::now())
+                .as_millis();
+            return if ms == 0 {
+                Err(ErrorCode::Expired)
+            } else {
+                u64::try_from(ms).map_err(|_| ErrorCode::Expired)
+            };
+        }
         remaining(self.started)
     }
     pub fn cancellation(&self) -> PlannerCancellation {
@@ -367,6 +389,10 @@ impl StoredReply {
     }
     pub fn publication_current(&self) -> bool {
         !self.publication.cancelled()
+            && self
+                .mailbox_lifetime
+                .as_ref()
+                .is_none_or(|v| Instant::now() < v.deadline && (v.current)())
     }
 
     pub fn revision(&self) -> Uuid {
@@ -477,6 +503,12 @@ fn read_reply(db: &Connection, plan: &Plan) -> Result<Option<ReplyRecord>, Error
         {
             return Err(ErrorCode::Malformed);
         }
+    }
+    if matches!(value.provenance, Provenance::NativeMailbox { .. })
+        && (crate::workflows::mailbox::requested_count(&plan.request.text).is_none()
+            || !matches!(value.reply.response, planner::Response::Answer { .. }))
+    {
+        return Err(ErrorCode::Malformed);
     }
     if matches!(value.provenance, Provenance::NativeObservation { .. })
         && !matches!(value.reply.response, planner::Response::Answer { .. })
@@ -611,7 +643,8 @@ fn recent_dialogue(
             Provenance::Model => {}
             Provenance::NativeObservation { .. }
             | Provenance::NativeClock { .. }
-            | Provenance::NativeMemory { .. } => continue,
+            | Provenance::NativeMemory { .. }
+            | Provenance::NativeMailbox { .. } => continue,
         }
         let pair_bytes = record.text.len() + reply.reply.response.text().len();
         if bytes + pair_bytes > planner::MAX_DIALOGUE_BYTES {
@@ -949,6 +982,7 @@ impl Store {
         claim.cancellation.check()?;
         remaining(claim.started)?;
         Ok(StoredReply {
+            mailbox_lifetime: None,
             binding: claim.plan.binding.clone(),
             publication: claim.cancellation.clone(),
             revision: result.revision,

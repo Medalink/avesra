@@ -608,3 +608,24 @@ pub(crate) fn answer_current(
     }
     Ok(describe_last(kind, &values)? == answer)
 }
+
+pub(crate) fn demonstration_committed(
+    tx: &Transaction<'_>,
+    value: &crate::demonstration::Candidate,
+) -> Result<(), ErrorCode> {
+    insert(
+        tx,
+        Committed {
+            id: value.revision,
+            actor: value.actor,
+            device: value.device,
+            kind: Kind::Learning,
+            source: value.id,
+            revision: value.revision,
+            at_ms: value.observed_ms,
+            description: Description::RoutineCandidate {
+                name: value.name.clone(),
+            },
+        },
+    )
+}

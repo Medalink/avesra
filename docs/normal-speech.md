@@ -130,3 +130,15 @@ The original accepted coordinator's monotonic lifetime and withdrawal signal
 survive execution into publication; no new speech budget or arbitrary-text API
 is created. The server reserves non-model output under the current authenticated
 actor/session and monotonic ordinal, hashing full provenance and response.
+
+### Complete mailbox source continuation (wire6)
+
+NativeMailbox is a one-use native source from an actual completed, authenticated,
+settled Inbox read. Its deterministic summary is labeled as email wording and
+retains individual source references; it cannot establish physical package delivery.
+No Settings text, history record or model response creates the opaque source.
+Mailbox speech retains the original read's absolute120-second deadline and current
+browser/account/scope/action-grant successor. The usual8-second preparation and
+80-second output bounds are additionally shortened by that deadline. They never
+restart it. Generic planner admission remains30 seconds. Current Gmail production
+is still incomplete, so this source capability is not a claimed OW2 runtime pass.

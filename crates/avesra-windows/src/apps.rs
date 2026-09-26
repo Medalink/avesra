@@ -1043,3 +1043,6 @@ fn app_observation(
         },
     }
 }
+
+#[path = "demonstration.rs"]
+pub mod demonstration;

@@ -84,6 +84,9 @@ impl Observation {
             };
         let body = serde_json::to_vec(reply).map_err(|_| ErrorCode::Malformed)?;
         let document = match (&request.document, &reply.outcome) {
+            (_, avesra_contracts::browser::reading::Outcome::Inbox { terminal }) => {
+                &terminal.document
+            }
             (Some(document), _) => document,
             (None, avesra_contracts::browser::reading::Outcome::XReady { ready }) => {
                 &ready.document

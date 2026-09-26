@@ -155,7 +155,10 @@ async fn run(
     response_timing: &mut Option<avesra_core::trace::ResponseTiming>,
 ) -> Result<Submitted, String> {
     let mut owner = crate::output::Owner::reserve(app)?;
-    let prep_deadline = started + Duration::from_secs(8);
+    let mailbox_deadline = reply.output_deadline();
+    let prep_deadline = mailbox_deadline.map_or(started + Duration::from_secs(8), |limit| {
+        limit.min(started + Duration::from_secs(8))
+    });
     voice.validate().map_err(|_| "Invalid selected voice")?;
     speech::Source {
         planner: reply.context().clone(),
@@ -193,7 +196,9 @@ async fn run(
         withdrawn,
         epoch: AtomicU64::new(session.playback_epoch),
         id: Uuid::new_v4(),
-        deadline: started + Duration::from_secs(80),
+        deadline: mailbox_deadline.map_or(started + Duration::from_secs(80), |limit| {
+            limit.min(started + Duration::from_secs(80))
+        }),
     });
     let _submission = avesra_core::trace::output(
         avesra_core::trace::Link::planner(admission.reply.context()).child(admission.id),

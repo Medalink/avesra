@@ -436,6 +436,11 @@ pub(crate) fn write_entry(
 ) -> Result<bool, ErrorCode> {
     entry.validate()?;
     validate_accepted_source(tx, &entry)?;
+    if let Content::Routine { name, .. } = &entry.content
+        && crate::demonstration::routine(tx, entry.actor, name)?.is_some()
+    {
+        return Err(ErrorCode::Denied);
+    }
     let current = ids(tx, entry.actor)?;
     if !existing && current.len() >= 256 {
         return Err(ErrorCode::TooLarge);

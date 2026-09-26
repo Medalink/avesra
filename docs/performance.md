@@ -1,5 +1,9 @@
 # Local observed performance
 
+Cached PC/controller resource readings and their bounded retained export are now
+part of the accepted-trace inspection surface; see [resource-observer.md](resource-observer.md).
+They are host/process-scoped, never attributed to the selected accepted turn.
+
 This first instrumentation slice measures actual admitted preview/greeting output
 sessions and explicit streaming activity checks. It grants no permission, starts
 no device/model work, and cannot qualify owner recognition or an accepted request.
@@ -37,18 +41,21 @@ failed/abandoned observations, and reports each outcome and missing-duration cou
 Fewer than 30 timed observations are explicitly provisional. Values from different
 hosts, operations or stages are never merged or subtracted.
 
-Only visible, unlocked native Settings may read this snapshot. Opening or refreshing
-Performance performs no inference, playback, capture or disk write. The view names
-the measured scope and process-only retention and uses explicit refresh.
+Only visible, unlocked native Settings may read this process-local snapshot.
+Refreshing its in-memory aggregate performs no inference, playback, capture or
+disk write. The separate accepted-trace/resource inspection and export surface
+reads persisted telemetry, may compact retention during a query, and writes an
+explicitly requested export. It still starts no inference, playback or capture.
+Each view names its measured scope and retention and uses explicit refresh.
 
 Instrumented entry points: preview::play_owned and play (admitted preview and
 startup greeting); playback_signal::Telemetry::sample (validated off-callback
 submission); voice_check_activity::Stream::run (explicit live check);
 performance_snapshot/Performance.svelte (read-only projection). Instrumentation
 is a source capability; only separately recorded runtime observations prove it ran.
-Rejected
-pre-admission attempts, batch activity, accepted reasoning/reply/action stages,
-server internals, persistence/export and cross-host tracing remain out of scope.
+Batch activity remains outside these older preview/activity timing aggregates.
+Preacceptance voice outcomes and accepted reasoning/reply/action observations are
+implemented by later observers with their own scope and retention, described below.
 No new callback allocation/locking, retry, permissive fallback or device operation
 is introduced. Under the owner override, verification uses source review and
 coordinated static/build checks, with no tests, fixtures or harnesses.
@@ -59,5 +66,12 @@ stage spans across native/controller/private-job/output owners; it does not turn
 this older process-local preview aggregate into release performance evidence.
 The accepted view displays retained per-host stage percentiles/counts/errors/max,
 explicit unavailable queue/deployment fields, observer losses and collector starts.
-Preacceptance capture/ASR/speaker spans, detector accuracy, live hardware headroom,
-complete engine counters, and baseline/candidate report comparison remain missing.
+Preacceptance capture/analysis/intent/gate timings and enum-only outcome totals are
+source-integrated; actual controller ASR/speaker driver receipts are promoted only
+after genuine durable acceptance, as specified in [voice-timing.md](voice-timing.md).
+Host/process resource sampling and cached headroom projection are source-integrated
+under [resource-observer.md](resource-observer.md). These implementations do not
+establish runtime sampling, exported cross-host evidence, detector accuracy,
+whole-companion overhead, complete engine counters, or baseline/candidate report
+comparison. Those proof and implementation boundaries remain open as applicable;
+the acceptance ledger records the exact verified artifact/run scope.

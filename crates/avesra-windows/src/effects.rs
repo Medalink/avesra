@@ -71,6 +71,10 @@ impl Management {
     }
 }
 enum Command {
+    Teaching(
+        Box<teaching::Request>,
+        SyncSender<Result<teaching::ResultValue, ErrorCode>>,
+    ),
     MemoryAnswer {
         claim: Box<PlannerClaim>,
         approved: Option<Box<avesra_core::memory::conversation::Deletion>>,
@@ -554,6 +558,10 @@ pub struct PublishedReply {
     reply: StoredReply,
 }
 impl PublishedReply {
+    pub fn output_deadline(&self) -> Option<std::time::Instant> {
+        self.reply.output_deadline()
+    }
+
     pub fn provenance(&self) -> &avesra_contracts::speech::Provenance {
         self.reply.provenance()
     }
@@ -833,7 +841,12 @@ fn execute_read(
                     .ok_or(ErrorCode::Stale)?
                     .finalize(&mut execution, &mut current)?;
                 (consumer.consume)(borrowed)?;
-                break execution.completed_receipt();
+                let receipt = execution.completed_receipt()?;
+                if execution.mailbox_taken() {
+                    preparation.transfer_mailbox()?;
+                    execution.transfer_mailbox()?;
+                }
+                break Ok(receipt);
             }
             if execution.remaining_ms().is_err() {
                 preparation.close_publication();
@@ -1131,6 +1144,7 @@ impl NativeEffects {
                         let _ = completion.reply.try_send(result);
                     }
                     let mut job = match command {
+                        Command::Teaching(request,reply)=>{let result=teaching::execute(controller.management(),&adapter.apps,*request);let _=reply.try_send(result);continue;}
                         Command::MemoryAnswer{claim,approved,mut authorize,reply}=>{
                             let target=claim.target();let epoch=claim.context().action_epoch;let cancellation=claim.cancellation();
                             let result=(||{
@@ -2051,3 +2065,6 @@ impl Drop for NativeEffects {
         self.observe(0, false);
     }
 }
+
+#[path = "effects_teaching.rs"]
+pub mod teaching;

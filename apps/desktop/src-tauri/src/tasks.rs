@@ -24,8 +24,12 @@ pub mod download;
 #[path = "tasks_memory.rs"]
 pub mod memory;
 
+#[path = "tasks_teaching.rs"]
+pub mod teaching;
+
 #[derive(Default)]
 pub struct State {
+    teaching: teaching::State,
     download_pending: Mutex<Option<download::Pending>>,
     memory_pending: Mutex<Option<memory::Pending>>,
     vpn_channel: Mutex<Option<(Uuid, connection::SessionIdentity, Instant, VpnChannel)>>,
@@ -77,6 +81,7 @@ struct Panel {
 }
 impl State {
     pub fn invalidate(&self) {
+        self.teaching.invalidate();
         if let Ok(mut pending) = self.memory_pending.lock() {
             *pending = None;
         }
@@ -967,6 +972,8 @@ async fn execute_accepted(
         &target,
         avesra_core::action_permissions::TaskTarget::Vpn { .. }
     );
+    let mailbox_result = Arc::new(Mutex::new(None));
+    let mailbox_publication = mailbox_result.clone();
     let consumer =
         if let avesra_core::action_permissions::TaskTarget::BrowserRead { scope }
         | avesra_core::action_permissions::TaskTarget::XReady { scope, .. }
@@ -980,9 +987,26 @@ async fn execute_accepted(
                 consume: Box::new(move |borrowed| {
                     expected.current_owner(&owned_app)?;
                     let (reply, mailbox) = borrowed.consume_inbox()?;
-                    let inbox = crate::browser::mailbox::consume(&reply, mailbox)?;
+                    let inbox = crate::browser::mailbox::consume(&reply, mailbox.as_ref())?;
+                    let successor = mailbox
+                        .as_ref()
+                        .map(|e| crate::browser::mailbox::Successor::new(&owned_app, e))
+                        .transpose()?;
                     retain_page(&owned_app, &expected, step, origin, reply, inbox)
-                        .map_err(|_| ErrorCode::Stale)
+                        .map_err(|_| ErrorCode::Stale)?;
+                    if let (Some(evidence), Some(successor)) = (mailbox, successor) {
+                        if !successor.current() {
+                            return Err(ErrorCode::Stale);
+                        }
+                        let mut slot = mailbox_publication
+                            .lock()
+                            .map_err(|_| ErrorCode::Unavailable)?;
+                        if slot.is_some() {
+                            return Err(ErrorCode::Stale);
+                        }
+                        *slot = Some((evidence, successor));
+                    }
+                    Ok(())
                 }),
             })
         } else {
@@ -1040,7 +1064,12 @@ async fn execute_accepted(
                         if !authenticated {let _=app.emit("runtime-error","VPN observation finished, but the paired Spark could not be authenticated within 3 seconds. The connection is not retried; inspect Cisco and network routing without changing corporate policy.");}
                     }
                 }
-                if let Some(request)=observation {
+                if let Some(mut request)=observation {
+                    if request.requires_mailbox(){
+                        let evidence=mailbox_result.lock().map_err(|_|"Mailbox source unavailable")?.take();
+                        let Some((evidence,successor))=evidence else{return Ok(AcceptedResult::Action(receipt));};
+                        request=request.attach_mailbox(evidence,Box::new(move||successor.current())).map_err(|_|"Original mailbox source expired or changed")?;
+                    }
                     context.current_owner(app).map_err(|_|"Diagnostic output context changed")?;
                     let expected=context.clone();let owner_app=app.clone();
                     let receiver=state.effects.observation_answer(request,receipt.dispatch_id,Box::new(move|authority|{

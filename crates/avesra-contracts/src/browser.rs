@@ -7,7 +7,7 @@ pub mod mailbox;
 pub mod provider;
 pub mod reading;
 
-pub const VERSION: u16 = 9;
+pub const VERSION: u16 = 10;
 pub const MAX_MESSAGE: usize = 65536;
 pub const HANDSHAKE_SECONDS: u64 = 45;
 
@@ -422,7 +422,7 @@ pub fn comparison_transcript(challenge: &Challenge) -> Result<Vec<u8>, ErrorCode
         return Err(ErrorCode::Unsupported);
     }
     Ok(format!(
-        "AVESRA-BROWSER-COMPARE-9\n{}\n{}\n{}\n{}\n{}\n",
+        "AVESRA-BROWSER-COMPARE-10\n{}\n{}\n{}\n{}\n{}\n",
         challenge.installation.uuid(),
         challenge.connection.uuid(),
         challenge.session.uuid(),
@@ -449,7 +449,7 @@ pub fn transcript(
         return Err(ErrorCode::Stale);
     }
     Ok(format!(
-        "AVESRA-BROWSER-AUTH-9\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n",
+        "AVESRA-BROWSER-AUTH-10\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n",
         pairing.id.uuid(),
         pairing.revision.uuid(),
         hello.installation.uuid(),

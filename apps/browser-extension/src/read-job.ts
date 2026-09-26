@@ -6,6 +6,7 @@ import { beginPageExcerpt, finishPageExcerpt, type Extracted } from "./page-exce
 import { probe } from "./provider.js";
 import { observeXReady, type XObservation, type XInputObservation } from "./x-ready.js";
 import {MailboxStream,observeGmail,type Observation as GmailObservation,type Ack as MailboxAck} from "./gmail-job.js";
+import {beginGmailLifecycle,prepareGmailTransition,invokeGmailTransition,settledGmailTransition,GmailTransitionEvents,type Transition} from "./gmail-lifecycle.js";
 import { XDocument } from "./x-document.js";
 import type { Candidate } from "./documents.js";
 
@@ -26,7 +27,7 @@ export function pendingSettlement(pairing: p.Pairing): r.Settlement | null {
 type Job = {
   request: r.Request; document:Candidate|null; creation:XDocument|null; owner: ReturnType<ObservationAuthority["snapshot"]>;
   deadline: number; withdrawn: boolean; sent: boolean;
-  mailbox:MailboxStream|null;
+  mailbox:MailboxStream|null; gmail:GmailTransitionEvents|null;
   extracted: Extracted | XObservation | XInputObservation | GmailObservation | null; reply: r.Reply | null;
   focusTab:boolean; focusWindow:boolean; focusVacancy:boolean; focused:boolean; focusUncertain:boolean;
 };
@@ -81,9 +82,15 @@ export class ReadJob {
   constructor(private readonly authority: ObservationAuthority, private readonly connected: () => boolean,
     private readonly revision: () => number, private readonly failed: () => void) {}
 
-  creationEvent(event:Parameters<XDocument["event"]>[0]):boolean { return this.job?.creation?.event(event)??false; }
+  creationEvent(event:Parameters<XDocument["event"]>[0]):boolean {
+    const job=this.job;
+    if(job&&this.current(job)&&job.gmail&&(event.kind==="history"||event.kind==="fragment")&&event.frame!==undefined&&event.url!==undefined)
+      return job.gmail.event(event.tab,event.frame,event.url,event.document);
+    return job?.creation?.event(event)??false;
+  }
   expectedUpdate(tab:number,change:object,info:chrome.tabs.Tab):boolean {
     const job=this.job,document=job?.document;
+    if(job&&this.current(job)&&job.gmail?.updated(tab,change,info))return true;
     return !!job&&!!document&&this.current(job)&&job.request.mode.kind==="x_ready"&&tab===document.tab
       &&info.id===document.tab&&info.windowId===document.window&&info.url===document.url&&!info.incognito
       &&!info.discarded&&!info.frozen&&info.status==="complete"&&!info.pendingUrl
@@ -145,9 +152,9 @@ export class ReadJob {
     this.seen.add(value.context.request);
     if (this.running || outbox) throw new Error("Read owner occupied");
     const job: Job = { request: value, document:value.document, creation:null, owner: this.authority.snapshot(), deadline: performance.now() + value.remaining_ms,
-      withdrawn: false, sent: false, mailbox:null, extracted: null, reply: null,focusTab:false,focusWindow:false,focusVacancy:false,focused:false,focusUncertain:false };
+      withdrawn: false, sent: false, mailbox:null, gmail:null, extracted: null, reply: null,focusTab:false,focusWindow:false,focusVacancy:false,focused:false,focusUncertain:false };
     this.job = job;
-    if(value.mode.kind==="inbox")job.mailbox=new MailboxStream(value.context,()=>this.current(job));
+    if(value.mode.kind==="inbox"){job.mailbox=new MailboxStream(value.context,()=>this.current(job));job.gmail=new GmailTransitionEvents(()=>job.document!);}
     this.check(job);
     this.arm(job);
     const actual = acquireBrowserJob();
@@ -161,7 +168,7 @@ export class ReadJob {
 
   // Withdrawal only permits exact-document metadata cleanup. It never revives
   // content authority, changes target, or grants a missing host permission.
-  private async verify(job: Job, cleanup = false) {
+  private async verify(job: Job, cleanup = false, transition?:Transition) {
     const check = () => {
       if (!cleanup) this.check(job);
       else if (!this.current(job)) { job.withdrawn = true; job.extracted = null; job.reply = null; }
@@ -173,12 +180,12 @@ export class ReadJob {
     if (!permitted) throw new Error("Read permission unavailable");
     const tab = await chrome.tabs.get(document.tab); check();
     const usable = (value: chrome.tabs.Tab) => value.id === document.tab && value.windowId === document.window
-      && value.url === document.url && !value.incognito && !value.discarded && !value.frozen
+      && (value.url === document.url || (!!transition && value.url===transition.to)) && !value.incognito && !value.discarded && !value.frozen
       && value.status === "complete" && !value.pendingUrl;
     if (!usable(tab)) throw new Error("Read tab changed");
     const target = { tabId: document.tab, frameId: 0, documentId: document.document };
     const frame = await chrome.webNavigation.getFrame(target); check();
-    if (!frame || frame.documentId !== document.document || frame.url !== document.url || frame.errorOccurred
+    if (!frame || frame.documentId !== document.document || (frame.url !== document.url && frame.url!==transition?.to) || frame.errorOccurred
       || frame.documentLifecycle !== "active" || frame.frameType !== "outermost_frame" || frame.parentFrameId !== -1) {
       throw new Error("Read document changed");
     }
@@ -186,6 +193,40 @@ export class ReadJob {
     if (!usable(again)) throw new Error("Read tab changed");
     const stillPermitted = await chrome.permissions.contains({ origins: [request.origin + "/*"] }); check();
     if (!stillPermitted) throw new Error("Read permission removed");
+  }
+  // Called only by the fixed Gmail observer once it has produced a native DOM
+  // offer. The current header-only observer produces none. No frontend route.
+  private async invokeGmail(job:Job,offer:string):Promise<Transition> {
+    if(job.request.mode.kind!=="inbox"||!job.gmail)throw new Error("Gmail owner unavailable");
+    await this.verify(job);this.check(job);
+    const values=await chrome.scripting.executeScript({target:{tabId:job.document!.tab,documentIds:[job.document!.document]},world:"ISOLATED",func:prepareGmailTransition,args:[job.request.context.request,job.document!.url,offer]});
+    this.check(job);const prepared=result(values,job);
+    if(!p.object(prepared,["id","operation","from","to"])||prepared.id!==offer||typeof prepared.from!=="string"||prepared.from!==job.document!.url||typeof prepared.to!=="string"||!["open_message","expand_message","next_page","return_inbox"].includes(String(prepared.operation)))throw new Error("Gmail offer malformed");
+    const before=new URL(prepared.from),after=new URL(prepared.to);
+    if(before.origin!=="https://mail.google.com"||before.origin!==after.origin||before.pathname!==after.pathname||before.search!==after.search||after.username||after.password)throw new Error("Gmail route changed");
+    const transition=prepared as Transition;
+    job.gmail.begin(transition);
+    await this.verify(job);this.check(job);
+    const invoked=await chrome.scripting.executeScript({target:{tabId:job.document!.tab,documentIds:[job.document!.document]},world:"ISOLATED",func:invokeGmailTransition,args:[job.request.context.request,offer]});
+    result(invoked,job);this.check(job);
+    await this.verify(job,false,transition);this.check(job);
+    return transition;
+  }
+  private async settleGmail(job:Job,transition:Transition):Promise<void> {
+    // The fixed observer must first confirm fresh account + semantic postcondition
+    // inside the guard; polling alone can never confirm an operation.
+    for(;;){
+      await this.verify(job,false,transition);this.check(job);
+      const values=await chrome.scripting.executeScript({target:{tabId:job.document!.tab,documentIds:[job.document!.document]},world:"ISOLATED",func:settledGmailTransition,args:[job.request.context.request,transition.id]});
+      this.check(job);const settled=result(values,job);
+      if(settled!==null){
+        if(!p.object(settled,["url","dom_revision"])||settled.url!==transition.to||!p.counter(settled.dom_revision))throw new Error("Gmail postcondition malformed");
+        job.document={...job.document!,url:transition.to};
+        await this.verify(job);this.check(job);
+        job.gmail!.complete(transition.id);return;
+      }
+      await new Promise<void>(resolve=>setTimeout(resolve,20));this.check(job);
+    }
   }
   private async run(job: Job, actual: BrowserJob) {
     let injected = false, settled = false;
@@ -198,13 +239,16 @@ export class ReadJob {
       }
       await this.verify(job); this.check(job);
       injected = true; // Rejection or loss after this point cannot prove absence.
-      const values = await chrome.scripting.executeScript({
+      const values:chrome.scripting.InjectionResult<unknown>[] = job.request.mode.kind==="inbox" ? await chrome.scripting.executeScript({
+        target:{tabId:job.document!.tab,documentIds:[job.document!.document]},world:"ISOLATED",func:beginGmailLifecycle,
+        args:[{request:job.request.context.request,url:job.document!.url,budgetMs:Math.max(1,Math.floor(job.deadline-performance.now())),account:job.request.mode.account}],
+      }) : await chrome.scripting.executeScript({
         target: { tabId: job.document!.tab, documentIds: [job.document!.document] },
         world: "ISOLATED", func: beginPageExcerpt,
         args: [{ request: job.request.context.request, url: job.document!.url,
           maxBlocks: Math.min(16, job.request.message_limit), budgetMs: Math.max(1, Math.floor(job.deadline - performance.now())),
-          provider: job.request.mode.kind === "provider_inspection" ? job.request.mode.provider : job.request.mode.kind === "x_ready" ? "x" : job.request.mode.kind === "inbox" ? "gmail" : null,
-          inbox:job.request.mode.kind==="inbox",
+          provider: job.request.mode.kind === "provider_inspection" ? job.request.mode.provider : job.request.mode.kind === "x_ready" ? "x" : null,
+          inbox:false,
           xReady:job.request.mode.kind==="x_ready" }],
       });
       const value = result(values, job);

@@ -359,6 +359,7 @@ dependencies = [
  "axum-server",
  "base64 0.22.1",
  "hex",
+ "libc",
  "rand 0.9.5",
  "rcgen",
  "reqwest 0.12.28",

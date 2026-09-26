@@ -10,6 +10,7 @@ pub mod ledger;
 pub mod memory;
 pub mod notifications;
 pub mod policy;
+pub mod resource_observer;
 pub mod sound;
 pub mod state;
 pub mod store;
@@ -28,3 +29,5 @@ pub mod owner;
 pub mod shortcuts;
 
 mod diagnostic_reply;
+
+pub mod demonstration;

@@ -1,12 +1,13 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
+  import Teaching from "./Teaching.svelte";
   import SetupLock from "./SetupLock.svelte";
   import { command, native, type Runtime } from "./runtime";
   let { runtime }: { runtime: Runtime | null } = $props();
   type Entry = { id: string; revision: string; source: { task: string; turn: string } | null; accepted_source?:{turn:string;revision:string}|null; content: { kind: "named_fact"; key:string; value:string } | { kind: "fact"; value: string } | { kind: "routine"; name: string; disabled: boolean }; corrected: boolean; created_ms: number };
   type View = { entry: Entry; validated: boolean };
-  type Snapshot = { sequence: number; memories: View[]; tasks: { task: string; outcome: string | null; payload: { kind: string }; created_ms: number }[] };
+  type Snapshot = { aliases:{id:string;revision:string;phrase:string}[]; sequence: number; memories: View[]; tasks: { task: string; outcome: string | null; payload: { kind: string }; created_ms: number }[] };
   type DeleteView = { proposal: string; memory: string; revision: string; key: string };
   let pendingDelete = $state<DeleteView | null>(null);
   let panel = $state<string | null>(null);
@@ -85,3 +86,5 @@
   {#if !snapshot}<p class="av-hint">Refresh to inspect your durable records.</p>{:else if snapshot.memories.length === 0}<p class="av-hint">No saved facts or routines for the current owner.</p>{:else}{#each snapshot.memories as item}<div class="row"><div><h3>{item.entry.content.kind === "named_fact" ? `${item.entry.content.key}: ${item.entry.content.value}` : item.entry.content.kind === "fact" ? item.entry.content.value : item.entry.content.name}</h3><p class="av-hint">{item.entry.content.kind !== "routine" ? "Explicit fact" : item.entry.content.disabled ? "Disabled routine" : item.validated ? "Routine · verified invocation" : "Routine candidate · not yet invoked"}{item.entry.corrected ? " · corrected revision" : ""} · {new Date(item.entry.created_ms).toLocaleString()}</p><p class="av-hint">{item.entry.source ? `Source task ${item.entry.source.task}` : `Accepted source ${item.entry.accepted_source?.turn ?? "unavailable"}`}</p></div><div class="flex gap-2"><button class="av-btn av-btn-ghost av-btn-sm" disabled={!enabled || busy} onclick={() => edit(item.entry)}>Correct</button><button class="av-btn av-btn-ghost av-btn-sm" disabled={!enabled || busy} onclick={() => remove(item.entry)}>Delete</button></div></div>{/each}{/if}
   {#if error}<p class="av-hint text-amber-200" role="status">{error}</p>{/if}{#if notice}<p class="av-hint" role="status">{notice}</p>{/if}
 </section>
+
+<Teaching {runtime} {panel} aliases={snapshot?.aliases ?? []} />

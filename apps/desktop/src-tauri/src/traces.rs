@@ -106,7 +106,7 @@ async fn collect(
         let (controller, controller_error) =
             if let (Some(session), Some(intent)) = (session, intent) {
                 let query = trace::Query {
-                    version: 1,
+                    version: trace::QUERY_VERSION,
                     request: Uuid::new_v4(),
                     session: session.id,
                     action_epoch: session.action_epoch,

@@ -21,6 +21,7 @@ impl ObservationClaim {
                 | ActionPayload::DiagnoseDownload { .. }
                 | ActionPayload::FlushDownloadDns { .. }
                 | ActionPayload::ConnectVpn { .. }
+                | ActionPayload::ReadInbox { .. }
         ) {
             return None;
         }
@@ -55,12 +56,16 @@ impl ObservationClaim {
             claim: Self { started, ..self },
             binding,
             cancellation: PlannerCancellation(withdrawal),
+            mailbox: None,
+            mailbox_lifetime: None,
         };
         request.current()?;
         Ok(request)
     }
 }
 pub struct ObservationRequest {
+    mailbox: Option<crate::browser_execution::MailboxEvidence>,
+    mailbox_lifetime: Option<MailboxLifetime>,
     claim: ObservationClaim,
     binding: Binding,
     cancellation: PlannerCancellation,
@@ -75,16 +80,49 @@ impl ObservationRequest {
     pub fn cancellation(&self) -> PlannerCancellation {
         self.cancellation.clone()
     }
+    pub fn requires_mailbox(&self) -> bool {
+        matches!(self.claim.action.payload, ActionPayload::ReadInbox { .. })
+    }
+    pub fn attach_mailbox(
+        mut self,
+        evidence: crate::browser_execution::MailboxEvidence,
+        current: Box<dyn Fn() -> bool + Send + Sync>,
+    ) -> Result<Self, ErrorCode> {
+        self.current()?;
+        if !self.requires_mailbox() || self.mailbox.is_some() || !current() {
+            return Err(ErrorCode::Stale);
+        }
+        let deadline = evidence.deadline().min(
+            self.claim.started
+                + Duration::from_millis(avesra_contracts::browser::mailbox::LIFETIME_MS),
+        );
+        self.mailbox = Some(evidence);
+        self.mailbox_lifetime = Some(MailboxLifetime { deadline, current });
+        self.current()?;
+        Ok(self)
+    }
     fn current(&self) -> Result<(), ErrorCode> {
         self.cancellation.check()?;
-        remaining(self.claim.started)?;
+        if self.requires_mailbox() {
+            if self.claim.started.elapsed()
+                >= Duration::from_millis(avesra_contracts::browser::mailbox::LIFETIME_MS)
+                || self
+                    .mailbox_lifetime
+                    .as_ref()
+                    .is_some_and(|v| Instant::now() >= v.deadline || !(v.current)())
+            {
+                return Err(ErrorCode::Expired);
+            }
+        } else {
+            remaining(self.claim.started)?;
+        }
         self.claim.action.validate(crate::execution::now_ms()?)
     }
 }
 impl Store {
     pub fn finish_observation_answer(
         &mut self,
-        request: ObservationRequest,
+        mut request: ObservationRequest,
         dispatch: Uuid,
         authorize: &mut dyn FnMut(&PlannerAuthority<'_>) -> Result<(), ErrorCode>,
     ) -> Result<StoredReply, ErrorCode> {
@@ -162,7 +200,33 @@ impl Store {
                     .map_err(|_| ErrorCode::Malformed)
             })
             .transpose()?;
-        let text = crate::diagnostic_reply::describe(action, outcome, observation.as_ref())?;
+        let (text, provenance) = if request.requires_mailbox() {
+            if outcome != Outcome::Success || request.mailbox_lifetime.is_none() {
+                return Err(ErrorCode::Stale);
+            }
+            let evidence = request.mailbox.take().ok_or(ErrorCode::Stale)?;
+            let (text, provenance, deadline) = evidence.finish(
+                action,
+                dispatch,
+                observation.as_ref().ok_or(ErrorCode::Stale)?,
+            )?;
+            if request
+                .mailbox_lifetime
+                .as_ref()
+                .is_none_or(|v| v.deadline > deadline)
+            {
+                return Err(ErrorCode::Stale);
+            }
+            (text, provenance)
+        } else {
+            (
+                crate::diagnostic_reply::describe(action, outcome, observation.as_ref())?,
+                Provenance::NativeObservation {
+                    dispatch,
+                    action_revision: action.revision,
+                },
+            )
+        };
         let ordinal:i64=tx.query_row("UPDATE planner_claim_sequence SET value=value+1 WHERE id=1 AND value<9007199254740991 RETURNING value",[],|r|r.get(0)).optional().map_err(|_|ErrorCode::Storage)?.ok_or(ErrorCode::TooLarge)?;
         let plan = Plan {
             request: planner::Request {
@@ -195,10 +259,7 @@ impl Store {
                 terminal: planner::Terminal::Complete,
                 response: planner::Response::Answer { text },
             },
-            provenance: Provenance::NativeObservation {
-                dispatch,
-                action_revision: action.revision,
-            },
+            provenance,
         };
         result.reply.validate(&plan.request.context)?;
         result.provenance.validate()?;
@@ -230,6 +291,7 @@ impl Store {
         tx.commit().map_err(|_| ErrorCode::Storage)?;
         request.current()?;
         Ok(StoredReply {
+            mailbox_lifetime: request.mailbox_lifetime,
             binding: request.binding,
             publication: request.cancellation,
             revision: result.revision,

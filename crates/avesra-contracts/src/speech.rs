@@ -2,7 +2,7 @@
 use crate::{ErrorCode, browser::MAX_SAFE_COUNTER, planner, voice::VoiceIdentity};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-pub const VERSION: u16 = 5;
+pub const VERSION: u16 = 6;
 pub const MAX_TEXT_BYTES: usize = 8192;
 pub const MAX_SEGMENT_BYTES: usize = 512;
 pub const MAX_SEGMENTS: usize = 64;
@@ -66,6 +66,17 @@ pub enum EventKind {
 pub enum Provenance {
     #[default]
     Model,
+    NativeMailbox {
+        dispatch: Uuid,
+        action_revision: Uuid,
+        grant: Uuid,
+        scope: crate::browser::ScopeRef,
+        account_sha256: String,
+        digest: String,
+        requested: u16,
+        count: u16,
+        sources: Vec<MailboxSource>,
+    },
     NativeMemory {
         memory: Option<Uuid>,
         revision: Option<Uuid>,
@@ -85,8 +96,56 @@ pub enum Provenance {
         events: Vec<Uuid>,
     },
 }
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MailboxSource {
+    pub id: String,
+    pub thread: String,
+    pub reference: String,
+    pub timestamp_ms: u64,
+}
 impl Provenance {
     pub fn validate(&self) -> Result<(), ErrorCode> {
+        if let Self::NativeMailbox {
+            dispatch,
+            action_revision,
+            grant,
+            scope,
+            account_sha256,
+            digest,
+            requested,
+            count,
+            sources,
+        } = self
+        {
+            let _ = scope; // Non-nil typed IDs are validated by their constructors/decoder.
+            if dispatch.is_nil()
+                || action_revision.is_nil()
+                || grant.is_nil()
+                || !crate::browser::mailbox::digest(account_sha256)
+                || !crate::browser::mailbox::digest(digest)
+                || !(1..=100).contains(requested)
+                || count > requested
+                || sources.len() > 4
+                || sources.len() > usize::from(*count)
+                || sources.iter().enumerate().any(|(i, s)| {
+                    s.id.is_empty()
+                        || s.id.len() > 128
+                        || s.thread.is_empty()
+                        || s.thread.len() > 128
+                        || s.reference.is_empty()
+                        || s.reference.len() > 2048
+                        || s.timestamp_ms == 0
+                        || s.timestamp_ms > 8_640_000_000_000_000
+                        || [&s.id, &s.thread, &s.reference]
+                            .iter()
+                            .any(|v| !v.bytes().all(|b| (33..=126).contains(&b)))
+                        || sources[..i].iter().any(|prior| prior.id == s.id)
+                })
+            {
+                return Err(ErrorCode::Malformed);
+            }
+        }
         if let Self::NativeMemory {
             memory,
             revision,

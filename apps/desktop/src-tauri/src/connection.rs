@@ -113,7 +113,7 @@ pub async fn trace_query(
         .await
         .map_err(|_| "Trace reply interrupted")?
     {
-        if bytes.len() + chunk.len() > 8 * 1024 * 1024 {
+        if bytes.len() + chunk.len() > 16 * 1024 * 1024 {
             return Err("Trace reply exceeds bound".into());
         }
         bytes.extend_from_slice(&chunk);

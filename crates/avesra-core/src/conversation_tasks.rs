@@ -349,6 +349,7 @@ pub(crate) fn validate_dispatch(
     session: &DispatchSession,
 ) -> Result<(), ErrorCode> {
     crate::memory::current_invocation(db, action.actor_id, action.task_id)?;
+    crate::demonstration::current_invocation(db, action.actor_id, action.task_id)?;
     let turn: Option<String> = db
         .query_row(
             "SELECT substr(turn,1,37) FROM conversation_tasks WHERE task=?1",
@@ -726,19 +727,27 @@ impl Store {
             return Err(ErrorCode::Stale);
         }
         let permissions = self.action_permissions(Some(record.actor))?;
-        let routine_text = record.text.trim_matches(' ').to_lowercase();
+        let routine_text = record
+            .text
+            .trim()
+            .trim_end_matches(['.', '!', '?'])
+            .to_lowercase();
         let routine_text = routine_text
-            .strip_prefix("avesra ")
+            .strip_prefix("avesra, ")
+            .or_else(|| routine_text.strip_prefix("avesra "))
             .unwrap_or(&routine_text);
         let routine_name = routine_text.strip_prefix("run routine ");
-        let routine = if let Some(name) = routine_name {
-            match crate::memory::routine(&self.connection, record.actor, name)? {
-                Some(entry) => Some(entry),
-                None => return Ok(TaskResolution::NeedsInput(request.turn)),
-            }
-        } else {
-            None
-        };
+        let routine = routine_name
+            .map(|name| crate::memory::routine(&self.connection, record.actor, name))
+            .transpose()?
+            .flatten();
+        let demonstration = routine_name
+            .map(|name| crate::demonstration::routine(&self.connection, record.actor, name))
+            .transpose()?
+            .flatten();
+        if routine_name.is_some() && routine.is_some() == demonstration.is_some() {
+            return Ok(TaskResolution::NeedsInput(request.turn));
+        }
         let read_origin = record
             .text
             .trim_matches(' ')
@@ -849,6 +858,17 @@ impl Store {
                 },
                 project,
             )
+        } else if let Some(entry) = &demonstration {
+            self.teaching_setup(record.actor, entry.scope.id, entry.scope.revision, apps)?;
+            let target = entry.target();
+            let matches: Vec<_> = permissions
+                .iter()
+                .filter(|p| !p.revoked && p.permission.target == target)
+                .collect();
+            if matches.len() != 1 {
+                return Ok(TaskResolution::NeedsInput(request.turn));
+            }
+            (target, entry.payload(), matches[0].permission.name.clone())
         } else if let Some(entry) = &routine {
             let source = entry.source.as_ref().ok_or(ErrorCode::Malformed)?;
             let matches: Vec<_> = permissions
@@ -999,6 +1019,17 @@ impl Store {
         if let Some(entry) = routine {
             tx.execute(
                 "INSERT INTO routine_invocations VALUES(?1,?2,?3)",
+                params![
+                    link.action.task_id.to_string(),
+                    entry.id.to_string(),
+                    entry.revision.to_string()
+                ],
+            )
+            .map_err(|_| ErrorCode::Storage)?;
+        }
+        if let Some(entry) = demonstration {
+            tx.execute(
+                "INSERT INTO demonstration_invocations VALUES(?1,?2,?3)",
                 params![
                     link.action.task_id.to_string(),
                     entry.id.to_string(),

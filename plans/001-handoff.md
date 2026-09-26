@@ -217,3 +217,13 @@ See `plans/spark2-model-setup.md`, `docs/evidence/m0-preflight.md`, and the exec
 ## Publication alert
 
 GitHub reported 13 dependency alerts (8 high, 5 moderate) during the handoff push. These were not triaged or fixed in this stopped session. Review the repository Dependabot alerts before claiming release readiness; this notice is not an independent vulnerability assessment.
+
+### Browser lifecycle follow-up observed in source
+
+Authenticated browser attempts currently expire300 seconds after the original
+Settings attempt. The extension reconnects only through its popup Connect command;
+there is no automatic fresh-session saved-pair reconnect path. This remains required
+C4 normal-use work after the Gmail continuation checkpoint. Preserve fixed job
+lifetimes, exact process/profile/account scopes, settlement exclusion and no content
+replay when adding fresh authentication; do not extend an old session to hide the gap.
+No actual user browser installation/account was inspected or changed for this finding.

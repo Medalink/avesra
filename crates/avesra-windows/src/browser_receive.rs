@@ -131,14 +131,14 @@ impl ReadReply<'_, '_> {
     ) -> Result<
         (
             browser::reading::Reply,
-            Option<avesra_core::workflows::mailbox::Mailbox>,
+            Option<avesra_core::browser_execution::MailboxEvidence>,
         ),
         ErrorCode,
     > {
         self.execution.content_current()?;
         (self.current)()?;
         self.execution.content_current()?;
-        let mailbox = self.execution.take_mailbox()?;
+        let mailbox = self.execution.take_mailbox_evidence()?;
         Ok((self.reply.take().ok_or(ErrorCode::Stale)?, mailbox))
     }
     pub fn consume(mut self) -> Result<browser::reading::Reply, ErrorCode> {

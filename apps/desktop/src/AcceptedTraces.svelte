@@ -1,8 +1,10 @@
 <script lang="ts">
+  import ResourceReadings from "./ResourceReadings.svelte";
+  import type { ComponentProps } from "svelte";
   import { command, native, type Runtime } from "./runtime";
   let { runtime }: { runtime: Runtime | null } = $props();
   type Span = { id:string; link:{turn:string;operation:string;parent:string|null}; host:string; process:string; stage:string; outcome:string; error:string|null; duration_us:number; queue_us:number|null; retries:number; deployment:{model:string|null;image:string|null;config:string|null}; analysis?:{request:string;receipts:{worker:string;host:string;process:string;lane:string;model_revision:string;duration_us:number}[]}|null };
-  type Snapshot = { records:Span[]; trace_days:number; observer_loss:number; evicted:number; collector_starts:number; truncated:boolean };
+  type Snapshot = { records:Span[]; trace_days:number; observer_loss:number; evicted:number; collector_starts:number; truncated:boolean; resources:ComponentProps<typeof ResourceReadings>["value"] };
   type View = { local:Snapshot; controller:Snapshot|null; controller_error:string|null };
   let view = $state<View|null>(null);
   let selected = $state("");
@@ -48,6 +50,8 @@
     <button class="av-btn av-btn-ghost av-btn-sm" disabled={busy||!view||runtime?.locked} onclick={()=>inspect(true)}>Apply retention</button>
   </div>
   {#if view}
+    <ResourceReadings value={view.local.resources} label="This PC" />
+    {#if view.controller}<ResourceReadings value={view.controller.resources} label="Paired Spark" />{/if}
     <p class="av-hint">PC: {view.local.records.length} spans · {view.local.observer_loss} observer losses · {view.local.evicted} expired/evicted · {view.local.collector_starts} collector starts. Detailed records use a 32,768-span hard cap; rollups retain 30 days. Collector/process gaps may contain missing spans.</p>
     {#if view.controller}<p class="av-hint">Controller: {view.controller.records.length} spans · {view.controller.observer_loss} observer losses · {view.controller.evicted} expired/evicted · {view.controller.trace_days}-day retention.</p>{:else}<p class="av-hint text-amber-200">Controller unavailable: {view.controller_error}. This is not an empty successful trace.</p>{/if}
     {#if view.local.truncated||view.controller?.truncated}<p class="av-hint">Inspection/export is limited to the newest 2,048 spans per host. Select a turn to export its exact retained records.</p>{/if}

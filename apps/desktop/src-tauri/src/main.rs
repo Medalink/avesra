@@ -658,6 +658,7 @@ fn main() {
             })?;
             app.manage(instance_lock);
             let _ = avesra_core::trace::initialize(&directory, avesra_core::trace::Host::Native);
+            avesra_windows::resources::start();
             let mut store = Store::open(&directory.join("avesra.db"))?;
             let mut settings = store.settings()?;
             if (settings.microphone.is_none() || settings.speaker.is_none())
@@ -950,6 +951,12 @@ fn main() {
             tasks::download::approve_download_fix,
             tasks::grant_browser_read_action,
             tasks::change_private_memory,
+            tasks::teaching::teaching_status,
+            tasks::teaching::teaching_progress,
+            tasks::teaching::set_teaching_scope,
+            tasks::teaching::start_demonstration,
+            tasks::teaching::stop_demonstration,
+            tasks::teaching::change_demonstration,
             tasks::memory::memory_forget_status,
             tasks::memory::approve_memory_forget,
             tasks::memory::cancel_memory_forget,

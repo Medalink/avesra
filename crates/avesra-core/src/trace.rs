@@ -14,6 +14,7 @@ use std::{
 use uuid::Uuid;
 const CAP: usize = 32768;
 const DAY: u64 = 86_400_000;
+pub const QUERY_VERSION: u16 = 2;
 static SINK: OnceLock<Sink> = OnceLock::new();
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -151,6 +152,7 @@ pub struct Snapshot {
     pub truncated: bool,
     pub records: Vec<Record>,
     pub rollups: Vec<Rollup>,
+    pub resources: crate::resource_observer::Snapshot,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -166,7 +168,7 @@ pub struct Query {
 }
 impl Query {
     pub fn validate(&self) -> Result<(), ErrorCode> {
-        if self.version != 1
+        if self.version != QUERY_VERSION
             || [
                 self.request,
                 self.session,
@@ -195,6 +197,7 @@ pub struct Remote {
 }
 enum Message {
     Record(Record),
+    Resource(crate::resource_observer::Sample),
     Read {
         actor: Uuid,
         device: Uuid,
@@ -213,6 +216,7 @@ struct Sink {
     loss: Arc<AtomicU64>,
     outputs: Mutex<Vec<(Uuid, Span)>>,
     responses: Mutex<Vec<(Uuid, Span)>>,
+    resource_latest: Mutex<Option<(Uuid, u64, Instant)>>,
 }
 fn now() -> u64 {
     SystemTime::now()
@@ -245,12 +249,14 @@ pub fn initialize(directory: &Path, host: Host) -> Result<(), ErrorCode> {
         if occupied {
             return Err(ErrorCode::Malformed);
         }
-    } else if !matches!(version, 1..=3) {
+    } else if !matches!(version, 1..=4) {
         return Err(ErrorCode::Unsupported);
     }
 
-    sql(db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=1000; PRAGMA user_version=3; CREATE TABLE IF NOT EXISTS spans(id TEXT PRIMARY KEY,actor TEXT NOT NULL,device TEXT NOT NULL,turn TEXT NOT NULL,at_ms INTEGER NOT NULL,body TEXT NOT NULL CHECK(length(body)<=4096)); CREATE INDEX IF NOT EXISTS span_owner ON spans(actor,device,at_ms); CREATE TABLE IF NOT EXISTS rollups(actor TEXT NOT NULL,device TEXT NOT NULL,day INTEGER NOT NULL,stage TEXT NOT NULL,outcome TEXT NOT NULL,count INTEGER NOT NULL,total INTEGER NOT NULL,maximum INTEGER NOT NULL,PRIMARY KEY(actor,device,day,stage,outcome)); CREATE TABLE IF NOT EXISTS retention(id INTEGER PRIMARY KEY CHECK(id=1),days INTEGER NOT NULL CHECK(days BETWEEN 1 AND 7),evicted INTEGER NOT NULL); INSERT OR IGNORE INTO retention VALUES(1,7,0); CREATE TABLE IF NOT EXISTS observer(id INTEGER PRIMARY KEY CHECK(id=1),lost INTEGER NOT NULL,starts INTEGER NOT NULL); INSERT OR IGNORE INTO observer VALUES(1,0,0); UPDATE observer SET starts=starts+1 WHERE id=1;"))?;
+    sql(db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=1000; CREATE TABLE IF NOT EXISTS spans(id TEXT PRIMARY KEY,actor TEXT NOT NULL,device TEXT NOT NULL,turn TEXT NOT NULL,at_ms INTEGER NOT NULL,body TEXT NOT NULL CHECK(length(body)<=4096)); CREATE INDEX IF NOT EXISTS span_owner ON spans(actor,device,at_ms); CREATE TABLE IF NOT EXISTS rollups(actor TEXT NOT NULL,device TEXT NOT NULL,day INTEGER NOT NULL,stage TEXT NOT NULL,outcome TEXT NOT NULL,count INTEGER NOT NULL,total INTEGER NOT NULL,maximum INTEGER NOT NULL,PRIMARY KEY(actor,device,day,stage,outcome)); CREATE TABLE IF NOT EXISTS retention(id INTEGER PRIMARY KEY CHECK(id=1),days INTEGER NOT NULL CHECK(days BETWEEN 1 AND 7),evicted INTEGER NOT NULL); INSERT OR IGNORE INTO retention VALUES(1,7,0); CREATE TABLE IF NOT EXISTS observer(id INTEGER PRIMARY KEY CHECK(id=1),lost INTEGER NOT NULL,starts INTEGER NOT NULL); INSERT OR IGNORE INTO observer VALUES(1,0,0); UPDATE observer SET starts=starts+1 WHERE id=1;"))?;
     let (tx, rx) = mpsc::sync_channel(256);
+    crate::resource_observer::initialize(&db)?;
+    sql(db.execute_batch("PRAGMA user_version=4;"))?;
     let loss = Arc::new(AtomicU64::new(0));
     let process = Uuid::new_v4();
     let losses = loss.clone();
@@ -271,6 +277,11 @@ pub fn initialize(directory: &Path, host: Host) -> Result<(), ErrorCode> {
                 match message {
                     Message::Record(r) => {
                         if write(&mut db, &r).is_err() {
+                            losses.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                    Message::Resource(sample) => {
+                        if crate::resource_observer::write(&mut db, &sample).is_err() {
                             losses.fetch_add(1, Ordering::Relaxed);
                         }
                     }
@@ -311,6 +322,7 @@ pub fn initialize(directory: &Path, host: Host) -> Result<(), ErrorCode> {
         loss,
         outputs: Mutex::new(Vec::new()),
         responses: Mutex::new(Vec::new()),
+        resource_latest: Mutex::new(None),
     })
     .map_err(|_| ErrorCode::Unavailable)
 }
@@ -397,9 +409,10 @@ fn read(
     ))?;
     let evicted: i64 =
         sql(tx.query_row("SELECT evicted FROM retention WHERE id=1", [], |r| r.get(0)))?;
+    let resources = crate::resource_observer::read(&tx, days, host)?;
     sql(tx.commit())?;
     let snapshot = Snapshot {
-        version: 1,
+        version: QUERY_VERSION,
         host,
         process,
         trace_days: days,
@@ -411,6 +424,7 @@ fn read(
         truncated,
         records,
         rollups,
+        resources,
     };
     snapshot.validate(host, actor, device, turn)?;
     Ok(snapshot)
@@ -444,6 +458,42 @@ pub fn retention(days: u8) -> Result<(), ErrorCode> {
         .tx
         .try_send(Message::Retention(days))
         .map_err(|_| ErrorCode::Unavailable)
+}
+pub(crate) fn resource(sample: crate::resource_observer::Sample, observed: Instant) {
+    let Some(sink) = SINK.get() else {
+        return;
+    };
+    if sample.validate(sink.host).is_err() {
+        sink.loss.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
+    let Ok(mut latest) = sink.resource_latest.lock() else {
+        return;
+    };
+    if latest
+        .as_ref()
+        .is_some_and(|(_, _, at)| at.elapsed() < Duration::from_secs(1))
+    {
+        sink.loss.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
+    let stamp = (sample.process, sample.sequence, observed);
+    if sink.tx.try_send(Message::Resource(sample)).is_err() {
+        sink.loss.fetch_add(1, Ordering::Relaxed);
+    } else {
+        *latest = Some(stamp);
+    }
+}
+pub(crate) fn resource_clock(host: Host) -> Option<(Uuid, Instant)> {
+    let sink = SINK.get().filter(|sink| sink.host == host)?;
+    Some((sink.process, sink.origin))
+}
+pub(crate) fn resource_age(sample: Option<&crate::resource_observer::Sample>) -> Option<u64> {
+    let sample = sample?;
+    let latest = SINK.get()?.resource_latest.lock().ok()?;
+    let (process, sequence, at) = latest.as_ref()?;
+    (*process == sample.process && *sequence == sample.sequence)
+        .then(|| crate::resource_observer::millis(at.elapsed()))
 }
 pub struct Span {
     record: Option<Record>,
@@ -827,7 +877,8 @@ impl Snapshot {
                         .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
             })
         };
-        if self.version != 1
+        self.resources.validate(host)?;
+        if self.version != QUERY_VERSION
             || self.host != host
             || self.process.is_nil()
             || !(1..=7).contains(&self.trace_days)

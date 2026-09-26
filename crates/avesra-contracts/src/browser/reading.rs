@@ -215,8 +215,19 @@ impl Reply {
         match (&request.mode, &self.outcome) {
             (Mode::Inbox { account }, Outcome::Inbox { terminal }) => {
                 terminal.validate()?;
+                let original = request.document.as_ref().ok_or(ErrorCode::Stale)?;
+                let mut before =
+                    url::Url::parse(&original.url).map_err(|_| ErrorCode::Malformed)?;
+                let mut after =
+                    url::Url::parse(&terminal.document.url).map_err(|_| ErrorCode::Malformed)?;
+                before.set_fragment(None);
+                after.set_fragment(None);
                 if terminal.account != *account
-                    || Some(&terminal.document) != request.document.as_ref()
+                    || terminal.document.tab != original.tab
+                    || terminal.document.window != original.window
+                    || terminal.document.frame != original.frame
+                    || terminal.document.document != original.document
+                    || before != after
                 {
                     return Err(ErrorCode::Stale);
                 }

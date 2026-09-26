@@ -20,6 +20,10 @@ use std::{
 };
 use uuid::Uuid;
 
+#[path = "browser_mailbox.rs"]
+mod mailbox;
+pub use mailbox::MailboxEvidence;
+
 const NO_PERMIT: u8 = 0;
 const HELD: u8 = 1;
 const POSSIBLY_PUBLISHED: u8 = 2;
@@ -158,6 +162,8 @@ pub struct ReadExecution<'a> {
     finished: bool,
     finalization_attempted: bool,
     observation: Option<EffectObservation>,
+    mailbox_successor: bool,
+    mailbox_taken: bool,
     mailbox_stream: Option<crate::workflows::mailbox::Stream>,
     mailbox: Option<crate::workflows::mailbox::Mailbox>,
 }
@@ -214,6 +220,8 @@ impl<'a> ReadExecution<'a> {
             finished: false,
             finalization_attempted: false,
             observation: None,
+            mailbox_successor: false,
+            mailbox_taken: false,
             mailbox_stream: None,
             mailbox: None,
         })
@@ -449,14 +457,16 @@ impl<'a> ReadExecution<'a> {
         self.current()?;
         Ok(ack)
     }
-    pub fn take_mailbox(
-        &mut self,
-    ) -> Result<Option<crate::workflows::mailbox::Mailbox>, ErrorCode> {
+    pub fn mailbox_taken(&self) -> bool {
+        self.mailbox_taken
+    }
+    pub fn transfer_mailbox(&mut self) -> Result<(), ErrorCode> {
         self.content_current()?;
-        if !self.finished {
+        if !self.finished || !self.mailbox_taken || self.mailbox_successor {
             return Err(ErrorCode::InvalidTransition);
         }
-        Ok(self.mailbox.take())
+        self.mailbox_successor = true;
+        Ok(())
     }
     pub fn withdraw_content(&self) {
         self.cancellation.cancel();
@@ -588,7 +598,9 @@ impl<'a> ReadExecution<'a> {
 }
 impl Drop for ReadExecution<'_> {
     fn drop(&mut self) {
-        self.cancellation.cancel();
+        if !self.mailbox_successor {
+            self.cancellation.cancel();
+        }
         if !self.finished {
             if let Some((revision, context)) = &self.marker
                 && let Ok(Some(stored)) = browser_jobs::current(&self.store.connection)

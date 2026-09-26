@@ -19,7 +19,7 @@ impl Store {
                     |r| Ok((r.get(0)?, r.get(1)?)),
                 )
                 .map_err(|_| ErrorCode::Storage)?;
-            if count != 1 || !matches!(version, Some(1..=24)) {
+            if count != 1 || !matches!(version, Some(1..=26)) {
                 return Err(ErrorCode::Unsupported);
             }
             version.ok_or(ErrorCode::Unsupported)? as u64
@@ -41,6 +41,7 @@ impl Store {
         crate::observation_schema::check(&connection, version)?;
         crate::action_permissions::check_schema(&connection, version)?;
         crate::memory::check_schema(&connection, version)?;
+        crate::demonstration::check_schema(&connection, version)?;
         crate::notifications::check_schema(&connection, version)?;
         if version >= 8 {
             crate::browser_jobs::current(&connection)?;
@@ -71,7 +72,7 @@ impl Store {
           CREATE TABLE IF NOT EXISTS native_finalizations(dispatch_id TEXT PRIMARY KEY REFERENCES dispatch_bindings(dispatch_id), target_id TEXT NOT NULL, action_revision TEXT NOT NULL REFERENCES action_revisions(revision), actor_id TEXT NOT NULL, outcome TEXT NOT NULL, at_ms INTEGER NOT NULL);
           CREATE INDEX IF NOT EXISTS native_finalization_lookup ON native_finalizations(target_id,actor_id,outcome);
           DELETE FROM schema_version;
-          INSERT INTO schema_version VALUES(24);
+          INSERT INTO schema_version VALUES(26);
         ").map_err(|_|ErrorCode::Storage)?;
         if version < 5 {
             tx.execute_batch(crate::conversations::SCHEMA)
@@ -119,6 +120,12 @@ impl Store {
             .map_err(|_| ErrorCode::Storage)?;
         }
         crate::memory::migrate(&tx, version)?;
+        if version < 25 {
+            for (_, schema) in crate::demonstration::TABLES {
+                tx.execute_batch(schema).map_err(|_| ErrorCode::Storage)?;
+            }
+        }
+        crate::demonstration::check_schema(&tx, 25)?;
         crate::notifications::check_schema(&tx, 15)?;
         crate::memory::check_schema(&tx, 23)?;
         crate::action_permissions::check_schema(&tx, 12)?;

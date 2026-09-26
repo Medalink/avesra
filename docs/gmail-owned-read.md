@@ -58,9 +58,9 @@ The explicit owner override forbids automated tests, fixtures and harnesses.
 Root performs source review, aggregate builds and separately authorized live proof.
 This source contract makes no Gmail compatibility or OW2 runtime-pass claim.
 
-## Current source checkpoint
+## Previous transport checkpoint (before successor support)
 
-Browser wire v9 and Store compatibility marker24 add the exact account target,
+The preceding browser wire v9 and Store compatibility marker24 added the exact account target,
 original120s read admission, one-outstanding-chunk transport, semantic accumulator,
 and transient result display. Marker24 adds no tables and preserves the schema23
 memory migration. Protected account setup does not assert that Gmail is readable.
@@ -77,3 +77,72 @@ spoken delivery remain follow-up work. No generic planner30s deadline was enlarg
 and no renewed speech lifetime is implied. Actual matched extension/host install,
 profile pairing, intended account selection and authorized real DOM observation
 remain live prerequisites. This checkpoint is incomplete OW2 infrastructure.
+
+## Owned transitions and terminal speech
+
+The next source slice separates the fixed provider observer from its lifecycle.
+A same-document Gmail operation may consume one opaque control offer created by
+the fixed observer from a currently connected element in the observed main region.
+The offer retains that element, its exact current route, operation kind and expected
+postcondition scope; it accepts neither caller CSS nor a reconstructed DOM ID.
+Only open-message, expand-message, next-page and return-to-Inbox operations exist. Each operation
+is consumed before the first click, never retried after partial/unknown completion.
+Only mutations within that retained observed region during that one transition
+may be pending. Account/header changes, user input, scope replacement, unexpected
+route changes and lifecycle loss withdraw the job. Completion requires fresh
+account and operation-specific semantic postconditions, not a timer or successful
+click return. Every Chrome promise stays owned through actual completion; an
+unknown completion retains exclusion. A new provider generation is not a new
+120-second deadline. The current account-only observer issues no control offers.
+
+A complete read may mint opaque MailboxEvidence only inside the actual core read
+worker after final semantic validation and authenticated cleanup settlement. It
+binds the original dispatch/action/context/account/count/digest and original
+absolute deadline. The native accepted coordinator retains it once alongside its
+original live ObservationClaim; history, Settings and serialized mailbox data
+cannot recreate it. The final native writer checks the exact persisted browser
+observation/finalization and current grant before consuming it into one bounded
+NativeMailbox reply. Raw bodies remain transient. The saved spoken summary labels
+statements as email claims and retains source references; it never claims physical
+delivery, a matched package, or complete latest-message coverage from ambiguous
+or incomplete evidence. No match means no matching confirmation in the checked
+messages, not proof that a package was not delivered.
+
+This continuation uses the original mailbox deadline through reply publication
+and output. Generic planner claims retain30 seconds. Speech preparation and output
+are capped by the original mailbox deadline, never renewed from completion time.
+Failure, cancellation, caller loss or expiry drops transient evidence; no retry or
+history replay constructs new speech. NativeMailbox sources are excluded from
+model dialogue history. Real provider proof and complete enumeration remain
+required before this complete-result path can be exercised.
+
+## Continuation checkpoint and remaining browser lifecycle
+
+Browser wire10 now accepts only same-document fragment-route changes during an
+original Gmail job; original tab/window/document/origin/path/query identities
+remain exact. The isolated Gmail guard retains actual control elements and one
+observed main region, consumes offers before invocation, and requires a fresh
+fixed-observer postcondition to settle. Main-root replacement, unrelated mutations
+and user input withdraw. A click with unproven completion makes cleanup unknown;
+its browser exclusion is retained. Native chrome revalidation surrounds the owned
+operation. These lifecycle entry points do not invent account/message semantics:
+the current header-only observer issues no offers and still reports incomplete.
+
+Speech wire6 adds NativeMailbox provenance. The core complete-evidence source and
+native registered browser successor transfer only after the exact settled read's
+borrowed consumer and receipt succeed. Normal successful teardown then releases
+Chrome ownership while the original source cancellation/deadline remains registered
+through output retirement. Failed/uncertain teardown still withdraws. Successor
+checks retain browser session/process-selection/target generation/scope context;
+scope/pairing replacement, browser disconnect, actor/action revocation and caller
+loss withdraw the pending reply or output. Raw bodies are not written to history.
+Generic planner lifetimes stay unchanged. Real mailbox production is not proven.
+
+A separate verified C4 usability gap remains: native browser Attempt.current_time
+and the authenticated receive loop expire after300 seconds from the original setup
+attempt. The extension only connects on the popup's explicit Connect command and
+has no automatic saved-pair reconnect path. Saved credentials avoid reissuing the
+pairing, but do not avoid the current Settings/reconnect ritual. The next C4
+lifecycle slice must establish fresh authenticated sessions for a saved active
+browser without renewing old jobs, replaying content, or releasing uncertain
+browser work. Increasing the existing session deadline is not that fix.

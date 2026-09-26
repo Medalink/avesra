@@ -105,12 +105,15 @@ impl Stream {
             self.requested,
             self.deadline,
         )?;
+        let mut revision = 0;
         for batch in document.batches {
             if batch.document != terminal.document.document.uuid().to_string()
-                || batch.dom_revision != terminal.dom_revision
+                || batch.dom_revision > terminal.dom_revision
+                || batch.dom_revision < revision
             {
                 return Err(ErrorCode::Stale);
             }
+            revision = batch.dom_revision;
             mailbox.append(batch)?;
         }
         mailbox.actual_count()?;

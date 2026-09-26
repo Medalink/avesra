@@ -136,6 +136,8 @@ pub fn router(
     easy_pairing: Arc<crate::discovery::PairingWindow>,
 ) -> Result<Router, String> {
     let _ = avesra_core::trace::initialize(directory, avesra_core::trace::Host::Controller);
+    #[cfg(target_os = "linux")]
+    avesra_server::resources::start();
     #[cfg(unix)]
     let speaker = audio_client(directory, "speaker")?;
     #[cfg(unix)]
