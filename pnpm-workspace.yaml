@@ -1,8 +1,10 @@
 packages:
   - apps/desktop
   - apps/browser-extension
+  - design/tailwind
 allowBuilds:
   esbuild: true
   '@tailwindcss/oxide': true
-minimumReleaseAgeExclude:
-  - vite@8.3.1
+  '@parcel/watcher': false
+# Supply-chain cooldown: only resolve versions published at least 7 days ago (minutes).
+minimumReleaseAge: 10080

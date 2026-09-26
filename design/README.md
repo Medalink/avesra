@@ -29,12 +29,12 @@ The boards are drawn at **100%**: one CSS pixel is one screen pixel at 100% Wind
 ## Rebuilding the stylesheet
 
 ```sh
+pnpm install    # from the repository root; design/tailwind is a workspace package
 cd design/tailwind
-npm install
-npm run build   # writes ../mockups/avesra.css
+pnpm build      # writes ../mockups/avesra.css
 ```
 
-The build scans `../mockups` for class names and is deterministic.
+The build scans `../mockups` for class names and is deterministic. It shares the workspace lockfile and its 7-day package age rule (see `docs/security.md`).
 
 ## Design decisions
 
