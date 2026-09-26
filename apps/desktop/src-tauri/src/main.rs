@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod actor_registration;
+mod app_timing;
 mod browser;
 mod catalog;
 mod comparison;
@@ -15,9 +16,11 @@ mod performance;
 mod phrase_capture;
 pub mod planner;
 mod playback_signal;
+mod preferences;
 mod preview;
 mod profiles;
 mod qualification;
+mod settings_editor;
 mod setup;
 mod shortcuts;
 mod sound;
@@ -174,6 +177,7 @@ fn runtime_snapshot(state: tauri::State<'_, Runtime>) -> Result<LocalState, Stri
         .clone())
 }
 fn invalidate_settings(app: &tauri::AppHandle) {
+    settings_editor::withdraw(app);
     app.state::<Runtime>().tasks.invalidate();
     app.state::<Runtime>().qualification.settings_hidden();
     microphone_check::stop(app, None);
@@ -184,16 +188,33 @@ fn invalidate_settings(app: &tauri::AppHandle) {
     let _ = app.emit("settings-hidden", ());
 }
 #[tauri::command]
-fn hide_window(window: tauri::WebviewWindow) -> Result<(), String> {
+async fn hide_window(window: tauri::WebviewWindow, app: tauri::AppHandle) -> Result<(), String> {
     match window.label() {
-        "settings" => invalidate_settings(window.app_handle()),
-        "overlay" => {}
-        _ => return Err("Unknown Avesra window".into()),
+        "settings" => {
+            settings_editor::on_main(app, |app| {
+                settings_editor::request_close(&app, settings_editor::Intent::Hide)
+            })
+            .await
+        }
+        "overlay" => {
+            window_positions::save(&app);
+            window
+                .hide()
+                .map_err(|_| "Window could not be hidden".into())
+        }
+        _ => Err("Unknown Avesra window".into()),
     }
-    window_positions::save(window.app_handle());
-    window
-        .hide()
-        .map_err(|_| "Window could not be hidden".into())
+}
+fn quit_app(app: &tauri::AppHandle) {
+    window_positions::save(app);
+    if let Ok(mut owner) = app.state::<Runtime>().hotkeys.lock() {
+        owner.take();
+    }
+    if let Ok(mut local) = app.state::<Runtime>().local.lock() {
+        local.apply(LocalControl::Quit);
+        app.state::<Runtime>().publish(&local);
+    }
+    app.exit(0);
 }
 #[tauri::command]
 async fn audio_devices() -> Result<Vec<avesra_windows::AudioDevice>, String> {
@@ -302,90 +323,13 @@ async fn local_control(
         let pending = enqueue(&state, snapshot.settings.clone());
         (snapshot, pending)
     };
+    if snapshot.locked {
+        settings_editor::revoke(&app);
+    }
     // The control and event precede any disk wait; the local lock never covers I/O.
     app.emit("runtime-state", &snapshot)
         .map_err(|_| "Unable to notify windows")?;
     pending?.await.map_err(|_| "Settings writer stopped")??;
-    runtime_snapshot(state)
-}
-#[tauri::command]
-async fn save_settings(
-    settings: Settings,
-    app: tauri::AppHandle,
-    state: tauri::State<'_, Runtime>,
-) -> Result<LocalState, String> {
-    settings.validate().map_err(|e| e.to_string())?;
-    let (snapshot, pending, scale_changed) = {
-        let mut local = state.local.lock().map_err(|_| "Local state unavailable")?;
-        if settings.explicit_mute != local.settings.explicit_mute
-            || settings.deafened != local.settings.deafened
-            || settings.paused != local.settings.paused
-        {
-            return Err("Use local controls to change listening modes".into());
-        }
-        if settings.owner_name != local.settings.owner_name {
-            return Err("Use the remembered name control to update your name".into());
-        }
-        if settings.sound != local.settings.sound
-            || settings.speech_volume != local.settings.speech_volume
-        {
-            return Err(
-                "Sound settings changed. Refresh and use the Voice atmosphere controls.".into(),
-            );
-        }
-        if settings.shortcuts != local.settings.shortcuts {
-            return Err(
-                "Shortcuts changed. Refresh settings and use the native shortcut editor.".into(),
-            );
-        }
-        let pending = enqueue(&state, settings.clone())?;
-        let scale_changed = settings.interface_scale != local.settings.interface_scale;
-        // Only these two profiles share the unchanged Spark inference route.
-        let same_spark_route = matches!(
-            (local.settings.profile, settings.profile),
-            (
-                avesra_contracts::Profile::SingleSpark,
-                avesra_contracts::Profile::Gaming
-            ) | (
-                avesra_contracts::Profile::Gaming,
-                avesra_contracts::Profile::SingleSpark
-            )
-        );
-        let route_changed = settings.profile != local.settings.profile && !same_spark_route;
-        if settings.profile != local.settings.profile
-            && settings.profile == avesra_contracts::Profile::Gaming
-        {
-            tasks::teaching::defer_passive(&state);
-        }
-        if settings.speaker != local.settings.speaker || route_changed {
-            local.playback_epoch = local.playback_epoch.saturating_add(1);
-            local.action_epoch = local.action_epoch.saturating_add(1);
-        }
-        if settings.microphone != local.settings.microphone
-            || settings.speaker != local.settings.speaker
-            || route_changed
-        {
-            local.microphone_check = false;
-            local.enrollment_capture = false;
-            local.capture_epoch = local.capture_epoch.saturating_add(1);
-        }
-        local.settings = settings;
-        local.refresh();
-        state.publish(&local);
-        (local.clone(), pending, scale_changed)
-    };
-    app.emit("runtime-state", &snapshot)
-        .map_err(|_| "Unable to notify windows")?;
-    if let Some(window) = app.get_webview_window("overlay") {
-        window
-            .set_always_on_top(snapshot.settings.always_on_top)
-            .map_err(|_| "Preference changed but window update failed")?;
-    }
-    if scale_changed {
-        apply_interface_scale(&app, snapshot.settings.interface_scale)
-            .map_err(|_| "Preference changed but window update failed")?;
-    }
-    pending.await.map_err(|_| "Settings writer stopped")??;
     runtime_snapshot(state)
 }
 fn start_connection(
@@ -646,6 +590,9 @@ fn session_changed(app: &tauri::AppHandle, locked: bool) {
     };
     drop(local);
     drop(slot);
+    if locked {
+        settings_editor::withdraw(app);
+    }
     let _ = app.emit("signal-clear", ());
     let _ = app.emit("runtime-state", snapshot);
     if let Some((generation, epoch, initial)) = automatic {
@@ -686,6 +633,10 @@ fn apply_interface_scale(app: &tauri::AppHandle, percent: u16) -> tauri::Result<
     Ok(())
 }
 fn main() {
+    let startup_timing = avesra_core::app_timing::Span::start(
+        avesra_core::app_timing::Operation::NativeStartup,
+        avesra_core::app_timing::Stage::Initialize,
+    );
     #[cfg(windows)]
     if let Err(error) = avesra_windows::output_recording::configure_from_args() {
         eprintln!("{error}");
@@ -693,6 +644,8 @@ fn main() {
     }
     let _ = rustls::crypto::ring::default_provider().install_default();
     tauri::Builder::default()
+        // Configured webviews can invoke while Tauri is still creating windows.
+        .manage(app_timing::State::default())
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             // Diagnostic launch arguments never turn an existing audible process
             // into a recording process or activate a window on another desktop.
@@ -713,10 +666,9 @@ fn main() {
                 return;
             }
             if let Some(window) = app.get_webview_window("settings") {
-                let _ = window.show();
                 let _ = window.unminimize();
-                let _ = window.set_focus();
             }
+            let _ = settings_editor::show(app);
         }))
         .plugin(
             tauri_plugin_window_state::Builder::default()
@@ -725,7 +677,7 @@ fn main() {
                 .skip_initial_state("settings")
                 .build(),
         )
-        .setup(|app| {
+        .setup(move |app| {
             let directory = app.path().app_data_dir()?;
             std::fs::create_dir_all(&directory)?;
             // Backstop simultaneous launches before the plugin's message window exists.
@@ -742,10 +694,21 @@ fn main() {
                 )
             })?;
             app.manage(instance_lock);
+            app.manage(settings_editor::State::default());
             let _ = avesra_core::trace::initialize(&directory, avesra_core::trace::Host::Native);
             avesra_windows::resources::start();
-            let mut store = Store::open(&directory.join("avesra.db"))?;
-            let mut settings = store.settings()?;
+            let store_timing = avesra_core::app_timing::Span::start(
+                avesra_core::app_timing::Operation::SettingsStore,
+                avesra_core::app_timing::Stage::Work,
+            );
+            let opened = Store::open(&directory.join("avesra.db"))
+                .and_then(|store| store.settings().map(|settings| (store, settings)));
+            store_timing.finish(if opened.is_ok() {
+                avesra_core::app_timing::Outcome::Complete
+            } else {
+                avesra_core::app_timing::Outcome::Failed
+            });
+            let (mut store, mut settings) = opened?;
             if (settings.microphone.is_none() || settings.speaker.is_none())
                 && let Ok(devices) = avesra_windows::audio_devices()
             {
@@ -908,7 +871,11 @@ fn main() {
                         } else {
                             "settings"
                         };
-                        if let Some(window) = app.get_webview_window(label) {
+                        if label == "settings" {
+                            if let Err(error) = settings_editor::show(app) {
+                                let _ = app.emit("runtime-error", error);
+                            }
+                        } else if let Some(window) = app.get_webview_window(label) {
                             let _ = window.show();
                             let _ = window.set_focus();
                         }
@@ -937,22 +904,22 @@ fn main() {
                         }
                     }
                     "quit" => {
-                        window_positions::save(app);
-                        if let Ok(mut owner) = app.state::<Runtime>().hotkeys.lock() {
-                            owner.take();
+                        if let Err(error) =
+                            settings_editor::request_close(app, settings_editor::Intent::Quit)
+                        {
+                            let _ = app.emit("runtime-error", error);
                         }
-                        if let Ok(mut local) = app.state::<Runtime>().local.lock() {
-                            local.apply(LocalControl::Quit);
-                            app.state::<Runtime>().publish(&local);
-                        }
-                        app.exit(0);
                     }
                     _ => {}
                 })
                 .build(app)?;
+            startup_timing.finish(avesra_core::app_timing::Outcome::Complete);
             Ok(())
         })
         .on_window_event(|window, event| {
+            if window.label() == "settings" && matches!(event, tauri::WindowEvent::Destroyed) {
+                settings_editor::withdraw(window.app_handle());
+            }
             if window.label() == "settings"
                 && matches!(
                     event,
@@ -964,15 +931,30 @@ fn main() {
                 shortcuts::cancel_recording(window.app_handle());
             }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                window_positions::save(window.app_handle());
-                if window.label() == "settings" {
-                    invalidate_settings(window.app_handle());
-                }
                 api.prevent_close();
-                let _ = window.hide();
+                if window.label() == "settings" {
+                    if let Err(error) = settings_editor::request_close(
+                        window.app_handle(),
+                        settings_editor::Intent::Hide,
+                    ) {
+                        let _ = window.app_handle().emit("runtime-error", error);
+                    }
+                } else {
+                    window_positions::save(window.app_handle());
+                    let _ = window.hide();
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![
+            app_timing::begin_app_timing,
+            app_timing::observe_app_timings,
+            app_timing::app_timing_snapshot,
+            app_timing::export_app_timings,
+            preferences::apply_preferences,
+            settings_editor::show_settings,
+            settings_editor::begin_preferences_editor,
+            settings_editor::retire_preferences_editor,
+            settings_editor::answer_preferences_close,
             microphone_check::begin_microphone_check,
             microphone_check::stop_microphone_check,
             voice_check::check_saved_voice,
@@ -1076,6 +1058,13 @@ fn main() {
             setup::begin_enrollment,
             setup::finish_enrollment,
             setup::speaker_candidates,
+            setup::redraw::prepare_voice_avatar_redraw,
+            setup::redraw::confirm_voice_avatar_redraw,
+            setup::redraw::cancel_voice_avatar_redraw,
+            setup::portrait::begin_voice_portrait,
+            setup::portrait::record_voice_portrait,
+            setup::portrait::save_voice_portrait,
+            setup::portrait::cancel_voice_portrait,
             setup::delete_speaker_candidate,
             setup::select_speaker_candidate,
             setup::clear_speaker_selection,
@@ -1085,7 +1074,6 @@ fn main() {
             audio_devices,
             audio_lane_health,
             local_control,
-            save_settings,
             sound::update_sound,
             sound::sound_output_channels,
             sound::sound_diagnostics,

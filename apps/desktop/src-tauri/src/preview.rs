@@ -21,6 +21,13 @@ use tauri::{Emitter, Manager};
 use tokio_tungstenite::tungstenite::Message;
 use uuid::Uuid;
 
+/// Per-invocation display correlation, never output authority or completion.
+#[derive(serde::Serialize)]
+pub struct PreviewStarted {
+    output: Uuid,
+    epoch: u64,
+}
+
 struct Lease {
     app: tauri::AppHandle,
     session: SessionIdentity,
@@ -92,11 +99,12 @@ pub async fn preview_voice(
     voice: VoiceIdentity,
     panel: Uuid,
     text: Option<String>,
+    started: tauri::ipc::Channel<PreviewStarted>,
 ) -> Result<String, String> {
     let withdrawn = Arc::new(AtomicBool::new(false));
     let _caller = crate::output::Caller(withdrawn.clone());
     tauri::async_runtime::spawn(async move {
-        preview_owned(window, app, voice, panel, text, withdrawn).await
+        preview_owned(window, app, voice, panel, text, withdrawn, started).await
     })
     .await
     .map_err(|_| "Preview coordinator stopped")?
@@ -108,6 +116,7 @@ async fn preview_owned(
     panel: Uuid,
     text: Option<String>,
     withdrawn: Arc<AtomicBool>,
+    started: tauri::ipc::Channel<PreviewStarted>,
 ) -> Result<String, String> {
     let admission_epoch = app
         .state::<Runtime>()
@@ -169,6 +178,13 @@ async fn preview_owned(
         let _ = app.emit("runtime-state", local.clone());
         lease
     };
+    // Only this admitted Settings call receives this exact native lease identity.
+    // A missing display observer must not change audio execution or retirement.
+    let _ = started.send(PreviewStarted {
+        output: lease.id,
+        epoch: lease.epoch,
+    });
+    drop(started);
     play_owned(app, voice, lease, owner, None, text).await
 }
 

@@ -1,5 +1,61 @@
 # Sourced private memory
 
+## Settings Memory presentation
+
+The saved-record list follows the card hierarchy in
+`design/mockups/Settings.dc.html` lines 964–1015: 14-pixel horizontal/12-pixel
+vertical padding, source-kind badge, 13-pixel content, 11-pixel source/date and
+compact correction/deletion controls. Only real current snapshot records appear.
+Facts are labeled Stated (an owner assertion); routines retain their actual
+candidate/verified-invocation/disabled state. Neither label implies inferred
+knowledge, playback or a fresh successful action. Exact source identifiers remain
+available in expandable source details, and accepted named-fact source inspection
+keeps its existing protected reader and exact ID/revision checks.
+
+Add opens the existing verified-task form explicitly. Correct opens that same
+editor with the actual current entry, retaining its named-fact limits and routine
+disable option. Closing the form only hides it and preserves local input; the
+visible Continue action reopens it. Cancel correction retains the existing clear
+semantics. Successful save or deletion of the edited record closes the editor.
+Lock/hide/context invalidation clears it with the existing private-memory state.
+No new memory search, inferred records, undo, source selection, native command or
+authorization path is added. SetupLock, pending deletion approval, error/status,
+Teaching and source-history views remain accessible outside the collapsed form.
+
+Only PrivateMemory's presentation and local form visibility change. Its existing
+refresh/save/correct/delete/source-read entry points, Hello and grant admission,
+source/revision binding, busy gates, retained command ownership and stale-result
+checks are unchanged. Source review and a focused frontend check cover this slice;
+no automated tests or installed private-record proof are claimed.
+
+### Observed empty-form behavior — 2026-09-26
+
+The installed production UI at `7aa1b8e` was manually inspected on diagnostic
+PID 56536, with microphone capture disabled and hardware output silent. The
+separate diagnostic desktop left the input desktop unchanged. Windows Hello was
+not used; no actual private fact was read or saved. Evidence is retained in
+`E:/Dev/Avesra/artifacts/ui-parity-7aa1b8e/`.
+
+`memory-initial-dom.txt`/`memory-initial.png` show the editor closed and the
+protected-memory verification message. Add opened the actual empty fact form
+(`memory-add-dom.txt`/`memory-add.png`); no verified source was selected and Save
+with source was disabled. The operator entered the plain local text “Draft text,
+not saved.” through the real textarea, then chose Close form.
+`memory-draft-closed.json` shows the hidden editor and enabled Continue draft;
+`memory-draft-reopened.json` shows that Continue restored the same text and Save
+remained disabled (its `save: true` field records the disabled property).
+Native Settings hide withdrew the editor and draft: `memory-hide-withdrawn.json`
+shows Add again and the uninspected-records prompt.
+
+For a future authorized manual repeat, open Memory, choose Add, enter harmless
+local draft text with no verified source, close the form and reopen it through
+Continue draft. Observe preserved text and disabled Save, then hide Settings and
+confirm the form/draft has cleared. Operate the actual controls and retain each
+observed state; do not inject records or call private IPC. This proves only the
+observed empty/unverified form lifecycle. Populated fact/routine card rendering,
+Hello admission, source inspection, save/correct/delete, and other protected
+record workflows remain unproven by this run. No tests or harness were used.
+
 ## Explicit verified-task records
 
 The first product writer supports explicit owner facts and one-step routines

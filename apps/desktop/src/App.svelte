@@ -1,9 +1,9 @@
 <script lang="ts">
+  import { timing } from "./app-timing";
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import {
     getCurrentWindow,
-    Window,
     LogicalSize,
   } from "@tauri-apps/api/window";
   import SettingsView from "./SettingsView.svelte";
@@ -20,7 +20,6 @@
     native,
     type Runtime,
     type AudioDevice,
-    type Settings,
   } from "./runtime";
   let runtime = $state<Runtime | null>(null);
   let devices = $state<AudioDevice[]>([]);
@@ -41,13 +40,13 @@
   }
   let error = $state("");
   let notice = $state("");
-  let saving = $state(false);
 
   let expanded = $state(false);
 
   const settingsWindow =
     new URLSearchParams(location.search).get("window") === "settings";
   const s = $derived(runtime?.settings);
+  const interfaceScale = $derived(s?.interface_scale);
   async function control(value: string) {
     error = "";
     try {
@@ -58,49 +57,28 @@
       error = String(e);
     }
   }
-  async function update(patch: Partial<Settings>) {
-    if (!s || saving) return;
-    saving = true;
-    error = "";
-    notice = "";
-    try {
-      acceptSnapshot(
-        await command<Runtime>("save_settings", {
-          settings: { ...s, ...patch },
-        }),
-      );
-      notice = "Preferences saved on this PC.";
-    } catch (e) {
-      error = String(e);
-    } finally {
-      saving = false;
-    }
-  }
   async function hide() {
     if (native) {
-      await command("hide_window");
+      try { await command("hide_window"); } catch (e) { error = String(e); }
     }
   }
   async function showSettings() {
     if (native) {
-      const w = await Window.getByLabel("settings");
-      await w?.show();
-      await w?.setFocus();
+      try { await command("show_settings"); } catch (e) { error = String(e); }
     }
   }
   // Both webviews are zoomed natively to the interface size; the overlay window
   // keeps its reference geometry (440 × 124, or 370 tall expanded) times that zoom.
   // Startup sizing happens natively; this follows later setting and expand changes.
   $effect(() => {
-    if (!s || !native || settingsWindow) return;
-    const zoom = s.interface_scale / 100;
+    if (interfaceScale === undefined || !native || settingsWindow) return;
+    const zoom = interfaceScale / 100;
+    let current = true;
     void getCurrentWindow().setSize(
       new LogicalSize(440 * zoom, (expanded ? 370 : 124) * zoom),
-    );
+    ).catch(e => { if (current) error = `Unable to resize the overlay: ${String(e)}`; });
+    return () => { current = false; };
   });
-  function expand() {
-    expanded = !expanded;
-  }
   async function drag(event: PointerEvent) {
     if (native && event.button === 0) await getCurrentWindow().startDragging();
   }
@@ -139,6 +117,7 @@
     signal = next;
   }
   onMount(() => {
+    const readyTiming = timing({ kind: "ui_ready" }, "initialize");
     let dispose = () => {};
     let gone = false;
     let syncing = false;
@@ -205,11 +184,14 @@
         acceptSnapshot(await command<Runtime>("runtime_snapshot"));
         await syncClock();
         if (settingsWindow) await refreshDevices();
+        readyTiming(gone ? "withdrawn" : "complete");
       } catch (e) {
+        readyTiming("failed");
         error = String(e);
       }
     })();
     return () => {
+      readyTiming("abandoned");
       gone = true;
       clockGeneration++;
       playback.uncalibrated();
@@ -224,18 +206,19 @@
 {#if settingsWindow}<SettingsView
     {runtime}
     {signal}
+    {outputSignal}
     {devices}
     {devicesLoading}
     {devicesError}
     {refreshDevices}
     {error}
     {notice}
-    {saving}
     {control}
-    {update}
+    accept={acceptSnapshot}
     {hide}
     {drag}
   />{:else}<Overlay
+    bind:expanded
     {runtime}
     {error}
     signal={outputSignal ?? signal}

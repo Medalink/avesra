@@ -1,8 +1,12 @@
 <script lang="ts">
+  import { viewTiming } from "./app-timing";
+  import { PreferenceDraft } from "./preference-draft.svelte";
+  import PreferencesFooter from "./PreferencesFooter.svelte";
   import Performance from "./Performance.svelte";
   import Notifications from "./Notifications.svelte";
   import { onMount, tick } from "svelte";
   import Icon from "./Icon.svelte";
+  import SelectFrame from "./SelectFrame.svelte";
   import SetupOverview from "./SetupOverview.svelte";
   import { personalVoiceView } from "./owner-setup";
   import { sparkConnection } from "./runtime";
@@ -11,7 +15,7 @@
   import VoiceAtmosphere from "./VoiceAtmosphere.svelte";
   import ShortcutSettings from "./ShortcutSettings.svelte";
   import EnrollmentView from "./EnrollmentView.svelte";
-  import OwnerName from "./OwnerName.svelte";
+  import SetupLock from "./SetupLock.svelte";
   import MicrophoneMeter from "./MicrophoneMeter.svelte";
   import AppCatalog from "./AppCatalog.svelte";
   import ActionTasks from "./ActionTasks.svelte";
@@ -24,48 +28,77 @@
   let {
     runtime,
     signal,
+    outputSignal,
     devices,
     devicesLoading,
     devicesError,
     refreshDevices,
     error,
     notice,
-    saving,
     control,
-    update,
+    accept,
     hide,
     drag,
   }: {
     runtime: Runtime | null;
     signal: SignalFrame | null;
+    outputSignal: SignalFrame | null;
     devices: AudioDevice[];
     devicesLoading: boolean;
     devicesError: string;
     refreshDevices: () => Promise<void>;
     error: string;
     notice: string;
-    saving: boolean;
     control: (value: string) => Promise<void>;
-    update: (patch: Partial<Settings>) => Promise<void>;
+    accept: (value: Runtime) => void;
     hide: () => Promise<void>;
     drag: (event: PointerEvent) => Promise<void>;
   } = $props();
+  const draft = new PreferenceDraft(() => runtime, (value) => accept(value));
+  $effect(() => draft.observe());
+  onMount(() => draft.mount());
+  const saving = $derived(draft.blocked);
+  const update = (patch: Parameters<PreferenceDraft["edit"]>[0]) => draft.edit(patch);
+  const profiles: { id: Settings["profile"]; name: string; description: string }[] = [
+    { id: "single-spark", name: "Single Spark", description: "All inference on Spark; this PC handles voice, screen and control." },
+    { id: "accelerated", name: "Accelerated", description: "Client inference is unavailable until capability and performance are verified." },
+    { id: "gaming", name: "Gaming", description: "Spark inference; optional passive app observation is deferred." },
+  ];
+  const profileTabStop = $derived(draft.settings?.profile === "gaming" ? "gaming" : "single-spark");
+  function navigateProfile(event: KeyboardEvent) {
+    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)
+      || event.altKey || event.ctrlKey || event.metaKey) return;
+    const current = event.currentTarget;
+    if (!(current instanceof HTMLButtonElement)) return;
+    const cards = Array.from(current.parentElement?.querySelectorAll<HTMLButtonElement>('button[role="radio"]:not(:disabled)') ?? []);
+    const index = cards.indexOf(current);
+    if (index < 0 || !cards.length) return;
+    const target = event.key === "Home" ? 0 : event.key === "End" ? cards.length - 1
+      : (index + (["ArrowLeft", "ArrowUp"].includes(event.key) ? -1 : 1) + cards.length) % cards.length;
+    event.preventDefault();
+    cards[target].focus(); cards[target].click();
+  }
   const voice = $derived(personalVoiceView(runtime));
   const spark = $derived(sparkConnection(runtime));
   function restoredSection() {
     try {
       const saved = localStorage.getItem("avesra.settings.section");
-      return saved && ["setup", "audio", "models", "profiles", "people", "awareness", "memory"].includes(saved) ? saved : "setup";
-    } catch { return "setup"; }
+      return saved && ["audio", "models", "profiles", "people", "awareness", "memory"].includes(saved) ? saved : "audio";
+    } catch { return "audio"; }
   }
   let section = $state(restoredSection());
   let content: HTMLElement;
   let heading: HTMLHeadingElement;
+  let navigationTiming = 0;
   async function navigate(next: string, target?: string) {
+    const serial = ++navigationTiming;
+    const observed = viewTiming(next);
     section = next;
     try { localStorage.setItem("avesra.settings.section", next); } catch { /* Navigation remains usable if persistence is unavailable. */ }
     notice = "";
     await tick();
+    observed?.commit(serial === navigationTiming ? "complete" : "abandoned");
+    requestAnimationFrame(() => observed?.frame(serial === navigationTiming ? "complete" : "abandoned"));
     heading?.focus({ preventScroll: true });
     content?.scrollTo({ top: 0 });
     if (target) document.getElementById(target)?.scrollIntoView({ block: "start" });
@@ -89,6 +122,24 @@
     if (value.state === "unavailable") return "Unavailable";
     if (value.state !== "observed") return "Unavailable";
     return value.health.state === "loaded_unqualified" ? "Loaded · unqualified" : value.health.state === "loading" ? "Loading" : value.health.state === "termination_pending" ? "Stopping" : "Unavailable";
+  }
+  const healthStyles = {
+    not_probed: { label: "Not probed", classes: "text-zinc-300 ring-white/20" },
+    not_configured: { label: "Not configured", classes: "border border-dashed border-white/30 text-zinc-300 ring-0" },
+    loading: { label: "Loading", classes: "bg-white/[0.05] text-zinc-200 ring-white/20" },
+    stopping: { label: "Stopping", classes: "text-zinc-200 ring-white/25" },
+    loaded: { label: "Loaded · unqualified", classes: "bg-amber-400/10 text-amber-200 ring-amber-400/40" },
+    unavailable: { label: "Unavailable", classes: "text-zinc-400 ring-zinc-500/60" },
+    incompatible: { label: "Incompatible", classes: "bg-red-500/10 text-red-300 ring-red-500/40" },
+    not_integrated: { label: "Not integrated", classes: "text-zinc-400 ring-white/15" },
+  } as const;
+  function laneStyle(value: LaneObservation | undefined) {
+    if (!value) return healthStyles.not_probed.classes;
+    if (value.state !== "observed") return healthStyles[value.state].classes;
+    return value.health.state === "loaded_unqualified" ? healthStyles.loaded.classes
+      : value.health.state === "loading" ? healthStyles.loading.classes
+      : value.health.state === "termination_pending" ? healthStyles.stopping.classes
+      : healthStyles.unavailable.classes;
   }
   const speakerStatus = $derived(laneStatus(audioHealth?.speaker));
   const healthContext = $derived(JSON.stringify({
@@ -144,11 +195,13 @@
     void probeHealth();
     const interval = setInterval(() => { void probeHealth(); }, 15000);
     const visibility = () => {
+      navigationTiming++;
       healthGeneration += 1; healthQueued = false; clearHealth();
       void probeHealth();
     };
     document.addEventListener("visibilitychange", visibility);
     return () => {
+      navigationTiming++;
       healthMounted = false; healthGeneration += 1; healthQueued = false;
       clearInterval(interval); document.removeEventListener("visibilitychange", visibility);
     };
@@ -235,6 +288,7 @@
     if (index === 2) return {
       title: lane[0], description: lane[1], supported: true,
       status: reasoningHealth ? "Loaded · unqualified" : reasoningError ? "Unavailable · unverified" : "Not probed",
+      statusClasses: reasoningHealth ? healthStyles.loaded.classes : reasoningError ? healthStyles.unavailable.classes : healthStyles.not_probed.classes,
       driver: reasoningHealth ? "Controlled reasoning driver" : "Not verified",
       model: reasoningHealth ? "Observed configured artifact" : "Not verified",
       revision: reasoningHealth?.artifact_revision ?? "",
@@ -244,6 +298,7 @@
     return {
       title: lane[0], description: lane[1], supported: !!key,
       status: key ? laneStatus(observation) : index === 2 ? "Not inspected" : "Not integrated",
+      statusClasses: key ? laneStyle(observation) : healthStyles.not_integrated.classes,
       driver: health ? "Dedicated audio service" : observation?.state === "not_configured" ? "Not configured" : key ? "Not verified" : index === 2 ? "Status not integrated" : "Not integrated",
       model: health ? knownModels[health.model_revision] ?? "Configured audio model" : "Not verified",
       revision: health?.model_revision ?? "",
@@ -256,7 +311,9 @@
     };
   }));
   const meta = $derived(section === "setup" ? ["setup", "Get started", "Your setup, one step at a time."] : sections.find((s) => s[0] === section)!);
-  const s = $derived(runtime?.settings);
+  const s = $derived(draft.settings);
+  const actualMicrophone = $derived(devices.find(device => device.id === runtime?.settings.microphone)?.name ?? "unavailable microphone");
+  const actualSpeaker = $derived(devices.find(device => device.id === runtime?.settings.speaker)?.name ?? "unavailable output");
   const interfaceScales = [100, 110, 125, 150, 175];
 </script>
 
@@ -266,8 +323,8 @@
   <header
     class="flex h-11 shrink-0 items-center gap-2.5 border-b border-white/[0.06] pr-2 pl-4"
   >
-    <span class="text-av-400"><Icon name="audio" /></span><button
-      class="flex-1 self-stretch text-left text-[13px] font-medium"
+    <span class="text-av-400"><Icon name="brand" /></span><button
+      class="flex-1 self-stretch text-left text-[13px] font-medium text-zinc-100"
       onpointerdown={drag}
       aria-label="Drag settings window">Avesra Settings</button
     >
@@ -279,7 +336,7 @@
       onclick={() => navigate("profiles", "spark-pairing")}
       >Spark · {spark.label}<Icon name="arrow" size={10} /></button
     ><span class="av-chip bg-white/[0.04] text-zinc-300 ring-white/10"
-      >Profile · {s?.profile === "gaming" ? "Gaming" : "Single Spark"}</span
+      >Profile · {runtime?.settings.profile === "gaming" ? "Gaming" : runtime?.settings.profile === "accelerated" ? "Accelerated" : "Single Spark"}</span
     >
     <button class="av-iconbtn size-7" onclick={hide} aria-label="Close settings"
       ><Icon name="close" size={14} /></button
@@ -290,8 +347,6 @@
       class="flex w-[200px] shrink-0 flex-col gap-0.5 border-r border-white/[0.06] bg-black/20 p-2.5"
       aria-label="Settings sections"
     >
-      <button class="av-nav-btn mb-3" aria-current={section === "setup" ? "page" : undefined} onclick={() => navigate("setup")}><span class="grid size-5 place-items-center"><Icon name="setup" /></span><span>Get started</span></button>
-      <span class="av-kicker px-2.5 pb-2 text-[9px]">Settings</span>
       {#each sections as item}<button
           class="av-nav-btn"
           aria-current={section === item[0] ? "page" : undefined}
@@ -302,7 +357,7 @@
         >{/each}
       <span class="flex-1"></span>
       <div class="flex flex-col gap-0.5 px-2.5 pb-1">
-        <span class="caption text-zinc-400">Avesra 0.1 · development</span><span
+        <span class="font-mono text-[10.5px] text-zinc-400">Avesra 0.1 · development</span><span
           class="text-[10.5px] leading-[14px] text-zinc-400"
           >{native ? runtime ? "Native Windows companion" : "Connecting to companion…" : "Browser view · controls unavailable"}</span
         >
@@ -334,9 +389,9 @@
             <div class="grid grid-cols-2 gap-4">
               <div class="flex flex-col gap-1.5">
                 <label class="av-label" for="microphone">Microphone</label
-                ><select
+                ><SelectFrame><select
                   id="microphone"
-                  class="av-input"
+                  class="av-input av-select"
                   value={s?.microphone ?? ""}
                   disabled={!s || saving || devicesLoading || !!devicesError}
                   onchange={(e) =>
@@ -349,13 +404,14 @@
                         ? " · default"
                         : ""}</option
                     >{/each}</select
-                >
+                ></SelectFrame>
+                {#if draft.changes.microphone}<p class="av-hint text-amber-200">Currently using {actualMicrophone} for checks; Save changes to switch.</p>{/if}
                 <MicrophoneMeter {runtime} {signal} />
               </div>
               <div class="flex flex-col gap-1.5">
-                <label class="av-label" for="speaker">Speakers</label><select
+                <label class="av-label" for="speaker">Speakers</label><SelectFrame><select
                   id="speaker"
-                  class="av-input"
+                  class="av-input av-select"
                   value={s?.speaker ?? ""}
                   disabled={!s || saving || devicesLoading || !!devicesError}
                   onchange={(e) =>
@@ -368,8 +424,8 @@
                         ? " · default"
                         : ""}</option
                     >{/each}</select
-                ><span class="av-hint"
-                  >Replies and voice previews use this output. Your selected Avesra voice is kept.</span
+                ></SelectFrame><span class="av-hint"
+                  >{#if draft.changes.speaker}Currently using {actualSpeaker}; Save changes to switch.{:else}Replies and voice previews use this output. Your selected Avesra voice is kept.{/if}</span
                 >
               </div>
             </div>
@@ -397,15 +453,18 @@
             </div>
           </section>
           <ShortcutSettings {runtime} />
-          <div id="voice-designer"><VoiceDesigner {runtime} /></div>
+          {#if draft.changes.speaker}<p class="av-hint text-amber-200">Voice previews currently use {actualSpeaker}; Save changes to switch.</p>{/if}
+          <div id="voice-designer"><VoiceDesigner {runtime} {outputSignal} /></div>
           <VoiceAtmosphere {runtime} />
-          <section class="section">
+          <section class="flex flex-col gap-2">
             <span class="av-kicker">Learning & action chimes</span
-            >{#each [["learning_chime", "Learning chime", "After a useful memory is committed."], ["action_chime", "Action chime", "After an action outcome is verified."]] as item}<div
-                class="row"
+            >
+            <div class="av-card flex flex-col divide-y divide-white/[0.06]">
+            {#each [["learning_chime", "Learning chime", "After a useful memory is committed."], ["action_chime", "Action chime", "After an action outcome is verified."]] as item}<div
+                class="flex items-center gap-3 px-3.5 py-2.5"
               >
-                <div>
-                  <h2>{item[1]}</h2>
+                <div class="flex min-w-0 flex-1 flex-col">
+                  <span class="text-[12.5px] text-zinc-100">{item[1]}</span>
                   <p class="av-hint">{item[2]}</p>
                 </div>
                 <button
@@ -426,7 +485,7 @@
                     style:transform={s?.[
                       item[0] as "learning_chime" | "action_chime"
                     ]
-                      ? "translateX(19px)"
+                      ? "translateX(18px)"
                       : "translateX(3px)"}
                   ></span></button
                 >
@@ -454,28 +513,34 @@
               >
             </div>
             {/each}
+            </div>
             <p class="av-hint">
               Only committed events can sound. Learning batches coalesce at most once per minute; active speech, recording, pause and Deafen take precedence.
             </p>
           </section>
           <Notifications {runtime} />
         {:else if section === "models"}
-          <div class="warning">
-            {voice.label}: {voice.reason}
+          <div class="av-card flex items-start gap-3 p-3.5">
+            <span class="mt-0.5 shrink-0 text-av-400" aria-hidden="true"><Icon name="models" size={16} /></span>
+            <p class="m-0 flex-1 text-[12.5px] leading-[18px] text-zinc-300">Each lane is one job. It uses a <span class="text-zinc-100">driver</span>, a <span class="text-zinc-100">model</span> and a <span class="text-zinc-100">machine</span>. Probe reads the paired Spark's audio and controlled reasoning metadata without running inference. Loaded status does not grant voice or action permission.</p>
+            <button class="av-btn av-btn-secondary av-btn-sm" disabled={!native || !runtime?.connected || runtime?.locked || probing} onclick={refreshHealth}>Probe all</button>
           </div>
-          <div class="flex items-center gap-3">
-            <p class="av-hint flex-1" role="status">{probing ? "Inspecting configured audio and reasoning services…" : healthError || "Audio and controlled reasoning metadata comes from the paired Spark. Probe reads status without running inference."}</p>
-            <button class="av-btn av-btn-secondary av-btn-sm" disabled={!native || !runtime?.connected || runtime?.locked || probing} onclick={refreshHealth}>Refresh status</button>
+          <div class="flex flex-wrap items-center gap-x-2.5 gap-y-1.5" aria-label="Health legend">
+            {#each Object.values(healthStyles) as health}<span class={`av-chip ${health.classes}`}>{health.label}</span>{/each}
           </div>
+          {#if probing || healthError}<div class="flex items-center gap-2.5 bg-white/[0.04] px-3 py-2 text-[12px] text-zinc-200 ring-1 ring-white/10 ring-inset" role="status">
+            {#if probing}<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" class="av-spin shrink-0 text-av-400" aria-hidden="true"><path d="M12 3a9 9 0 1 1-9 9"></path></svg>{/if}
+            <span>{probing ? "Inspecting configured audio and reasoning services…" : healthError}</span>
+          </div>{/if}
           <div class="flex flex-col gap-2">
-            {#each laneCards as lane}<div class="av-card p-3">
+            {#each laneCards as lane}<div class="av-card p-3.5">
                 <div class="flex items-start gap-3">
-                  <div class="flex-1">
-                    <h2>{lane.title}</h2>
-                    <p class="av-hint mt-0.5">{lane.description}</p>
+                  <div class="flex min-w-0 flex-1 flex-col">
+                    <span class="text-[13px] font-medium text-zinc-50">{lane.title}</span>
+                    <span class="av-hint mt-0.5">{lane.description}</span>
                   </div>
                   <span
-                    class="av-chip bg-amber-400/10 text-amber-200 ring-amber-400/25"
+                    class={`av-chip ${lane.statusClasses}`}
                     >{lane.status}</span
                   >
                 </div>
@@ -490,7 +555,7 @@
                   </div>
                   <div class="flex min-w-0 flex-col gap-0.5">
                     <span class="text-[10.5px] text-zinc-400">Machine</span>
-                    <span class="truncate text-[12.5px] text-zinc-200">{lane.machine}</span>
+                    <span class="flex min-w-0 items-center gap-1.5"><span class="truncate text-[12.5px] text-zinc-200">{lane.machine}</span>{#if lane.machine === "Paired Spark"}<span class="av-chip shrink-0 text-zinc-300 ring-white/15">Local</span>{/if}</span>
                   </div>
                   <button class="av-btn av-btn-ghost av-btn-sm" disabled={!lane.supported || !native || !runtime?.connected || runtime?.locked || probing} onclick={refreshHealth}>Probe</button>
                 </div>
@@ -498,23 +563,29 @@
               </div>{/each}
           </div>
         {:else if section === "profiles"}
-          <section class="section">
+          <section class="flex flex-col gap-2.5">
             <span class="av-kicker">Profiles</span>
-            <div class="grid grid-cols-3 gap-2">
-              {#each [["single-spark", "Single Spark", "All inference on Spark."], ["accelerated", "Accelerated", "Qualified client lanes."], ["gaming", "Gaming", "Spark inference; passive app learning deferred."]] as profile}<button
-                  class="flex flex-col gap-2 p-3 text-left ring-1 ring-inset disabled:opacity-45 {s?.profile ===
-                  profile[0]
+            <div class="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Profiles" aria-describedby="profile-selection-help">
+              {#each profiles as profile}<button
+                  type="button"
+                  role="radio"
+                  aria-checked={s?.profile === profile.id}
+                  tabindex={profileTabStop === profile.id ? 0 : -1}
+                  class="flex cursor-pointer flex-col gap-1.5 p-3 text-left ring-1 ring-inset transition-colors focus-visible:outline-1 focus-visible:outline-offset-2 focus-visible:outline-av-400 disabled:cursor-default disabled:opacity-45 {s?.profile === profile.id
                     ? 'bg-white/[0.06] ring-av-500 shadow-[inset_0_-2px_0_var(--color-av-500)]'
-                    : 'bg-white/[0.02] ring-white/10'}"
-                  disabled={!s || saving || profile[0] === "accelerated"}
-                  aria-pressed={s?.profile === profile[0]}
-                  onclick={() =>
-                    update({ profile: profile[0] as Settings["profile"] })}
-                  ><strong class="text-[12.5px] font-medium"
-                    >{profile[1]}</strong
-                  ><span class="av-hint">{profile[2]}</span></button
-                >{/each}
+                    : 'bg-white/[0.02] ring-white/[0.08] enabled:hover:bg-white/[0.04]'}"
+                  disabled={!s || saving || profile.id === "accelerated"}
+                  onkeydown={navigateProfile}
+                  onclick={() => update({ profile: profile.id })}
+                >
+                  <span class="flex items-center justify-between gap-2">
+                    <span class="truncate text-[13px] font-medium text-zinc-50">{profile.name}</span>
+                    <span class="av-chip shrink-0 {runtime?.settings.profile === profile.id ? 'bg-av-500/10 text-av-300 ring-av-500/40' : profile.id === 'accelerated' ? 'border border-dashed border-white/25 text-zinc-400 ring-0' : 'text-zinc-200 ring-white/20'}">{runtime?.settings.profile === profile.id ? "Active" : profile.id === "accelerated" ? "Unavailable" : "Available"}</span>
+                  </span>
+                  <span class="text-[11.5px] leading-4 text-zinc-400">{profile.description}</span>
+                </button>{/each}
             </div>
+            <p id="profile-selection-help" class="av-hint">{draft.changes.profile ? "Your profile selection is unsaved. Save changes to apply it; Active shows the profile currently in use." : "Select a profile, then Save changes to apply it. Active shows the profile currently in use."}</p>
             <p class="av-hint">
               Single Spark and Gaming preserve your current conversation. Gaming
               stops optional passive app observation; explicit teaching remains available.
@@ -525,6 +596,7 @@
           <section class="section">
             <span class="av-kicker">Machines</span>
             <div id="spark-pairing"><Pairing {runtime} /></div>
+            <button type="button" class="av-btn av-btn-ghost av-btn-sm self-start" onclick={() => navigate("setup")}>Open setup guide</button>
             <div id="browser-setup"><BrowserSetup {runtime} /></div>
           </section>
           <section class="section">
@@ -567,26 +639,34 @@
                 ><span
                   class="av-knob"
                   style:transform={s?.always_on_top
-                    ? "translateX(19px)"
+                    ? "translateX(18px)"
                     : "translateX(3px)"}
                 ></span></button
               >
             </div>
           </section>
         {:else if section === "people"}
+          <SetupLock {runtime} />
           <EnrollmentView {runtime} {navigate} {control} />
-          <OwnerName {runtime} />
-          <section class="section">
-            <span class="av-kicker">Other people</span>
-            <p class="av-hint">
-              No additional people are enrolled. Only the authenticated owner
-              can add people or change permissions.
-            </p>
+          <section class="flex flex-col gap-2.5">
+            <div class="flex items-center justify-between">
+              <span class="av-kicker">Other people</span>
+              <button type="button" class="av-btn av-btn-ghost av-btn-sm" disabled title="Additional-person enrollment is not available in this build">Enroll a person</button>
+            </div>
+            <div class="av-card flex flex-col gap-2.5 p-3.5">
+              <span class="text-[13px] font-medium text-zinc-50">Additional people are not available yet</span>
+              <p class="av-hint">Personal conversation uses the current Windows owner's voice association. Additional-person enrollment and permissions are not available in this build.</p>
+            </div>
           </section>
-          <div class="warning">
-            A voice match alone cannot change ownership or approve high-impact
-            actions.
-          </div>
+          <section class="flex flex-col gap-2">
+            <span class="av-kicker">Rules that don’t change</span>
+            <div class="av-card flex flex-col divide-y divide-white/[0.06]">
+              <div class="px-3.5 py-2.5 text-[12.5px] text-zinc-300">For a new Personal voice, the first accepted natural utterance is treated as the Windows owner's provisional voice. After that initial association, mismatching voices do not update it.</div>
+              <div class="px-3.5 py-2.5 text-[12.5px] text-zinc-300">A voice match never grants permissions or changes ownership. Protected management requires Windows verification.</div>
+              <div class="px-3.5 py-2.5 text-[12.5px] text-zinc-300">Voice ID is not secure authentication. Recordings, synthesis or illness can fool it; a voice association is not identity verification.</div>
+              <div class="px-3.5 py-2.5 text-[12.5px] text-zinc-300">Raw enrollment audio stays in memory. Saved voice features are protected on this PC; selected advanced profiles are not retuned by Personal learning.</div>
+            </div>
+          </section>
         {:else if section === "awareness"}
           <section class="section">
             <span class="av-kicker">Observation scope</span>
@@ -675,4 +755,5 @@
       </div>
     </main>
   </div>
+  <PreferencesFooter {draft} {devices} />
 </div>

@@ -40,8 +40,8 @@
 
 <div class="flex flex-col gap-1.5">
   <div class="flex items-center gap-2">
-    <div class="relative h-7 flex-1" role="meter" aria-label="Microphone input level" aria-valuemin={-60} aria-valuemax={0} aria-valuenow={Math.round(db)} aria-valuetext={live ? `${Math.round(db)} dBFS` : "No current input measurement"}>
-      <Signal frame={live ? signal : null} tone="owner" count={40} height={28} />
+    <div class="relative h-6 flex-1" role="meter" aria-label="Microphone input level" aria-valuemin={-60} aria-valuemax={0} aria-valuenow={Math.round(db)} aria-valuetext={live ? `${Math.round(db)} dBFS` : "No current input measurement"}>
+      <Signal frame={live ? signal : null} tone="owner" count={40} height={24} />
     </div>
     <span class="caption min-w-14 text-right text-zinc-400">{live ? peak >= 0.99 ? "clipping" : rms <= 0.001 ? "quiet" : `${Math.round(db)} dB` : checking ? "starting…" : runtime?.enrollment_capture ? "recording" : "idle"}</span>
   </div>

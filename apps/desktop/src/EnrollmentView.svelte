@@ -1,23 +1,63 @@
 <script lang="ts">
-  import { onMount, untrack } from "svelte";
+  import { onMount, untrack, tick } from "svelte";
+  import { listen } from "@tauri-apps/api/event";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
+  import OwnerName from "./OwnerName.svelte";
   import ActorRegistration from "./ActorRegistration.svelte";
+  import YourVoiceCard from "./YourVoiceCard.svelte";
+  import VoiceAvatarPreview from "./VoiceAvatar.svelte";
+  import VoicePortrait from "./VoicePortrait.svelte";
   import VoiceCheck from "./VoiceCheck.svelte";
   import { command, native, type Runtime } from "./runtime";
   import { ensureManagementVerification } from "./setup";
   import { latestRead } from "./latest-read";
-  import { readSpeakerStore, type SpeakerCandidate as Candidate } from "./speaker-profiles";
+  import { readSpeakerStore, decodeAvatar, unavailableAvatar, type VoiceAvatar, type SpeakerCandidate as Candidate } from "./speaker-profiles";
   import { personalVoiceView, type RegistrationView } from "./owner-setup";
   let { runtime, navigate, control }: { runtime: Runtime | null; navigate: (section: string, target?: string) => void; control: (value: string) => Promise<void> } = $props();
   type Status = { enrollment: string; completed_segments: number; next_segment: string | null; reason: string };
   let status = $state<Status | null>(null);
   let candidates = $state<Candidate[]>([]);
+  let avatar = $state<VoiceAvatar>(unavailableAvatar());
+  let visible = $state(false);
+  let readEpoch = 0;
+  let eventsReady = false;
+  let sourceContext = "";
+  let diagnosticCandidate = $state<Candidate | null>(null);
+  let diagnostics: HTMLDivElement | undefined = $state();
+  let recordingTools: HTMLDetailsElement | undefined = $state();
+  function readContext() { return `${runtime?.connected}:${runtime?.locked}:${runtime?.action_epoch}:${runtime?.capture_epoch}:${runtime?.settings.microphone}:${visible}:${readEpoch}`; }
+  function clearVoiceView() { discardRedraw(); readEpoch++; releaseWaitingReads(); avatar = unavailableAvatar(); candidates = []; diagnosticCandidate = null; candidatesLoaded = false; storageDirectory = ""; }
+  const boundCandidate = $derived(avatar.candidate ? candidates.find(c => c.id === avatar.candidate?.id && c.revision === avatar.candidate?.revision && c.segments === 6) : undefined);
+  const listening = $derived(!!runtime?.connected && !runtime.locked && runtime.voice_ready && !runtime.settings.explicit_mute && !runtime.settings.deafened && !runtime.settings.paused);
+  const listeningLabel = $derived(!runtime?.connected ? "Disconnected" : runtime.locked ? "Locked" : runtime.settings.paused ? "Paused" : runtime.settings.deafened ? "Deafened" : runtime.settings.explicit_mute ? "Muted" : "Not listening");
+  async function openVoiceTool(test: boolean) {
+    if (test) diagnosticCandidate = boundCandidate ?? null;
+    advanced = true;
+    await tick();
+    if (!mounted || !visible) return;
+    if (test) diagnostics?.scrollIntoView({ block: "nearest" });
+    else if (recordingTools) { recordingTools.open = true; recordingTools.scrollIntoView({ block: "nearest" }); }
+  }
   type Owner = { state: string; actor: string | null; revision: string | null };
   let owner = $state<Owner | null>(null);
+  const displayName = $derived(owner?.state === "configured" && runtime?.settings.owner_name?.actor === owner.actor ? runtime.settings.owner_name.name : "You");
   let ownerLoading = $state(true), ownerError = $state("");
   let registration = $state<RegistrationView>({state: "waiting", detail: ""});
   let registrationBusy = $state(false);
+  let readActive = $state(false);
+  const registrationWaiters = new Set<() => void>();
+  function releaseWaitingReads() { for (const release of registrationWaiters) release(); registrationWaiters.clear(); }
+  function registrationWorking(value: boolean) {
+    registrationBusy = value;
+    if (!value) releaseWaitingReads();
+  }
   let ownerGeneration = 0;
   let ownerContext = "";
+  type Redraw = { ticket: string; preview: VoiceAvatar; context: string; expires: number };
+  let redraw = $state<Redraw | null>(null), redrawBusy = $state(false), redrawError = $state(""), redrawNote = $state("");
+  let confirmingTicket: string | null = null;
+  let redrawGeneration = 0, redrawTimer: ReturnType<typeof setTimeout> | undefined;
+  let redrawNeedsRead = $state(false);
   let busy = $state(false);
   let progress = $state("");
   let note = $state("");
@@ -31,29 +71,53 @@
   let storageDirectory = $state("");
   let checkingSavedVoice = $state(false), savedVoiceCheckResult = $state("");
   const savedVoice = $derived(candidates.find(c => c.state === "selected_quality_unqualified" && c.segments === 6) ?? candidates.find(c => c.segments === 6));
+  const checkCandidate = $derived(diagnosticCandidate ?? savedVoice);
   const savedVoiceReadError = $derived(candidatesError || (candidatesLoaded && candidates.length > 0 && !savedVoice ? "Your saved voice was found, but Avesra couldn't read it. Keep your recordings and retry the check; you do not need to record six new phrases." : ""));
   const ownerComplete = $derived(owner?.state === "configured");
   const voice = $derived(personalVoiceView(runtime));
   let ownsEnrollment = false;
   let advanced = $state(false);
   const unavailable = $derived(!runtime?.connected ? "Connect your Spark to continue setup." : runtime.locked ? "Unlock Windows to continue setup." : runtime.settings.paused ? "Resume Avesra before continuing setup." : "");
-  const acting = $derived(busy || registrationBusy);
+  const acting = $derived(busy || registrationBusy || redrawBusy);
   const audioAction = $derived(runtime?.settings.paused ? { label: "Resume Avesra", value: "resume" } : runtime?.settings.deafened ? { label: "Turn off Deafen", value: "undeafen" } : runtime?.settings.explicit_mute ? { label: "Unmute microphone", value: "unmute" } : null);
   function restoreAudio() { if (audioAction) void control(audioAction.value).catch(e => error = String(e)); else navigate("audio"); }
   const candidateReader = latestRead(
-    readSpeakerStore,
-    next => { candidates = next.candidates; storageDirectory = next.storage_directory; candidatesLoaded = true; candidatesError = ""; },
+    async () => {
+      const key = readContext();
+      if (registrationBusy) await new Promise<void>(resolve => registrationWaiters.add(resolve));
+      if (!mounted || key !== readContext()) return { key, owner: null, value: null, ownerError: "", error: "" };
+      if (!eventsReady || !visible || runtime?.locked) return { key, owner: null, value: null, ownerError: "", error: "" };
+      readActive = true;
+      try {
+        let nextOwner: Owner;
+        try { nextOwner = await command<Owner>("owner_status"); }
+        catch (e) { return { key, owner: null, value: null, ownerError: String(e), error: "" }; }
+        // These native readers share owner-management admission. Never overlap them.
+        if (!mounted || !visible || runtime?.locked || key !== readContext()) return { key, owner: null, value: null, ownerError: "", error: "" };
+        try { return { key, owner: nextOwner, value: await readSpeakerStore(), ownerError: "", error: "" }; }
+        catch (e) { return { key, owner: nextOwner, value: null, ownerError: "", error: String(e) }; }
+      } finally { readActive = false; }
+    },
+    next => {
+      if (!mounted || !visible || runtime?.locked || next.key !== readContext()) return;
+      owner = next.owner; ownerError = next.ownerError;
+      if (next.value) { candidates = next.value.candidates; avatar = next.value.avatar; storageDirectory = next.value.storage_directory; candidatesLoaded = true; candidatesError = ""; }
+      else { avatar = unavailableAvatar(next.error || next.ownerError || undefined); candidatesError = next.error; }
+    },
     error => { candidatesError = String(error); },
-    active => { candidatesLoading = active; },
+    active => { candidatesLoading = active; ownerLoading = active; },
   );
   const enrollmentBlock = $derived(owner?.state !== "configured" ? "Create your owner identity first." : !runtime?.settings.microphone ? "Choose a microphone in Audio & Voice." : runtime.settings.explicit_mute ? "Unmute your microphone in Audio & Voice before starting enrollment." : runtime.settings.deafened ? "Turn off Deafen before starting enrollment." : runtime.settings.paused ? "Resume Avesra before starting enrollment." : runtime.locked ? "Unlock Windows before starting enrollment." : "");
   $effect(() => {
-    const next = `${runtime?.connected}:${runtime?.locked}`;
-    if (mounted && next !== ownerContext) { ownerContext = next; ownerGeneration++; owner = null; error = ""; note = ""; if (native) untrack(() => void refreshOwner()); }
+    const next = `${runtime?.connected}:${runtime?.locked}:${runtime?.action_epoch}:${visible}`;
+    if (mounted && next !== ownerContext) { ownerContext = next; ownerGeneration++; owner = null; error = ""; note = ""; }
   });
   $effect(() => {
-    const next = `${runtime?.capture_epoch}:${runtime?.connected}`;
-    if (next !== context) { context = next; if (!busy) { generation++; status = null; } if (mounted && native) untrack(() => void refresh().catch(e => { if (mounted) error = String(e); })); }
+    const next = `${runtime?.capture_epoch}:${runtime?.action_epoch}:${runtime?.connected}:${runtime?.locked}:${runtime?.settings.microphone}:${visible}`;
+    if (next !== context) { context = next;
+      const source = `${runtime?.action_epoch}:${runtime?.connected}:${runtime?.locked}:${runtime?.settings.microphone}:${visible}`;
+      if (source !== sourceContext) { sourceContext = source; untrack(clearVoiceView); }
+      else untrack(() => { discardRedraw(); readEpoch++; releaseWaitingReads(); avatar = unavailableAvatar(); }); if (!busy) { generation++; status = null; } if (mounted && native && visible && !runtime?.locked) untrack(() => void refresh().catch(e => { if (mounted) error = String(e); })); }
   });
   async function refresh() {
     await candidateReader.refresh();
@@ -75,11 +139,7 @@
     if (confirmed && mounted && native) untrack(() => void refresh());
   }
   async function refreshOwner() {
-    const current = ++ownerGeneration;
-    ownerLoading = true; ownerError = "";
-    try { const next = await command<Owner>("owner_status"); if (mounted && current === ownerGeneration) owner = next; }
-    catch (e) { if (current === ownerGeneration) { owner = null; ownerError = String(e); } }
-    finally { if (current === ownerGeneration) ownerLoading = false; }
+    await refresh();
   }
   async function verifyManagement(current: number) {
     await ensureManagementVerification(() => mounted && current === ownerGeneration && !!runtime?.connected && !runtime.locked, message => progress = message);
@@ -147,37 +207,163 @@
     catch (e) { error = String(e); }
     finally { busy = false; progress = ""; }
   }
+  $effect(() => { if (!advanced) untrack(discardRedraw); });
+  const redrawAllowed = $derived(native && mounted && visible && !!runtime?.connected && !runtime.locked && ownerComplete && !acting && !redrawNeedsRead);
+  function cancelTicket(ticket: string) { void command("cancel_voice_avatar_redraw", { ticket }).catch(() => {}); }
+  function discardRedraw() {
+    redrawGeneration++;
+    if (redrawTimer) clearTimeout(redrawTimer);
+    redrawTimer = undefined;
+    if (redraw) cancelTicket(redraw.ticket);
+    if (confirmingTicket) cancelTicket(confirmingTicket);
+    redraw = null; redrawError = ""; redrawNote = "";
+  }
+  function redrawCurrent(operation: number, key: string) {
+    return mounted && visible && !runtime?.locked && !!runtime?.connected && operation === redrawGeneration && key === readContext();
+  }
+  async function prepareRedraw() {
+    if (!redrawAllowed || redraw) return;
+    redrawBusy = true; redrawError = ""; redrawNote = "";
+    const operation = ++redrawGeneration, key = readContext();
+    try {
+      await ensureManagementVerification(() => redrawCurrent(operation, key), message => { if (redrawCurrent(operation, key)) redrawNote = message; });
+      if (!redrawCurrent(operation, key)) return;
+      const started = performance.now();
+      const result = await command<{version: number; ticket: string; remaining_ms: number; preview: unknown}>("prepare_voice_avatar_redraw");
+      const ticket = result?.ticket;
+      const validTicket = typeof ticket === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(ticket);
+      const preview = decodeAvatar(result?.preview);
+      if (!validTicket || result.version !== 1 || !Number.isInteger(result.remaining_ms) || result.remaining_ms <= 0 || result.remaining_ms > 30000 || preview.state !== "ready_without_portrait" || !preview.parameters) {
+        if (validTicket) cancelTicket(ticket);
+        throw new Error("The proposed avatar response is incompatible. Nothing was saved.");
+      }
+      const expires = started + result.remaining_ms;
+      if (!redrawCurrent(operation, key) || performance.now() >= expires) { cancelTicket(ticket); if (redrawCurrent(operation, key)) redrawNote = "The preview expired before it arrived. Prepare a new preview to continue."; return; }
+      redraw = {ticket, preview, context: key, expires}; redrawNote = "";
+      redrawTimer = setTimeout(() => {
+        if (redraw?.ticket === ticket) { discardRedraw(); redrawNote = "The preview expired. Prepare a new preview to continue."; }
+      }, Math.max(0, expires - performance.now()));
+    } catch (e) { if (redrawCurrent(operation, key)) { redrawError = String(e); redrawNote = ""; } }
+    finally { redrawBusy = false; }
+  }
+  async function reconcileRedraw() {
+    if (!native || !mounted || !visible || runtime?.locked || redrawBusy) return;
+    redrawBusy = true;
+    const key = readContext();
+    try {
+      await refresh();
+      if (mounted && visible && key === readContext() && candidatesLoaded && !candidatesError) redrawNeedsRead = false;
+    } finally { redrawBusy = false; }
+  }
+  async function confirmRedraw() {
+    const pending = redraw;
+    if (!pending || redrawBusy || !redrawCurrent(redrawGeneration, pending.context) || performance.now() >= pending.expires) { discardRedraw(); return; }
+    const operation = redrawGeneration;
+    readEpoch++;
+    const confirmationContext = readContext();
+    confirmingTicket = pending.ticket;
+    redrawBusy = true; redrawError = ""; redrawNote = ""; redraw = null; avatar = unavailableAvatar("Saving the proposed avatar…");
+    if (redrawTimer) clearTimeout(redrawTimer);
+    redrawTimer = undefined;
+    // The consumed ticket is never replayed, even if its response is lost.
+    redrawNeedsRead = true;
+    try {
+      const result = decodeAvatar(await command<unknown>("confirm_voice_avatar_redraw", {ticket: pending.ticket}));
+      if (result.state !== "ready_without_portrait" || !result.parameters) throw new Error("The saved avatar result could not be read. Refresh its current state before preparing another preview.");
+      if (redrawCurrent(operation, confirmationContext)) { avatar = result; redrawNote = "Avatar saved. Your voice permissions are unchanged."; }
+    } catch (e) { if (redrawCurrent(operation, confirmationContext)) redrawError = String(e); }
+    finally {
+      if (redrawCurrent(operation, confirmationContext)) {
+        await refresh();
+        if (redrawCurrent(operation, confirmationContext) && candidatesLoaded && !candidatesError) redrawNeedsRead = false;
+      }
+      if (confirmingTicket === pending.ticket) confirmingTicket = null;
+      redrawBusy = false;
+    }
+  }
   onMount(() => {
     mounted = true;
-    const refreshSavedVoice = () => { if (native && mounted) void refresh(); };
-    refreshSavedVoice();
-    window.addEventListener("focus", refreshSavedVoice);
-    return () => { mounted = false; window.removeEventListener("focus", refreshSavedVoice); candidateReader.dispose(); generation++; ownerGeneration++; if (native && ownsEnrollment) void command("cancel_setup").catch(() => {}); };
+    let visibilityGeneration = 0, checkingVisibility = false, visibilityPending = false;
+    const stops: (() => void)[] = [];
+    const hide = () => {
+      visibilityGeneration++; visible = false; clearVoiceView();
+      ownerGeneration++; owner = null;
+    };
+    const confirmVisible = async () => {
+      if (!native || !mounted || !eventsReady) return;
+      if (checkingVisibility) { visibilityPending = true; return; }
+      checkingVisibility = true;
+      const observed = visibilityGeneration;
+      try {
+        const shown = await getCurrentWindow().isVisible();
+        if (!mounted || observed !== visibilityGeneration) return;
+        if (!shown || document.hidden) { hide(); return; }
+        const alreadyVisible = visible;
+        visible = true;
+        // A newly visible page is read by the source-context effect below.
+        if (alreadyVisible && !runtime?.locked) void refresh();
+      } catch { if (mounted && observed === visibilityGeneration) hide(); }
+      finally {
+        checkingVisibility = false;
+        if (visibilityPending && mounted) { visibilityPending = false; void confirmVisible(); }
+      }
+    };
+    const requestVisible = () => { visibilityGeneration++; void confirmVisible(); };
+    const visibilityChanged = () => { if (document.hidden) hide(); else requestVisible(); };
+    document.addEventListener("visibilitychange", visibilityChanged);
+    window.addEventListener("focus", requestVisible);
+    if (native) void (async () => {
+      try {
+        for (const [event, handler] of [["settings-hidden", hide], ["settings-shown", requestVisible]] as const) {
+          const stop = await listen(event, handler);
+          if (!mounted) { stop(); return; }
+          stops.push(stop);
+        }
+        eventsReady = true; requestVisible();
+      } catch { if (mounted) { stops.splice(0).forEach(stop => stop()); hide(); } }
+    })();
+    return () => {
+      mounted = false; eventsReady = false; visibilityGeneration++;
+      stops.forEach(stop => stop());
+      document.removeEventListener("visibilitychange", visibilityChanged);
+      window.removeEventListener("focus", requestVisible);
+      clearVoiceView(); candidateReader.dispose(); generation++; ownerGeneration++;
+      if (native && ownsEnrollment) void command("cancel_setup").catch(() => {});
+    };
   });
 </script>
 <section class="section">
-  <div class="av-card flex flex-col gap-2 p-3.5" role="status">
-    <div class="flex flex-wrap items-center justify-between gap-2"><h2 class="text-[16px] font-medium">{voice.title}</h2><span class="av-chip text-zinc-300 ring-white/15">{voice.label}</span></div>
+  <YourVoiceCard {avatar} candidate={boundCandidate} name={displayName} owner={ownerComplete} {listening} paused={listeningLabel} loading={candidatesLoading} blocked={!native || !visible || !!runtime?.locked || acting} {prompts} ontest={() => void openVoiceTool(true)} onenroll={() => void openVoiceTool(false)} />
+  {#if error && !advanced}<p class="av-hint text-amber-200" role="alert">{error}</p>{/if}
+  <details class="av-card p-3.5" bind:open={advanced}>
+    <summary class="cursor-pointer text-[12.5px] font-medium">Advanced voice tools</summary>
+    <p class="av-hint my-3">Optional owner management, saved recordings and diagnostics. These are not required to start talking.</p>
+  <div class="flex flex-col gap-3 border-b border-white/[0.06] pb-3 mb-3">
+    <div class="flex items-center gap-3"><div class="min-w-0 flex-1"><p class="m-0 text-[12.5px] font-medium">Redraw your avatar</p><p class="av-hint mt-1">Preview a visual from your current saved voice. This does not record audio or change who can use Avesra. Saving a redraw removes optional portrait features.</p></div><button class="av-btn av-btn-secondary av-btn-sm" disabled={!redrawAllowed || !!redraw} onclick={prepareRedraw}>{redrawBusy ? "Working…" : "Prepare preview"}</button></div>
+    {#if redraw}
+      <div class="flex items-center gap-4"><VoiceAvatarPreview parameters={redraw.preview.parameters} name={displayName} owner={ownerComplete} /><div class="flex flex-col gap-2"><span class="av-chip self-start text-zinc-300 ring-white/10">Pending · not saved</span><p class="av-hint">Save this proposed avatar, or cancel to keep the saved one.</p><div class="flex gap-2"><button class="av-btn av-btn-primary av-btn-sm" disabled={redrawBusy} onclick={confirmRedraw}>Save avatar</button><button class="av-btn av-btn-ghost av-btn-sm" disabled={redrawBusy} onclick={discardRedraw}>Cancel</button></div></div></div>
+    {/if}
+    {#if redrawNote}<p class="av-hint" role="status">{redrawNote}</p>{/if}
+    {#if redrawError}<p class="av-hint text-amber-200" role="alert">{redrawError}</p>{/if}
+    {#if redrawNeedsRead}<div class="flex items-center gap-2"><p class="av-hint">Read the saved avatar before preparing another preview.</p><button class="av-btn av-btn-ghost av-btn-sm" disabled={redrawBusy || !visible || !!runtime?.locked} onclick={reconcileRedraw}>Refresh avatar</button></div>{/if}
+  </div>
+
+    {#if advanced}
+    <VoicePortrait context={`${runtime?.capture_epoch}:${runtime?.action_epoch}:${runtime?.settings.microphone}:${owner?.actor}:${owner?.revision}`} {visible} blocked={acting} connected={!!runtime?.connected} locked={!!runtime?.locked} onbusy={value => busy = value} onrefresh={refresh} />
+    <OwnerName {runtime} ownerReady={ownerComplete} blocked={acting || candidatesLoading} />
     <p class="av-hint">{voice.reason}</p>
-    <p class="av-hint">Talk naturally. Avesra reuses your saved voice or learns it as you talk. You can add other people later.</p>
     <div class="flex flex-wrap gap-2 pt-1">
       {#if !runtime?.connected}<button class="av-btn av-btn-primary av-btn-sm" onclick={() => navigate("profiles", "spark-pairing")}>Connect Spark</button>{/if}
       {#if audioAction}<button class="av-btn av-btn-secondary av-btn-sm" disabled={!native} onclick={restoreAudio}>{audioAction.label}</button>{:else}<button class="av-btn av-btn-secondary av-btn-sm" disabled={!native || !runtime} onclick={() => control("mute").catch(e => error = String(e))}>Mute microphone</button><button class="av-btn av-btn-ghost av-btn-sm" disabled={!native || !runtime} onclick={() => control("pause").catch(e => error = String(e))}>Pause Avesra</button>{/if}
       <button class="av-btn av-btn-ghost av-btn-sm" onclick={() => navigate("audio")}>Audio &amp; Voice</button>
     </div>
-  </div>
-  {#if error && !advanced}<p class="av-hint text-amber-200" role="alert">{error}</p>{/if}
-  <details class="av-card p-3.5" bind:open={advanced}>
-    <summary class="cursor-pointer text-[12.5px] font-medium">Advanced voice tools</summary>
-    <p class="av-hint my-3">Optional owner management, saved recordings and diagnostics. These are not required to start talking.</p>
-    {#if advanced}
   <div class="av-card px-3.5">
     <div class="flex flex-col gap-2 py-3">
       <div class="flex items-center gap-3"><span class="min-w-0 flex-1 text-[13px] font-medium text-zinc-100">Create your owner account</span><span class="av-chip {ownerComplete ? 'text-emerald-300 ring-emerald-400/30' : 'text-zinc-300 ring-white/15'}">{ownerLoading ? "Checking…" : ownerComplete ? "Complete" : ownerError ? "Check failed" : "Action needed"}</span></div>
       <p class="av-hint ml-7">{ownerLoading ? "Reading your saved owner account…" : ownerComplete ? "Your owner account is saved for this Windows user." : ownerError ? `Couldn't read your owner account. ${ownerError}` : "Create an owner account for this Windows user. Windows will ask you to verify."}</p>
       {#if !ownerLoading && !ownerComplete}<button class="av-btn av-btn-primary av-btn-sm ml-7 self-start" disabled={acting || !!unavailable || !native} onclick={ownerError || owner?.state !== "missing" ? refreshOwner : createOwner}>{ownerError || owner?.state !== "missing" ? "Retry owner check" : "Create owner account"}</button>{/if}
     </div>
-    <ActorRegistration {runtime} ownerReady={ownerComplete} parentBusy={busy} onstate={registrationChanged} onbusy={value => registrationBusy = value} />
+    <ActorRegistration {runtime} ownerReady={ownerComplete} parentBusy={busy || redrawBusy || readActive} onstate={registrationChanged} onbusy={registrationWorking} />
     <div class="flex flex-col gap-2 border-t border-white/10 py-3">
       <div class="flex items-center gap-3"><span class="min-w-0 flex-1 text-[13px] font-medium text-zinc-100">Save your voice</span><span class="av-chip {savedVoice && !savedVoiceReadError ? 'text-emerald-300 ring-emerald-400/30' : 'text-zinc-300 ring-white/15'}">{checkingSavedVoice || (!candidatesLoaded && !savedVoiceReadError) ? "Checking…" : savedVoiceReadError ? "Check failed" : savedVoice ? "Complete · 6 of 6" : "Action needed"}</span></div>
       <p class="av-hint ml-7">{savedVoiceReadError || (savedVoice ? "All six phrases are saved on this PC. No new recording is needed." : !candidatesLoaded ? "Reading your saved voice…" : registration.state !== "registered" ? "Complete the owner and Spark steps above, then record six short phrases." : "Record six eight-second phrases. Avesra saves your voice after the last one.")}</p>
@@ -191,7 +377,6 @@
   </div>
   {#if progress || note}<p class="av-hint" role="status">{progress || note}</p>{/if}
   {#if error}<div class="flex flex-col gap-1 border border-amber-400/25 p-3" role="alert"><span class="text-[12.5px] font-medium text-amber-200">This step couldn't finish</span><p class="av-hint">{error}</p><p class="av-hint">{status ? "Your completed phrases are still in this session. Retry the current step below." : "Your previously saved owner and voice are unchanged. Retry the step you were completing."}</p></div>{/if}
-
   {#if status}
     <div class="av-card flex flex-col gap-3 p-3.5">
       <h2 class="text-[14px] font-medium">{status.completed_segments === 6 ? "Save your voice" : `Phrase ${status.completed_segments + 1} of 6`}</h2>
@@ -204,15 +389,15 @@
       </div>
     </div>
   {/if}
-
-  {#if savedVoice}
-    <div class="av-card p-3.5">
+  {#if checkCandidate}
+    <div class="av-card p-3.5" bind:this={diagnostics}>
       <h2 class="text-[12.5px] font-medium">Optional voice diagnostics</h2>
+      {#if checkCandidate.id !== boundCandidate?.id || checkCandidate.revision !== boundCandidate?.revision}<p class="av-hint">Saved candidate diagnostics; this candidate is not currently linked to the displayed avatar.</p>{/if}
       {#if enrollmentBlock}<p class="av-hint mt-2 text-amber-200">{enrollmentBlock}</p><button class="av-btn av-btn-secondary av-btn-sm mt-2" disabled={acting} onclick={restoreAudio}>{audioAction?.label ?? "Open audio settings"}</button>{/if}
-      <VoiceCheck id={savedVoice.id} revision={savedVoice.revision} {runtime} blocked={acting || !!status || !!enrollmentBlock || !ownerComplete || registration.state !== "registered"} onbusy={value => busy = value} />
+      <VoiceCheck id={checkCandidate.id} revision={checkCandidate.revision} {runtime} blocked={acting || !!status || !!enrollmentBlock || !ownerComplete || registration.state !== "registered"} onbusy={value => busy = value} />
     </div>
   {/if}
-  <details class="av-card p-3.5">
+  <details class="av-card p-3.5" bind:this={recordingTools}>
     <summary class="cursor-pointer text-[12.5px] font-medium">Manage saved voice · advanced</summary>
     <p class="av-hint mt-3">These options replace or remove saved setup. They are not required for normal listening.</p>
     <div class="my-3 flex flex-wrap gap-2"><button class="av-btn av-btn-secondary av-btn-sm" disabled={acting || !!enrollmentBlock || !!unavailable || !!status} onclick={() => prepare(true)}>Record a new voice…</button><button class="av-btn av-btn-ghost av-btn-sm" disabled={acting || candidatesLoading || checkingSavedVoice || !native} onclick={checkSavedVoice}>{checkingSavedVoice ? "Checking saved voice…" : "Reload saved voices"}</button></div>

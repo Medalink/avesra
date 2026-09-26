@@ -341,3 +341,7 @@ demonstrate sleep/resume, device loss, browser restart, service failure, disk fu
 and lost effect acknowledgment through the same task/job owners. No test runner,
 fixture, automatic acceptance claim or generic clear-uncertainty operation is
 introduced by this packaging work.
+
+## App timing telemetry compatibility
+
+The optional portrait observer command/phase roster advances the shared telemetry.db writer to schema 9 (schema 8 added native avatar preparation/redraw operations; schema 7 extended preferences commands; schema 6 introduced app timing tables); accepted trace query version 3 and product Store schema 30 are separate boundaries. Install matched Windows/controller binaries built from this source. Writers supporting at most schema 8 reject schema 9, so rolling back only an executable will make telemetry unavailable; preserve the old telemetry backup or keep the newer writer. Do not reset, rename or delete the owner/conversation store as a telemetry workaround. The new installation-scoped app records are local-only and are not added to the paired accepted-trace query. Static/build checks do not prove the upgrade or retained export on an installed instance.

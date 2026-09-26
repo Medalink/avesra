@@ -11,6 +11,10 @@ The avatar is a portrait, not a password. It makes the owner's voice identity vi
 
 ## Owner delivery requirements (2026-09-26)
 
+The [acceptance matrix](003-acceptance-matrix.md) separates implementation from
+live proof for each remaining criterion. It was audited at integration `2d8eb3a`;
+no unfinished criterion is waived by the current mock's geometry override.
+
 The owner requires complete functional implementation, exact matching to the authoritative design mockups in the real app, actual evidence, and PRs as work proceeds. Compare matching states at the same scale. Simulated mock data must be replaced with actual native state, never copied as success evidence. Preserve the simple Personal conversation startup: optional portrait creation must not become a new prerequisite to talking. Instrument portrait capture/extraction/render preparation with bounded content-free timings, including failures/cancellation; biometric inputs and render parameters are excluded from metrics. Live capture and repeatability evidence remain unrun.
 
 
@@ -32,7 +36,7 @@ Lossy keyed projection is not a proved biometric inversion or unlinkability defe
 These limits must remain explicit in product and evidence claims; they cannot be
 converted into passing acceptance results by relabeling the foundation as complete.
 Personal learning must not redraw an existing portrait. Source changes require an
-explicit future redraw; changed owner revision fails closed.
+explicit protected redraw; changed owner revision fails closed on ordinary reads.
 
 ### Current mock authority and remaining portrait work
 
@@ -45,12 +49,12 @@ the original visual-layer proposal below is not authority to alter the mock.
 Personal sources and exact candidate-bound phrase summaries remain distinct.
 Unavailable live scores, check results and dates must not be fabricated.
 
-Optional two-batch capture work is parked, unfinished and excluded from the
-current integration build. Its intended next native slice uses actual received-sample prompt
+Optional two-batch capture was reviewed and integrated in PRs34–35 at `878ca13`.
+It is not covered by the installed49 evidence. The native slice uses actual received-sample prompt
 progress, original management lifetime, selected-device ownership and retained
 worker retirement. Current ASR supplies no word timestamps. Energy islands in
 800ms prompt slots may provide bounded acoustic features, not lexical verification;
-ambiguous slots remain missing. Version2 typed petals will carry actual edge and
+ambiguous slots remain missing. Version2 typed petals carry actual edge and
 energy geometry while retaining the v1 reader and stable ring. Prompt pace is not
 measured syllable rate. No portrait or verification requirement may be added to
 ordinary Personal conversation.
