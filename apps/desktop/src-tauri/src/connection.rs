@@ -139,7 +139,7 @@ pub async fn trace_query(
         || reply.binding.actor != request.actor
         || reply.binding.owner_revision != request.owner_revision
         || reply.binding.registered_by != request.registered_by
-        || reply.snapshot.version != 1
+        || reply.snapshot.version != avesra_core::trace::QUERY_VERSION
         || reply.snapshot.records.len() > 2048
         || reply.snapshot.records.iter().any(|r| {
             r.link.actor != request.actor
