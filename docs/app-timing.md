@@ -5,9 +5,11 @@ not accepted-turn evidence, a release benchmark, an authority source or proof of
 work completing on another host. Existing accepted trace query version 3 stays
 unchanged, as does product Store schema 30. Telemetry schema 6 introduced the
 local app timing tables; schema 7 extended the preferences command roster.
-Schema 8 adds finite native portrait operations without adding tables or record
-fields. Deploy matched binaries when upgrading the shared writer. Writers
-supporting at most schema 7 reject schema 8 before reading or writing its records.
+Schema 8 added native avatar preparation/redraw operations. Schema 9 extends the
+finite native phases and command roster for optional portrait observation, without
+adding tables or record fields. Deploy compatible binaries when upgrading the
+shared writer. Writers supporting at most schema 8 reject schema 9 before reading
+or writing its records.
 
 The existing bounded trace writer receives records with `try_send`; observation
 must never wait for queue capacity or alter operation results, admission, retry,
@@ -109,8 +111,8 @@ and export retain operation kind/name and outcome; no source or biometric fields
 are added. Nested native phases share a fresh per-call timing UUID and overlap;
 their durations must not be summed or subtracted from frontend clocks.
 
-The shared `trace::initialize` writer is used by both desktop and controller.
-It accepts telemetry versions 1 through 8 and writes the schema-8 marker only
+The schema-8 `trace::initialize` writer is shared by desktop and controller.
+That release accepts telemetry versions 1 through 8 and writes the schema-8 marker only
 after existing table initialization succeeds. Older schema-7 binaries reject 8
 before table writes. Without that marker their strict `app_timing::read` record
 deserializer would reject the newly serialized operation variant. New readers
@@ -121,3 +123,30 @@ schema 30 is unrelated and must not change for this addition. The installer
 currently gates the product Store schema, not telemetry; deployment must preserve
 the telemetry backup and use compatible writers. No installed upgrade/export or
 rollback proof is claimed by source/static verification.
+
+## Optional portrait observer roster (telemetry schema 9)
+
+This compatibility slice defines the finite native `Portrait` variants `observe`,
+`capture`, `extract` and `save`, and adds exactly `begin_voice_portrait`,
+`record_voice_portrait`, `save_voice_portrait` and `cancel_voice_portrait` to both
+frontend/native command registries. UI calls use `runtime.ts::command`, which
+measures only the frontend invoke round trip. No arguments, ticket/session/source
+identifiers, render parameters, biometric features or error text enter records.
+
+The native variants are definitions for the separately implemented observer's
+actual call sites, not evidence that those operations ran or hooks are complete.
+The native implementation owns their final measured boundaries and cancellation/
+retirement inventory in `voice-avatar.md`. Frontend ingress still rejects native
+portrait operations. Adding a roster name does not register an IPC handler, grant
+capture authority, change native admission or manufacture an observation.
+
+Schema-8 readers cannot deserialize these new operation variants or validate the
+new command names. `trace::initialize`, shared by desktop and controller, accepts
+versions 1 through 9 and marks 9 after existing table initialization; older
+writers reject the new store before table writes. New readers retain all previous
+operations and command names, including historical `save_settings`, without
+rewriting records. Snapshot/export version 1, accepted query version 3 and product
+Store schema 30 stay unchanged. The installer gates product Store compatibility,
+not telemetry: preserve the previous telemetry backup and deploy compatible
+writers. This source change does not modify the frozen schema-8 build or
+prove an installed upgrade, export or rollback.
