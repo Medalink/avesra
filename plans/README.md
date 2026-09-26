@@ -2,7 +2,7 @@
 
 Avesra means **A Very Effective Smart Reasoning Assistant**.
 
-Current installed Windows: **028beb6**, controller **b7815d4**, 2026-09-26. The UI-only follow-up preserves identical native/controller source. Store30 and telemetry6 are verified. Plan001 remains
+Current installed Windows: **1eab298**, controller **695fc3e**, 2026-09-26. The UI-only follow-up preserves identical native/controller source. Store30 and telemetry7 are verified. Real Save/Discard, native reopen refresh and Models/Profiles/Voice screenshots are retained; full parity remains unproven. Plan001 remains
 **IN PROGRESS**. The [current acceptance ledger](001-acceptance-2026-09-26.md)
 takes precedence over the historical checkpoints below.
 
