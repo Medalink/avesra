@@ -2,7 +2,7 @@
 
 ## Status and intent
 
-- Status: IN PROGRESS (implementation explicitly authorized by the owner, 2026-09-26). The protected native foundation is published in draft PR14 (44eb9a8); portrait capture, renderer and live proof are still outstanding. This is not a completion claim.
+- Status: IN PROGRESS (implementation explicitly authorized by the owner, 2026-09-26). Draft PR14 includes the protected native foundation and mock-aligned Your voice renderer (5b43c37). Source/static review and combined production builds passed. Installed People card geometry and its honest unavailable state were observed at b7815d4 and1eab298. No current owner/microphone-bound Personal observations exist in the inspected store, so a genuine rendered avatar, repeatability, portrait capture and full acceptance remain outstanding. This is not a completion claim. See [the real-app parity ledger](003-ui-parity-status-2026-09-26.md).
 - Priority: P2 product identity. Effort: M, staged. Risk: low to medium; it touches protected speaker storage and enrollment capture, not action authority.
 - Depends on: Plan 001's protected owner and enrollment flow (`docs/owner-identity.md`, `docs/enrollment.md`) and the People & Voice ID screen in the design mockups.
 - Owner request: generate a unique-to-the-user "avatar" graph and animation of their voice, built from their real voice. The same user must get the same avatar every time. Suggested starting point: have them say about 20 words.
@@ -17,7 +17,7 @@ The owner requires complete functional implementation, exact matching to the aut
 ### Current foundation and precision of guarantees
 
 Draft [PR14](https://github.com/Medalink/avesra/pull/14) implements the native
-foundation only. Its governing implementation contract is `docs/voice-avatar.md`
+foundation and the mock-aligned People card. Its governing implementation contract is `docs/voice-avatar.md`
 on `codex/voice-avatar`. Actual owner-bound PersonalVoice is required to derive a
 portrait; an unbound candidate alone is insufficient. Candidate2 and Personal1
 remain unchanged; a separate protected avatar vault supports either real source.
@@ -34,7 +34,19 @@ converted into passing acceptance results by relabeling the foundation as comple
 Personal learning must not redraw an existing portrait. Source changes require an
 explicit future redraw; changed owner revision fails closed.
 
-Next native slice: optional two-batch capture with actual received-sample prompt
+### Current mock authority and remaining portrait work
+
+The owner's latest instruction makes the checked-in mock appearance authoritative.
+The current renderer uses 192 display points interpolated from 24 lossy native
+shape values, matching the mock's guide circles and spokes. These are not 192
+independently retained biometric features. It does not add a visible twenty-petal
+layer or signature ring absent from the mock. The native ring remains stored;
+the original visual-layer proposal below is not authority to alter the mock.
+Personal sources and exact candidate-bound phrase summaries remain distinct.
+Unavailable live scores, check results and dates must not be fabricated.
+
+Optional two-batch capture work is parked, unfinished and excluded from the
+current integration build. Its intended next native slice uses actual received-sample prompt
 progress, original management lifetime, selected-device ownership and retained
 worker retirement. Current ASR supplies no word timestamps. Energy islands in
 800ms prompt slots may provide bounded acoustic features, not lexical verification;
