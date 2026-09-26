@@ -105,7 +105,13 @@ export const timedCommands = new Set([
   "audio_devices",
   "audio_lane_health",
   "local_control",
+  // Retained for historical observations after the old IPC surface is removed.
   "save_settings",
+  "apply_preferences",
+  "begin_preferences_editor",
+  "retire_preferences_editor",
+  "answer_preferences_close",
+  "show_settings",
   "update_sound",
   "sound_output_channels",
   "sound_diagnostics",

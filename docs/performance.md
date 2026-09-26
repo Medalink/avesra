@@ -43,6 +43,32 @@ scope, retention, registration/loss, diagnostic mode and exports remain accessib
 in disclosures. The real saved-comparison flow remains in accepted-trace details;
 there is no simulated Compare button. No runtime or pixel-parity proof is implied.
 
+## Observed installed close/reopen recovery (2026-09-26)
+
+Installed Windows commit `028beb6f64ebee64e7cebfd76d780bc54043ad3b`
+(desktop SHA-256 `1141f11aa81c666d6b4b6cb852645884b0dfa292e201294d1b311d3e03e4ab90`)
+was inspected on the separate non-input diagnostic desktop. Using the real Settings
+title-bar close cleared local stage rows. The observed Overlay Open settings
+control reopened the window without a DOM focus/visibility event. The table still
+contained only its two headers, but Refresh remained enabled. Clicking that actual
+Refresh control restored six retained preview-stage rows. This proves explicit
+Refresh recovery for this installed build; it does not prove automatic refresh on
+reopen, a raced in-flight read, all lifecycle combinations or full visual parity.
+
+The same run used the selected voice's real default preview. Its finalized native
+postmix/postformat recording contains 9.36 seconds at 24 kHz stereo, before
+intentional hardware silencing; `audible_device_proof` is false. A 39.906-second
+sampled production Settings video synchronizes that recording with WebView frames
+captured at 200 ms intervals (assembled at 10 fps). It demonstrates the sampled UI
+and preview path, not acoustic delivery, microphone conversation, accepted-turn
+latency, complete application timing coverage or release performance percentiles.
+
+Local ignored evidence is retained under `artifacts/ui-parity-028beb6/`:
+`performance-hidden-dom.json`, `performance-reopened-before-refresh.json`,
+`performance-reopened-refreshed-dom.json`, `performance-reopened-refreshed.png`,
+`installed.wav.json`, `default-preview.mp4.json`, the corresponding WAV/video,
+and `build-receipt.json`. These are actual run artifacts, not synthetic fixtures.
+
 # App timing foundation
 
 Separate installation-scoped startup, UI and history-worker timings now use bounded durable storage and explicit local export; see [app-timing.md](app-timing.md). Coverage is partial and distinct from the voice aggregates below.
