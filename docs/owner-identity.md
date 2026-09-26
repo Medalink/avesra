@@ -1,5 +1,19 @@
 # First authenticated owner and native management
 
+## Optional native voice avatar identity
+
+`speaker_candidates` additionally returns an optional native avatar view described
+in [voice-avatar.md](voice-avatar.md). A current visible unlocked Settings read
+holds the actual owner coordinator and original 12-second context through blocking
+storage work. Caller loss, Settings invalidation, owner/device/action-context
+changes or expiry withdraw publication. The read does not request Windows Hello,
+record audio, enroll anyone or grant any scope. Native Personal actor/revision and
+source binding are required; candidate filenames or selection alone never bind a
+voice to the current owner. Missing source/key is displayed honestly without
+replacing existing identity or forcing six new recordings. Parameters are sensitive
+presentation and excluded from diagnostic/export channels. A future owner-reset
+or Personal-clear operation must also clear its source-bearing avatar records.
+
 ## Automatic personal bootstrap (current product policy)
 
 On a normal unlocked connected launch, a missing local owner may be created

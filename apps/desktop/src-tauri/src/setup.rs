@@ -640,13 +640,69 @@ pub async fn speaker_candidates(
     app: tauri::AppHandle,
 ) -> Result<SpeakerCandidates, String> {
     settings_only(&window)?;
+    let state = app.state::<Runtime>();
+    let challenge = state.setup.challenge();
+    let started = Instant::now();
+    let generation = state.connection_generation.load(Ordering::SeqCst);
+    if !window.is_visible().map_err(|_| "Settings unavailable")? {
+        return Err("Open Settings to read saved voices".into());
+    }
+    let (action_epoch, microphone) = {
+        let local = state.local.lock().map_err(|_| "Local state unavailable")?;
+        if local.locked {
+            return Err("Unlock Windows to read saved voices".into());
+        }
+        (local.action_epoch, local.settings.microphone.clone())
+    };
+    let owner = state.owner_setup.clone().try_lock_owned().ok();
+    struct Caller(std::sync::Arc<std::sync::atomic::AtomicBool>);
+    impl Drop for Caller {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+    let caller = Caller(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+        false,
+    )));
+    let withdrawn = caller.0.clone();
     let directory = app
         .path()
         .app_data_dir()
         .map_err(|_| "Profile directory unavailable")?;
     tauri::async_runtime::spawn_blocking(move || {
+        let current = || {
+            let state = app.state::<Runtime>();
+            let local = state.local.lock().map_err(|_| "Local state unavailable")?;
+            if withdrawn.load(Ordering::SeqCst)
+                || started.elapsed() >= Duration::from_secs(12)
+                || local.locked
+                || local.action_epoch != action_epoch
+                || local.settings.microphone != microphone
+                || state.setup.challenge() != challenge
+                || state.connection_generation.load(Ordering::SeqCst) != generation
+            {
+                return Err("Saved voice view was withdrawn or changed".into());
+            }
+            Ok(())
+        };
+        current()?;
+        let candidates = crate::profiles::list_candidates(&directory)?;
+        let avatar = match (owner.as_ref(), microphone.as_deref()) {
+            (Some(_), Some(microphone)) => {
+                crate::profiles::voice_avatar::current(&directory, microphone, &mut || current())
+                    .unwrap_or_else(crate::profiles::voice_avatar::View::unavailable)
+            }
+            (None, _) => crate::profiles::voice_avatar::View::unavailable(
+                "Owner management is busy; retry the avatar later".into(),
+            ),
+            (_, None) => crate::profiles::voice_avatar::View::unavailable(
+                "Choose a microphone to locate its saved personal voice".into(),
+            ),
+        };
+        current()?;
         Ok(SpeakerCandidates {
-            candidates: crate::profiles::list_candidates(&directory)?,
+            candidates,
+            avatar,
             storage_directory: std::fs::canonicalize(directory.join("speaker-candidates"))
                 .map_err(|_| "Saved voice folder could not be resolved")?
                 .display()
@@ -660,6 +716,7 @@ pub async fn speaker_candidates(
 #[derive(Serialize)]
 pub struct SpeakerCandidates {
     candidates: Vec<crate::profiles::CandidateSummary>,
+    avatar: crate::profiles::voice_avatar::View,
     storage_directory: String,
 }
 #[tauri::command]
