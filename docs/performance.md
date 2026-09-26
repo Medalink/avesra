@@ -16,7 +16,11 @@ reason and source count; no current-build/profile identity is inferred. Its labe
 quiet tail is excluded; repeated attempts are not unique turns. Counts, failed or
 missing outcomes, bounded query coverage and observer loss remain visible in the
 trace details. There is no new protected read, automatic inference or Hello request.
-The projection clears with its native view context. Verified-action and verified-
+The projection clears with its native view context. The local table, errors and
+endpoint card also clear on Settings hide, lock and teardown; pending reads
+cannot republish after withdrawal. The native hide listener is installed before
+the initial read, and actual window focus/visibility reopening permits a fresh
+read, without overlapping an earlier pending request. Verified-action and verified-
 completion endpoint cards remain unavailable until those exact measurements exist.
 No sample count is a release gate; all displayed tails are descriptive.
 
