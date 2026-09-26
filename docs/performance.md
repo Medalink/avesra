@@ -19,8 +19,17 @@ trace details. There is no new protected read, automatic inference or Hello requ
 The projection clears with its native view context. The local table, errors and
 endpoint card also clear on Settings hide, lock and teardown; pending reads
 cannot republish after withdrawal. The native hide listener is installed before
-the initial read, and actual window focus/visibility reopening permits a fresh
-read, without overlapping an earlier pending request. Verified-action and verified-
+the initial read, and the native `settings-shown` event permits a fresh read, even on a non-input
+desktop that emits no DOM focus/visibility event. DOM focus/visibility remains an
+optional additional refresh signal. Explicit Refresh also remains available when
+the local visibility flag is stale: only the existing native visible/unlocked
+Settings check can authorize that read, and only a successful same-generation
+response restores the flag. Hide/lock/teardown still rejects late publication.
+Both native listeners are installed before initial reading; no polling or injected
+DOM event is used, and no refresh overlaps an earlier pending request. The native
+`settings-shown` emitter belongs to the separate pending close-coordinator
+integration. Until that emitter lands, this standalone change guarantees explicit
+Refresh recovery; automatic reopen without DOM focus/visibility is not yet provided. Verified-action and verified-
 completion endpoint cards remain unavailable until those exact measurements exist.
 No sample count is a release gate; all displayed tails are descriptive.
 

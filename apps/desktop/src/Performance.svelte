@@ -25,19 +25,20 @@
   function hide() { visible = false; clear(); }
   $effect(() => { if (runtime?.locked) clear(); });
   const ms = (value: number | null) => value === null ? "Unavailable" : `${value.toFixed(1)} ms`;
-  async function refresh() {
-    if (busy || !mounted || !visible || !eventsReady || !native || !runtime || runtime.locked) return;
+  async function refresh(explicit = false) {
+    if (busy || !mounted || (!visible && !explicit) || !eventsReady || !native || !runtime || runtime.locked) return;
     busy = true; error = "";
     const current = ++generation;
-    try { const result = await command<Snapshot>("performance_snapshot"); if (mounted && visible && !runtime?.locked && generation === current) snapshot = result; }
-    catch (e) { if (mounted && visible && !runtime?.locked && generation === current) error = String(e); }
+    try { const result = await command<Snapshot>("performance_snapshot"); if (mounted && !runtime?.locked && generation === current) { visible = true; snapshot = result; } }
+    catch (e) { if (mounted && !runtime?.locked && generation === current) error = String(e); }
     finally { busy = false; if (reopenPending) { reopenPending = false; void refresh(); } }
   }
   onMount(() => {
     mounted = true; visible = !document.hidden;
     let stopHidden: (() => void) | undefined;
-    function reopen() {
-      if (!mounted || document.hidden) return;
+    let stopShown: (() => void) | undefined;
+    function reopen(nativeShown = false) {
+      if (!mounted || (!nativeShown && document.hidden)) return;
       visible = true;
       if (!eventsReady) return;
       if (busy) reopenPending = true;
@@ -45,13 +46,18 @@
     }
     const visibilityChanged = () => { if (document.hidden) hide(); else reopen(); };
     document.addEventListener("visibilitychange", visibilityChanged);
-    window.addEventListener("focus", reopen);
-    if (native) void listen("settings-hidden", hide).then(stop => {
-      if (!mounted) { stop(); return; }
-      stopHidden = stop; eventsReady = true;
-      if (visible && !document.hidden) void refresh();
-    }).catch(() => { if (mounted) { hide(); error = "Performance view visibility is unavailable. Reload this app window to try again."; } });
-    return () => { mounted = false; hide(); eventsReady = false; stopHidden?.(); document.removeEventListener("visibilitychange", visibilityChanged); window.removeEventListener("focus", reopen); };
+    const focused = () => reopen();
+    window.addEventListener("focus", focused);
+    if (native) void (async () => {
+      const hidden = await listen("settings-hidden", hide);
+      if (!mounted) { hidden(); return; }
+      stopHidden = hidden;
+      const shown = await listen("settings-shown", () => reopen(true));
+      if (!mounted) { shown(); return; }
+      stopShown = shown; eventsReady = true;
+      if (visible) void refresh();
+    })().catch(() => { stopHidden?.(); stopShown?.(); if (mounted) { eventsReady = false; hide(); error = "Performance view visibility is unavailable. Reload this app window to try again."; } });
+    return () => { mounted = false; hide(); eventsReady = false; stopHidden?.(); stopShown?.(); document.removeEventListener("visibilitychange", visibilityChanged); window.removeEventListener("focus", focused); };
   });
 </script>
 
@@ -59,7 +65,7 @@
   <div class="flex items-center gap-3 bg-white/[0.04] px-3 py-2 ring-1 ring-white/10 ring-inset">
     <span class="av-chip text-zinc-300 ring-white/20">OBSERVED</span>
     <span class="flex-1 text-[12px] text-zinc-300">{busy ? "Reading local measurements…" : "Real retained observations. No release gate is established."}</span>
-    <button class="av-btn av-btn-ghost av-btn-sm" disabled={busy || !visible || !eventsReady || !native || !runtime || runtime.locked} onclick={refresh}>Refresh</button>
+    <button class="av-btn av-btn-ghost av-btn-sm" disabled={busy || !eventsReady || !native || !runtime || runtime.locked} onclick={() => refresh(true)}>Refresh</button>
   </div>
   <div class="grid grid-cols-3 gap-2">
     <div class="av-card flex flex-col gap-1 p-3">
