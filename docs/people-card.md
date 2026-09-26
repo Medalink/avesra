@@ -14,6 +14,16 @@ generation can restore read eligibility. Event listeners are installed before
 initial eligibility. No focus event is required after a real native show; no old
 card, diagnostic result or pending mutation response is revived.
 
+Owner status and avatar/candidate reads use one coalescing queue. Each actual
+owner read settles before the candidate reader starts, because both use native
+owner-management admission. Initial show has one lifecycle trigger; focus, source
+changes and explicit Retry join the same queue rather than racing a second native
+reader. Advanced registration also confirms native visibility after Settings show,
+without requiring a focus event or reviving an old result. Advanced registration waits for that queue, and the queue waits for an
+already-running registration operation to settle through its existing busy
+notification. The name editor uses the actual parent owner status instead of
+showing an unconditional missing-owner prerequisite. A busy or failed native read remains explicit; there is no timed retry.
+
 The neutral card uses the mock's status dot, 88px/11px score label, blue Profile
 chips, and expanding phrase-list treatment. Listening is readiness/control state,
 not a measured speaker match. The signal panel remains unavailable and the score

@@ -49,18 +49,35 @@
   }
   onMount(() => {
     mounted = true;
-    let visibilityVersion = 0;
+    let visibilityVersion = 0, checkingVisibility = false, visibilityPending = false, listenersReady = false;
     const cleanup: (() => void)[] = [];
     const retain = (stop: () => void) => { if (mounted) cleanup.push(stop); else stop(); };
+    const hidden = () => { visibilityVersion++; pageVisible = false; invalidate(); };
+    const confirmVisible = async () => {
+      if (!mounted || !listenersReady) return;
+      if (checkingVisibility) { visibilityPending = true; return; }
+      checkingVisibility = true;
+      const observed = visibilityVersion;
+      try {
+        const shown = await getCurrentWindow().isVisible();
+        if (!mounted || observed !== visibilityVersion) return;
+        if (!shown) hidden(); else { if (!pageVisible) invalidate(); pageVisible = true; }
+        lifetimeReady = true;
+      } catch { if (mounted && observed === visibilityVersion) { hidden(); error = "Reopen this page to check registration."; refreshNeeded = false; } }
+      finally { checkingVisibility = false; if (visibilityPending && mounted) { visibilityPending = false; void confirmVisible(); } }
+    };
+    const shown = () => { visibilityVersion++; void confirmVisible(); };
     if (native) void (async () => {
       const window = getCurrentWindow();
-      retain(await listen("settings-hidden", () => { visibilityVersion++; pageVisible = false; invalidate(); }));
-      retain(await window.onFocusChanged(event => { if (event.payload && mounted) { visibilityVersion++; pageVisible = true; } }));
-      const readVersion = visibilityVersion;
-      const visible = await window.isVisible();
-      if (mounted) { if (readVersion === visibilityVersion) pageVisible = visible; lifetimeReady = true; }
-    })().catch(() => { if (mounted) { error = "Reopen this page to check registration."; refreshNeeded = false; } });
-    return () => { mounted = false; generation++; cleanup.forEach(stop => stop()); };
+      retain(await listen("settings-hidden", hidden));
+      if (!mounted) return;
+      retain(await listen("settings-shown", shown));
+      if (!mounted) return;
+      retain(await window.onFocusChanged(event => { if (event.payload && mounted) shown(); }));
+      if (!mounted) return;
+      listenersReady = true; shown();
+    })().catch(() => { if (mounted) { cleanup.splice(0).forEach(stop => stop()); hidden(); error = "Reopen this page to check registration."; refreshNeeded = false; } });
+    return () => { mounted = false; listenersReady = false; visibilityVersion++; generation++; cleanup.forEach(stop => stop()); };
   });
 </script>
 
