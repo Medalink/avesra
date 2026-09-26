@@ -2,12 +2,11 @@
   import Icon from "./Icon.svelte";
   import Signal, { type SignalFrame } from "./Signal.svelte";
   import type { Runtime } from "./runtime";
-  import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
-  import { native } from "./runtime";
   let {
     runtime,
     error,
     signal = null,
+    expanded = $bindable(false),
     control,
     hide,
     drag,
@@ -16,20 +15,13 @@
     runtime: Runtime | null;
     error: string;
     signal?: SignalFrame | null;
+    expanded?: boolean;
     control: (value: string) => Promise<void>;
     hide: () => Promise<void>;
     drag: (event: PointerEvent) => Promise<void>;
     showSettings: () => Promise<void>;
   } = $props();
-  let expanded = $state(false);
   const s = $derived(runtime?.settings);
-  async function expand() {
-    expanded = !expanded;
-    if (native)
-      await getCurrentWindow().setSize(
-        new LogicalSize(440, expanded ? 370 : 124),
-      );
-  }
   const status = $derived(runtime?.status ?? "disconnected");
   const speaking = $derived(signal?.kind === "speaking" && runtime?.connected && !runtime.locked && !s?.deafened && !s?.paused);
   const preview = $derived(speaking && signal?.purpose === "preview");
@@ -57,13 +49,17 @@
   <button
     class="flex h-24 w-full shrink-0 items-center px-2 focus-visible:outline-1 focus-visible:outline-av-400"
     aria-expanded={expanded}
-    aria-label={`${statusLabel || status}. ${activityLabel}. Expand Avesra`}
-    onclick={expand}
+    aria-label={`${statusLabel || status}. ${activityLabel}.${status === "working" && !speaking ? " Step progress unavailable." : ""} ${expanded ? "Collapse" : "Expand"} Avesra`}
+    onclick={() => expanded = !expanded}
   >
     {#if speaking || ["passive", "recognizing", "accepted", "thinking", "speaking", "enrolling"].includes(status)}<span
         class="relative flex h-[88px] w-full items-center"
-        ><Signal frame={signal} /></span
-      >{:else}<span
+        ><Signal frame={signal} height={84} /></span
+      >{:else if status === "working"}<span class="flex w-full items-center gap-1" aria-hidden="true">
+        {#each [0, 1, 2, 3, 4] as segment (segment)}
+          <span class="relative h-1 flex-1 overflow-hidden bg-white/10"><span class="av-shimmer absolute inset-0 bg-av-500/10"></span></span>
+        {/each}
+      </span>{:else}<span
         class="flex w-full items-center gap-3 {status === 'disconnected'
           ? 'text-red-500'
           : status === 'paused'
@@ -97,7 +93,9 @@
     ><span
       class="text-[11.5px] {status === 'disconnected'
         ? 'text-red-400'
-        : 'text-amber-200'}">{speaking ? (s?.explicit_mute ? "Muted" : "") : statusLabel}</span
+        : status === 'working'
+          ? 'text-av-300'
+          : 'text-amber-200'}">{speaking ? (s?.explicit_mute ? "Muted" : "") : statusLabel}</span
     ><span class="flex-1"></span>
     {#if runtime?.active_task || speaking}<button
         class="av-iconbtn size-6 text-red-400"

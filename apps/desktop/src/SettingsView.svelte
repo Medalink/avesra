@@ -1,8 +1,10 @@
 <script lang="ts">
+  import { viewTiming } from "./app-timing";
   import Performance from "./Performance.svelte";
   import Notifications from "./Notifications.svelte";
   import { onMount, tick } from "svelte";
   import Icon from "./Icon.svelte";
+  import SelectFrame from "./SelectFrame.svelte";
   import SetupOverview from "./SetupOverview.svelte";
   import { personalVoiceView } from "./owner-setup";
   import { sparkConnection } from "./runtime";
@@ -55,17 +57,22 @@
   function restoredSection() {
     try {
       const saved = localStorage.getItem("avesra.settings.section");
-      return saved && ["setup", "audio", "models", "profiles", "people", "awareness", "memory"].includes(saved) ? saved : "setup";
-    } catch { return "setup"; }
+      return saved && ["audio", "models", "profiles", "people", "awareness", "memory"].includes(saved) ? saved : "audio";
+    } catch { return "audio"; }
   }
   let section = $state(restoredSection());
   let content: HTMLElement;
   let heading: HTMLHeadingElement;
+  let navigationTiming = 0;
   async function navigate(next: string, target?: string) {
+    const serial = ++navigationTiming;
+    const observed = viewTiming(next);
     section = next;
     try { localStorage.setItem("avesra.settings.section", next); } catch { /* Navigation remains usable if persistence is unavailable. */ }
     notice = "";
     await tick();
+    observed?.commit(serial === navigationTiming ? "complete" : "abandoned");
+    requestAnimationFrame(() => observed?.frame(serial === navigationTiming ? "complete" : "abandoned"));
     heading?.focus({ preventScroll: true });
     content?.scrollTo({ top: 0 });
     if (target) document.getElementById(target)?.scrollIntoView({ block: "start" });
@@ -144,11 +151,13 @@
     void probeHealth();
     const interval = setInterval(() => { void probeHealth(); }, 15000);
     const visibility = () => {
+      navigationTiming++;
       healthGeneration += 1; healthQueued = false; clearHealth();
       void probeHealth();
     };
     document.addEventListener("visibilitychange", visibility);
     return () => {
+      navigationTiming++;
       healthMounted = false; healthGeneration += 1; healthQueued = false;
       clearInterval(interval); document.removeEventListener("visibilitychange", visibility);
     };
@@ -266,8 +275,8 @@
   <header
     class="flex h-11 shrink-0 items-center gap-2.5 border-b border-white/[0.06] pr-2 pl-4"
   >
-    <span class="text-av-400"><Icon name="audio" /></span><button
-      class="flex-1 self-stretch text-left text-[13px] font-medium"
+    <span class="text-av-400"><Icon name="brand" /></span><button
+      class="flex-1 self-stretch text-left text-[13px] font-medium text-zinc-100"
       onpointerdown={drag}
       aria-label="Drag settings window">Avesra Settings</button
     >
@@ -290,8 +299,6 @@
       class="flex w-[200px] shrink-0 flex-col gap-0.5 border-r border-white/[0.06] bg-black/20 p-2.5"
       aria-label="Settings sections"
     >
-      <button class="av-nav-btn mb-3" aria-current={section === "setup" ? "page" : undefined} onclick={() => navigate("setup")}><span class="grid size-5 place-items-center"><Icon name="setup" /></span><span>Get started</span></button>
-      <span class="av-kicker px-2.5 pb-2 text-[9px]">Settings</span>
       {#each sections as item}<button
           class="av-nav-btn"
           aria-current={section === item[0] ? "page" : undefined}
@@ -302,7 +309,7 @@
         >{/each}
       <span class="flex-1"></span>
       <div class="flex flex-col gap-0.5 px-2.5 pb-1">
-        <span class="caption text-zinc-400">Avesra 0.1 · development</span><span
+        <span class="font-mono text-[10.5px] text-zinc-400">Avesra 0.1 · development</span><span
           class="text-[10.5px] leading-[14px] text-zinc-400"
           >{native ? runtime ? "Native Windows companion" : "Connecting to companion…" : "Browser view · controls unavailable"}</span
         >
@@ -334,9 +341,9 @@
             <div class="grid grid-cols-2 gap-4">
               <div class="flex flex-col gap-1.5">
                 <label class="av-label" for="microphone">Microphone</label
-                ><select
+                ><SelectFrame><select
                   id="microphone"
-                  class="av-input"
+                  class="av-input av-select"
                   value={s?.microphone ?? ""}
                   disabled={!s || saving || devicesLoading || !!devicesError}
                   onchange={(e) =>
@@ -349,13 +356,13 @@
                         ? " · default"
                         : ""}</option
                     >{/each}</select
-                >
+                ></SelectFrame>
                 <MicrophoneMeter {runtime} {signal} />
               </div>
               <div class="flex flex-col gap-1.5">
-                <label class="av-label" for="speaker">Speakers</label><select
+                <label class="av-label" for="speaker">Speakers</label><SelectFrame><select
                   id="speaker"
-                  class="av-input"
+                  class="av-input av-select"
                   value={s?.speaker ?? ""}
                   disabled={!s || saving || devicesLoading || !!devicesError}
                   onchange={(e) =>
@@ -368,7 +375,7 @@
                         ? " · default"
                         : ""}</option
                     >{/each}</select
-                ><span class="av-hint"
+                ></SelectFrame><span class="av-hint"
                   >Replies and voice previews use this output. Your selected Avesra voice is kept.</span
                 >
               </div>
@@ -426,7 +433,7 @@
                     style:transform={s?.[
                       item[0] as "learning_chime" | "action_chime"
                     ]
-                      ? "translateX(19px)"
+                      ? "translateX(18px)"
                       : "translateX(3px)"}
                   ></span></button
                 >
@@ -525,6 +532,7 @@
           <section class="section">
             <span class="av-kicker">Machines</span>
             <div id="spark-pairing"><Pairing {runtime} /></div>
+            <button type="button" class="av-btn av-btn-ghost av-btn-sm self-start" onclick={() => navigate("setup")}>Open setup guide</button>
             <div id="browser-setup"><BrowserSetup {runtime} /></div>
           </section>
           <section class="section">
@@ -567,7 +575,7 @@
                 ><span
                   class="av-knob"
                   style:transform={s?.always_on_top
-                    ? "translateX(19px)"
+                    ? "translateX(18px)"
                     : "translateX(3px)"}
                 ></span></button
               >

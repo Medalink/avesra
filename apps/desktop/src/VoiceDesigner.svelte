@@ -1,4 +1,5 @@
 <script lang="ts">
+  import SelectFrame from "./SelectFrame.svelte";
   import { onMount, untrack } from "svelte";
   import { command, native, type Runtime } from "./runtime";
   let { runtime }: { runtime: Runtime | null } = $props();
@@ -201,9 +202,9 @@
       <p class="av-hint">Reference text: “{referenceText}”</p>
       {#if status?.candidates.length}
         <label class="av-label" for="voice-candidate">Saved candidates</label>
-        <select id="voice-candidate" class="av-input av-select" disabled={!!busy} value={candidate ? `${candidate.id}:${candidate.revision}` : ""} onchange={e => { candidate = status?.candidates.find(c => `${c.id}:${c.revision}` === e.currentTarget.value) ?? null; rememberedCandidate = candidate ? `${candidate.id}:${candidate.revision}` : ""; if (candidate?.description) description = candidate.description; saveDraft(); }}>
+        <SelectFrame><select id="voice-candidate" class="av-input av-select" disabled={!!busy} value={candidate ? `${candidate.id}:${candidate.revision}` : ""} onchange={e => { candidate = status?.candidates.find(c => `${c.id}:${c.revision}` === e.currentTarget.value) ?? null; rememberedCandidate = candidate ? `${candidate.id}:${candidate.revision}` : ""; if (candidate?.description) description = candidate.description; saveDraft(); }}>
           <option value="">Choose a candidate</option>{#each status.candidates as c}<option value={`${c.id}:${c.revision}`}>{c.description ?? "Unavailable candidate"} · {c.id.slice(0,8)}</option>{/each}
-        </select>
+        </select></SelectFrame>
       {/if}
       <div class="flex items-center gap-2">
         <span class="av-hint flex-1">{candidate?.state === "unavailable" ? "This record can be discarded." : "Generate saves and plays a preview."}</span>

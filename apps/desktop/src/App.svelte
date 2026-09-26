@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { timing } from "./app-timing";
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import {
@@ -48,6 +49,7 @@
   const settingsWindow =
     new URLSearchParams(location.search).get("window") === "settings";
   const s = $derived(runtime?.settings);
+  const interfaceScale = $derived(s?.interface_scale);
   async function control(value: string) {
     error = "";
     try {
@@ -92,15 +94,14 @@
   // keeps its reference geometry (440 × 124, or 370 tall expanded) times that zoom.
   // Startup sizing happens natively; this follows later setting and expand changes.
   $effect(() => {
-    if (!s || !native || settingsWindow) return;
-    const zoom = s.interface_scale / 100;
+    if (interfaceScale === undefined || !native || settingsWindow) return;
+    const zoom = interfaceScale / 100;
+    let current = true;
     void getCurrentWindow().setSize(
       new LogicalSize(440 * zoom, (expanded ? 370 : 124) * zoom),
-    );
+    ).catch(e => { if (current) error = `Unable to resize the overlay: ${String(e)}`; });
+    return () => { current = false; };
   });
-  function expand() {
-    expanded = !expanded;
-  }
   async function drag(event: PointerEvent) {
     if (native && event.button === 0) await getCurrentWindow().startDragging();
   }
@@ -139,6 +140,7 @@
     signal = next;
   }
   onMount(() => {
+    const readyTiming = timing({ kind: "ui_ready" }, "initialize");
     let dispose = () => {};
     let gone = false;
     let syncing = false;
@@ -205,11 +207,14 @@
         acceptSnapshot(await command<Runtime>("runtime_snapshot"));
         await syncClock();
         if (settingsWindow) await refreshDevices();
+        readyTiming(gone ? "withdrawn" : "complete");
       } catch (e) {
+        readyTiming("failed");
         error = String(e);
       }
     })();
     return () => {
+      readyTiming("abandoned");
       gone = true;
       clockGeneration++;
       playback.uncalibrated();
@@ -236,6 +241,7 @@
     {hide}
     {drag}
   />{:else}<Overlay
+    bind:expanded
     {runtime}
     {error}
     signal={outputSignal ?? signal}

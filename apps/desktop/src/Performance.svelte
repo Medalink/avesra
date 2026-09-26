@@ -1,4 +1,5 @@
 <script lang="ts">
+  import AppTimings from "./AppTimings.svelte";
   import { onMount } from "svelte";
   import AcceptedTraces from "./AcceptedTraces.svelte";
   import { command, native, type Runtime } from "./runtime";
@@ -47,3 +48,5 @@
   <p class="av-hint">Submitted speech and estimated drain do not prove audible delivery. Request timing includes transport and controller work; it is not pure GPU inference time. Owner accuracy, accepted-request latency, server queue time and release qualification remain unmeasured here.</p>
 </section>
 <AcceptedTraces {runtime} />
+
+<AppTimings {runtime} />

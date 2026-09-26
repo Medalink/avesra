@@ -1,5 +1,17 @@
 # Explicit voice enrollment
 
+## Optional voice avatar
+
+The [native avatar contract](voice-avatar.md) derives optional presentation only
+from an actual protected Personal voice bound to the current Windows owner. An
+enrollment candidate alone is not that binding. Existing Candidate v2 and Personal
+v1 formats remain unchanged; a separate bounded DPAPI avatar vault stores integer
+render parameters and a keyed stable actor ring. Natural learning never redraws
+the frozen avatar. Portrait capture remains optional and unimplemented in this
+foundation; no new recording or avatar is required to talk. Candidate deletion
+removes associated avatar parameters before removing the candidate, preserving
+only content-free actor/ring metadata. Failure reports the possible partial state.
+
 ## Personal conversation startup (current owner-directed product policy)
 
 Normal launch now establishes Personal admission automatically after pairing,

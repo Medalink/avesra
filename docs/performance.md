@@ -1,3 +1,7 @@
+# App timing foundation
+
+Separate installation-scoped startup, UI and history-worker timings now use bounded durable storage and explicit local export; see [app-timing.md](app-timing.md). Coverage is partial and distinct from the voice aggregates below.
+
 # Local observed performance
 
 Cached PC/controller resource readings and their bounded retained export are now

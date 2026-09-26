@@ -1,4 +1,6 @@
 //! Sensitive derived candidates are isolated from ordinary settings/history.
+#[path = "voice_avatar.rs"]
+pub(crate) mod voice_avatar;
 use avesra_core::enrollment::Candidate;
 use serde::{Deserialize, Serialize};
 use std::{io::Write, path::Path};
@@ -33,13 +35,20 @@ pub fn read_candidate(directory: &Path, id: Uuid, revision: Uuid) -> Result<Cand
 /// Native startup reuses the selection, or an unambiguous sole saved candidate.
 pub fn personal_seed(directory: &Path) -> Result<Option<Candidate>, String> {
     let _lock = lock_directory(&directory.join("speaker-candidates"))?;
+    personal_seed_locked(directory)
+}
+fn personal_seed_locked(directory: &Path) -> Result<Option<Candidate>, String> {
     if let Some(value) = selected(directory)? {
         return read_candidate_locked(directory, value.id, value.revision).map(Some);
     }
     let mut found = None;
-    for entry in std::fs::read_dir(directory.join("speaker-candidates"))
+    for (index, entry) in std::fs::read_dir(directory.join("speaker-candidates"))
         .map_err(|_| "Saved voices unavailable")?
+        .enumerate()
     {
+        if index >= 4096 {
+            return Err("Saved voice directory exceeds limit".into());
+        }
         let entry = entry.map_err(|_| "Saved voice unreadable")?;
         if entry.path().extension().is_none_or(|v| v != "dpapi") {
             continue;
@@ -385,6 +394,10 @@ pub fn remove_candidate(
     let is_selected = selected(directory)?
         .is_some_and(|selected| selected.id == id && selected.revision == revision);
     authorize()?;
+    voice_avatar::remove_candidate(directory, id, revision, authorize)?;
+    authorize().map_err(|_| {
+        "Avatar cleanup may have completed, but candidate deletion was withdrawn; refresh stored status"
+    })?;
     if is_selected {
         std::fs::remove_file(directory.join("speaker-selection.dpapi"))
             .map_err(|_| "Selected profile could not be cleared")?;
