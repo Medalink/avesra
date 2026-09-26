@@ -3,7 +3,7 @@
   import Signal, { type SignalFrame } from "./Signal.svelte";
   import type { Runtime } from "./runtime";
   import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
-  import { native, command } from "./runtime";
+  import { native } from "./runtime";
   let {
     runtime,
     error,
@@ -22,12 +22,6 @@
     showSettings: () => Promise<void>;
   } = $props();
   let expanded = $state(false);
-  let soundError = $state("");
-  async function toggleAtmosphere() {
-    soundError = "";
-    try { await command("update_sound", { edit: { kind: "enabled", value: !s?.sound.enabled } }); }
-    catch (e) { soundError = String(e); }
-  }
   const s = $derived(runtime?.settings);
   async function expand() {
     expanded = !expanded;
@@ -128,7 +122,6 @@
       onclick={() => control(s?.deafened ? "undeafen" : "deafen")}
       ><Icon name={s?.deafened ? "deafen_off" : "deafen"} size={13} /></button
     >
-    <button type="button" class="av-iconbtn size-6 {s?.sound.enabled ? 'av-iconbtn-accent' : 'reveal'}" aria-label={s?.sound.enabled ? "Turn voice atmosphere off" : "Turn voice atmosphere on"} aria-pressed={!!s?.sound.enabled} title={soundError || `Voice atmosphere ${s?.sound.enabled ? "on" : "off"}`} disabled={!runtime} onclick={toggleAtmosphere}><Icon name="atmosphere" size={13} /></button>
     <button
       class="av-iconbtn reveal size-6"
       aria-label="Open settings"
@@ -151,8 +144,8 @@
       <div class="warning">
         {runtime?.microphone_check ? "Checking microphone levels locally. Stop in Audio & Voice or mute to stop." : runtime?.enrollment_capture ? "Recording your explicit enrollment phrase. Mute or cancel in Settings to stop. No screen is being captured." : runtime?.enrolled && runtime.voice_ready ? runtime.reason : "Setup is incomplete. No microphone or screen is being captured."}
       </div>
-      {#if error || soundError}<p class="text-xs text-red-300" role="alert">
-          {error || soundError}
+      {#if error}<p class="text-xs text-red-300" role="alert">
+          {error}
         </p>{/if}<button
         class="av-btn av-btn-secondary self-start"
         onclick={showSettings}
