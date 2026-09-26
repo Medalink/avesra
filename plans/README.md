@@ -31,6 +31,15 @@ Handoff and next-step boundaries: [Plan 001 handoff](001-handoff.md). The owner 
 
 ## Execution order
 
+Latest installed checkpoint: `75b5de0` (2026-09-26). Matching Windows/ARM static
+and release builds passed and both sides were updated. A real isolated native
+preview completed with effects/music; screenshots,9.84-second audio and a
+synchronized sampled video are retained in
+`E:/Dev/Avesra/artifacts/plan001-75b5de0`. The new trace UI read/exported empty
+stores correctly. These are scoped UI/output observations; genuine accepted
+conversation, owner workflows and full A01-A29 evidence remain open. See the
+current ledger for artifact identities and precise boundaries.
+
 The owner resumed full completion on 2026-09-26. The current
 [acceptance ledger](001-acceptance-2026-09-26.md) supersedes stale implementation
 and activation claims in the historical tables below. All required live outcomes
@@ -46,7 +55,7 @@ grants; do not claim completed release evidence.
 
 | Plan | Outcome | Priority | Effort | Dependencies | Status |
 | --- | --- | --- | --- | --- | --- |
-| [001](001-single-spark-assistant.md) | Build and verify Avesra on Spark2 with Local Studio, a Windows companion, optional client GPU acceleration and per-stage metrics | P1 | L, multiple milestones | Current-state reconciliation C0; scoped hardware/app qualification | IN PROGRESS / PARTIAL — Personal conversation is installed for owner testing. Source checkpoint `0b2d54a` passes Windows/ARM static and release builds and adds bounded planner retirement, configured VPN connection and provider-header inspection. It is not yet installed. Required live owner workflows and A01-A29 remain open; see the [current acceptance ledger](001-acceptance-2026-09-26.md). |
+| [001](001-single-spark-assistant.md) | Build and verify Avesra on Spark2 with Local Studio, a Windows companion, optional client GPU acceleration and per-stage metrics | P1 | L, multiple milestones | Current-state reconciliation C0; scoped hardware/app qualification | IN PROGRESS / PARTIAL — Personal conversation is installed for owner testing. Installed checkpoint `75b5de0` passes Windows/ARM static and release builds and adds bounded planner retirement, native result speech, configured X readiness, VPN/diagnostic paths and accepted tracing. A real isolated preview and empty trace read/export passed; these do not prove accepted conversation or task effects. Required live owner workflows and A01-A29 remain open; see the [current acceptance ledger](001-acceptance-2026-09-26.md). |
 | [002](002-voice-atmosphere.md) | Add native voice character, looping atmosphere, stereo mixing and an easy live bypass | P1 | L, staged | Existing Plan 001 preview/output ownership; normal speech retains its qualification gates | IN PROGRESS — Digital sound approved and saved as defaults; adjustable pitch and animated overlay implemented. Human audition/approval remains deferred. |
 | [003](003-voice-avatar.md) | Draw each enrolled person's voice as a unique, reproducible avatar from their stored profile and a 20-word voice portrait | P2 | M, staged | Plan 001 protected owner and enrollment flow | PROPOSED |
 
