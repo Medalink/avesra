@@ -88,7 +88,7 @@ impl Default for SoundSettings {
     fn default() -> Self {
         Self {
             revision: 0,
-            enabled: false,
+            enabled: true,
             preset: SoundPreset::Digital,
             digital: SoundAmounts {
                 effects: true,

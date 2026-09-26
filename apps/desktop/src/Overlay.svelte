@@ -128,7 +128,7 @@
       onclick={() => control(s?.deafened ? "undeafen" : "deafen")}
       ><Icon name={s?.deafened ? "deafen_off" : "deafen"} size={13} /></button
     >
-    <button type="button" class="av-iconbtn size-6 {s?.sound.enabled ? 'av-iconbtn-on' : 'reveal'}" aria-label={s?.sound.enabled ? "Turn voice atmosphere off" : "Turn voice atmosphere on"} aria-pressed={!!s?.sound.enabled} title={soundError || `Voice atmosphere ${s?.sound.enabled ? "on" : "off"}`} disabled={!runtime} onclick={toggleAtmosphere}><Icon name="atmosphere" size={13} /></button>
+    <button type="button" class="av-iconbtn size-6 {s?.sound.enabled ? 'av-iconbtn-accent' : 'reveal'}" aria-label={s?.sound.enabled ? "Turn voice atmosphere off" : "Turn voice atmosphere on"} aria-pressed={!!s?.sound.enabled} title={soundError || `Voice atmosphere ${s?.sound.enabled ? "on" : "off"}`} disabled={!runtime} onclick={toggleAtmosphere}><Icon name="atmosphere" size={13} /></button>
     <button
       class="av-iconbtn reveal size-6"
       aria-label="Open settings"

@@ -1107,7 +1107,7 @@ class Component extends DCLogic {
       deafened: s.deafened, hearing: !s.deafened, deafCls: deafCls,
       atmosphere: s.atmosphere,
       // Ruby when on (not amber: amber means input is off); hidden until hover when off.
-      atmoCls: 'av-iconbtn size-6 ' + (s.atmosphere ? 'bg-av-500/15 text-av-300 ring-1 ring-inset ring-av-500/60 hover:bg-av-500/25 hover:text-av-200' : 'text-zinc-400' + reveal),
+      atmoCls: 'av-iconbtn size-6 ' + (s.atmosphere ? 'av-iconbtn-accent' : 'text-zinc-400' + reveal),
       atmoLabel: s.atmosphere ? 'Voice atmosphere on (Digital) · turn off' : 'Voice atmosphere off · turn on',
       toggleAtmosphere: () => this.setState({ atmosphere: !this.state.atmosphere }),
       deafLabel: s.deafened ? 'Undeafen' : 'Deafen: stop listening and silence voice',
