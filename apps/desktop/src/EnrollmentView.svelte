@@ -1,18 +1,43 @@
 <script lang="ts">
-  import { onMount, untrack } from "svelte";
+  import { onMount, untrack, tick } from "svelte";
+  import { listen } from "@tauri-apps/api/event";
+  import OwnerName from "./OwnerName.svelte";
   import ActorRegistration from "./ActorRegistration.svelte";
+  import YourVoiceCard from "./YourVoiceCard.svelte";
   import VoiceCheck from "./VoiceCheck.svelte";
   import { command, native, type Runtime } from "./runtime";
   import { ensureManagementVerification } from "./setup";
   import { latestRead } from "./latest-read";
-  import { readSpeakerStore, type SpeakerCandidate as Candidate } from "./speaker-profiles";
+  import { readSpeakerStore, unavailableAvatar, type VoiceAvatar, type SpeakerCandidate as Candidate } from "./speaker-profiles";
   import { personalVoiceView, type RegistrationView } from "./owner-setup";
   let { runtime, navigate, control }: { runtime: Runtime | null; navigate: (section: string, target?: string) => void; control: (value: string) => Promise<void> } = $props();
   type Status = { enrollment: string; completed_segments: number; next_segment: string | null; reason: string };
   let status = $state<Status | null>(null);
   let candidates = $state<Candidate[]>([]);
+  let avatar = $state<VoiceAvatar>(unavailableAvatar());
+  let visible = $state(true);
+  let readEpoch = 0;
+  let eventsReady = false;
+  let sourceContext = "";
+  let diagnosticCandidate = $state<Candidate | null>(null);
+  let diagnostics: HTMLDivElement | undefined = $state();
+  let recordingTools: HTMLDetailsElement | undefined = $state();
+  function readContext() { return `${runtime?.connected}:${runtime?.locked}:${runtime?.action_epoch}:${runtime?.capture_epoch}:${runtime?.settings.microphone}:${visible}:${readEpoch}`; }
+  function clearVoiceView() { readEpoch++; avatar = unavailableAvatar(); candidates = []; diagnosticCandidate = null; candidatesLoaded = false; storageDirectory = ""; }
+  const boundCandidate = $derived(avatar.candidate ? candidates.find(c => c.id === avatar.candidate?.id && c.revision === avatar.candidate?.revision && c.segments === 6) : undefined);
+  const listening = $derived(!!runtime?.connected && !runtime.locked && runtime.voice_ready && !runtime.settings.explicit_mute && !runtime.settings.deafened && !runtime.settings.paused);
+  const listeningLabel = $derived(!runtime?.connected ? "Disconnected" : runtime.locked ? "Locked" : runtime.settings.paused ? "Paused" : runtime.settings.deafened ? "Deafened" : runtime.settings.explicit_mute ? "Muted" : "Not listening");
+  async function openVoiceTool(test: boolean) {
+    if (test) diagnosticCandidate = boundCandidate ?? null;
+    advanced = true;
+    await tick();
+    if (!mounted || !visible) return;
+    if (test) diagnostics?.scrollIntoView({ block: "nearest" });
+    else if (recordingTools) { recordingTools.open = true; recordingTools.scrollIntoView({ block: "nearest" }); }
+  }
   type Owner = { state: string; actor: string | null; revision: string | null };
   let owner = $state<Owner | null>(null);
+  const displayName = $derived(owner?.state === "configured" && runtime?.settings.owner_name?.actor === owner.actor ? runtime.settings.owner_name.name : "You");
   let ownerLoading = $state(true), ownerError = $state("");
   let registration = $state<RegistrationView>({state: "waiting", detail: ""});
   let registrationBusy = $state(false);
@@ -31,6 +56,7 @@
   let storageDirectory = $state("");
   let checkingSavedVoice = $state(false), savedVoiceCheckResult = $state("");
   const savedVoice = $derived(candidates.find(c => c.state === "selected_quality_unqualified" && c.segments === 6) ?? candidates.find(c => c.segments === 6));
+  const checkCandidate = $derived(diagnosticCandidate ?? savedVoice);
   const savedVoiceReadError = $derived(candidatesError || (candidatesLoaded && candidates.length > 0 && !savedVoice ? "Your saved voice was found, but Avesra couldn't read it. Keep your recordings and retry the check; you do not need to record six new phrases." : ""));
   const ownerComplete = $derived(owner?.state === "configured");
   const voice = $derived(personalVoiceView(runtime));
@@ -41,19 +67,31 @@
   const audioAction = $derived(runtime?.settings.paused ? { label: "Resume Avesra", value: "resume" } : runtime?.settings.deafened ? { label: "Turn off Deafen", value: "undeafen" } : runtime?.settings.explicit_mute ? { label: "Unmute microphone", value: "unmute" } : null);
   function restoreAudio() { if (audioAction) void control(audioAction.value).catch(e => error = String(e)); else navigate("audio"); }
   const candidateReader = latestRead(
-    readSpeakerStore,
-    next => { candidates = next.candidates; storageDirectory = next.storage_directory; candidatesLoaded = true; candidatesError = ""; },
+    async () => {
+      const key = readContext();
+      if (!eventsReady || !visible || runtime?.locked) return { key, value: null, error: "" };
+      try { return { key, value: await readSpeakerStore(), error: "" }; }
+      catch (e) { return { key, value: null, error: String(e) }; }
+    },
+    next => {
+      if (!mounted || !visible || runtime?.locked || next.key !== readContext()) return;
+      if (next.value) { candidates = next.value.candidates; avatar = next.value.avatar; storageDirectory = next.value.storage_directory; candidatesLoaded = true; candidatesError = ""; }
+      else { avatar = unavailableAvatar(next.error || undefined); candidatesError = next.error; }
+    },
     error => { candidatesError = String(error); },
     active => { candidatesLoading = active; },
   );
   const enrollmentBlock = $derived(owner?.state !== "configured" ? "Create your owner identity first." : !runtime?.settings.microphone ? "Choose a microphone in Audio & Voice." : runtime.settings.explicit_mute ? "Unmute your microphone in Audio & Voice before starting enrollment." : runtime.settings.deafened ? "Turn off Deafen before starting enrollment." : runtime.settings.paused ? "Resume Avesra before starting enrollment." : runtime.locked ? "Unlock Windows before starting enrollment." : "");
   $effect(() => {
-    const next = `${runtime?.connected}:${runtime?.locked}`;
-    if (mounted && next !== ownerContext) { ownerContext = next; ownerGeneration++; owner = null; error = ""; note = ""; if (native) untrack(() => void refreshOwner()); }
+    const next = `${runtime?.connected}:${runtime?.locked}:${runtime?.action_epoch}:${visible}`;
+    if (mounted && next !== ownerContext) { ownerContext = next; ownerGeneration++; owner = null; error = ""; note = ""; if (native && visible && !runtime?.locked) untrack(() => void refreshOwner()); }
   });
   $effect(() => {
-    const next = `${runtime?.capture_epoch}:${runtime?.connected}`;
-    if (next !== context) { context = next; if (!busy) { generation++; status = null; } if (mounted && native) untrack(() => void refresh().catch(e => { if (mounted) error = String(e); })); }
+    const next = `${runtime?.capture_epoch}:${runtime?.action_epoch}:${runtime?.connected}:${runtime?.locked}:${runtime?.settings.microphone}:${visible}`;
+    if (next !== context) { context = next;
+      const source = `${runtime?.action_epoch}:${runtime?.connected}:${runtime?.locked}:${runtime?.settings.microphone}:${visible}`;
+      if (source !== sourceContext) { sourceContext = source; untrack(clearVoiceView); }
+      else untrack(() => { readEpoch++; avatar = unavailableAvatar(); }); if (!busy) { generation++; status = null; } if (mounted && native && visible && !runtime?.locked) untrack(() => void refresh().catch(e => { if (mounted) error = String(e); })); }
   });
   async function refresh() {
     await candidateReader.refresh();
@@ -148,29 +186,31 @@
     finally { busy = false; progress = ""; }
   }
   onMount(() => {
-    mounted = true;
-    const refreshSavedVoice = () => { if (native && mounted) void refresh(); };
+    mounted = true; visible = !document.hidden;
+    const visibilityChanged = () => { visible = !document.hidden; clearVoiceView(); };
+    document.addEventListener("visibilitychange", visibilityChanged);
+    let stopHidden: (() => void) | undefined;
+    if (native) void listen("settings-hidden", () => { visible = false; clearVoiceView(); ownerGeneration++; owner = null; }).then(stop => { if (mounted) { stopHidden = stop; eventsReady = true; if (visible) void refresh(); } else stop(); }).catch(() => { if (mounted) { visible = false; clearVoiceView(); } });
+    const refreshSavedVoice = () => { if (native && mounted && eventsReady && !document.hidden) { visible = true; void refresh(); } };
     refreshSavedVoice();
     window.addEventListener("focus", refreshSavedVoice);
-    return () => { mounted = false; window.removeEventListener("focus", refreshSavedVoice); candidateReader.dispose(); generation++; ownerGeneration++; if (native && ownsEnrollment) void command("cancel_setup").catch(() => {}); };
+    return () => { mounted = false; stopHidden?.(); document.removeEventListener("visibilitychange", visibilityChanged); clearVoiceView(); window.removeEventListener("focus", refreshSavedVoice); candidateReader.dispose(); generation++; ownerGeneration++; if (native && ownsEnrollment) void command("cancel_setup").catch(() => {}); };
   });
 </script>
 <section class="section">
-  <div class="av-card flex flex-col gap-2 p-3.5" role="status">
-    <div class="flex flex-wrap items-center justify-between gap-2"><h2 class="text-[16px] font-medium">{voice.title}</h2><span class="av-chip text-zinc-300 ring-white/15">{voice.label}</span></div>
-    <p class="av-hint">{voice.reason}</p>
-    <p class="av-hint">Talk naturally. Avesra reuses your saved voice or learns it as you talk. You can add other people later.</p>
-    <div class="flex flex-wrap gap-2 pt-1">
-      {#if !runtime?.connected}<button class="av-btn av-btn-primary av-btn-sm" onclick={() => navigate("profiles", "spark-pairing")}>Connect Spark</button>{/if}
-      {#if audioAction}<button class="av-btn av-btn-secondary av-btn-sm" disabled={!native} onclick={restoreAudio}>{audioAction.label}</button>{:else}<button class="av-btn av-btn-secondary av-btn-sm" disabled={!native || !runtime} onclick={() => control("mute").catch(e => error = String(e))}>Mute microphone</button><button class="av-btn av-btn-ghost av-btn-sm" disabled={!native || !runtime} onclick={() => control("pause").catch(e => error = String(e))}>Pause Avesra</button>{/if}
-      <button class="av-btn av-btn-ghost av-btn-sm" onclick={() => navigate("audio")}>Audio &amp; Voice</button>
-    </div>
-  </div>
+  <YourVoiceCard {avatar} candidate={boundCandidate} name={displayName} owner={ownerComplete} {listening} paused={listeningLabel} loading={candidatesLoading} blocked={!native || !visible || !!runtime?.locked || acting} {prompts} ontest={() => void openVoiceTool(true)} onenroll={() => void openVoiceTool(false)} />
   {#if error && !advanced}<p class="av-hint text-amber-200" role="alert">{error}</p>{/if}
   <details class="av-card p-3.5" bind:open={advanced}>
     <summary class="cursor-pointer text-[12.5px] font-medium">Advanced voice tools</summary>
     <p class="av-hint my-3">Optional owner management, saved recordings and diagnostics. These are not required to start talking.</p>
     {#if advanced}
+    <OwnerName {runtime} />
+    <p class="av-hint">{voice.reason}</p>
+    <div class="flex flex-wrap gap-2 pt-1">
+      {#if !runtime?.connected}<button class="av-btn av-btn-primary av-btn-sm" onclick={() => navigate("profiles", "spark-pairing")}>Connect Spark</button>{/if}
+      {#if audioAction}<button class="av-btn av-btn-secondary av-btn-sm" disabled={!native} onclick={restoreAudio}>{audioAction.label}</button>{:else}<button class="av-btn av-btn-secondary av-btn-sm" disabled={!native || !runtime} onclick={() => control("mute").catch(e => error = String(e))}>Mute microphone</button><button class="av-btn av-btn-ghost av-btn-sm" disabled={!native || !runtime} onclick={() => control("pause").catch(e => error = String(e))}>Pause Avesra</button>{/if}
+      <button class="av-btn av-btn-ghost av-btn-sm" onclick={() => navigate("audio")}>Audio &amp; Voice</button>
+    </div>
   <div class="av-card px-3.5">
     <div class="flex flex-col gap-2 py-3">
       <div class="flex items-center gap-3"><span class="min-w-0 flex-1 text-[13px] font-medium text-zinc-100">Create your owner account</span><span class="av-chip {ownerComplete ? 'text-emerald-300 ring-emerald-400/30' : 'text-zinc-300 ring-white/15'}">{ownerLoading ? "Checking…" : ownerComplete ? "Complete" : ownerError ? "Check failed" : "Action needed"}</span></div>
@@ -191,7 +231,6 @@
   </div>
   {#if progress || note}<p class="av-hint" role="status">{progress || note}</p>{/if}
   {#if error}<div class="flex flex-col gap-1 border border-amber-400/25 p-3" role="alert"><span class="text-[12.5px] font-medium text-amber-200">This step couldn't finish</span><p class="av-hint">{error}</p><p class="av-hint">{status ? "Your completed phrases are still in this session. Retry the current step below." : "Your previously saved owner and voice are unchanged. Retry the step you were completing."}</p></div>{/if}
-
   {#if status}
     <div class="av-card flex flex-col gap-3 p-3.5">
       <h2 class="text-[14px] font-medium">{status.completed_segments === 6 ? "Save your voice" : `Phrase ${status.completed_segments + 1} of 6`}</h2>
@@ -204,15 +243,15 @@
       </div>
     </div>
   {/if}
-
-  {#if savedVoice}
-    <div class="av-card p-3.5">
+  {#if checkCandidate}
+    <div class="av-card p-3.5" bind:this={diagnostics}>
       <h2 class="text-[12.5px] font-medium">Optional voice diagnostics</h2>
+      {#if checkCandidate.id !== boundCandidate?.id || checkCandidate.revision !== boundCandidate?.revision}<p class="av-hint">Saved candidate diagnostics; this candidate is not currently linked to the displayed avatar.</p>{/if}
       {#if enrollmentBlock}<p class="av-hint mt-2 text-amber-200">{enrollmentBlock}</p><button class="av-btn av-btn-secondary av-btn-sm mt-2" disabled={acting} onclick={restoreAudio}>{audioAction?.label ?? "Open audio settings"}</button>{/if}
-      <VoiceCheck id={savedVoice.id} revision={savedVoice.revision} {runtime} blocked={acting || !!status || !!enrollmentBlock || !ownerComplete || registration.state !== "registered"} onbusy={value => busy = value} />
+      <VoiceCheck id={checkCandidate.id} revision={checkCandidate.revision} {runtime} blocked={acting || !!status || !!enrollmentBlock || !ownerComplete || registration.state !== "registered"} onbusy={value => busy = value} />
     </div>
   {/if}
-  <details class="av-card p-3.5">
+  <details class="av-card p-3.5" bind:this={recordingTools}>
     <summary class="cursor-pointer text-[12.5px] font-medium">Manage saved voice · advanced</summary>
     <p class="av-hint mt-3">These options replace or remove saved setup. They are not required for normal listening.</p>
     <div class="my-3 flex flex-wrap gap-2"><button class="av-btn av-btn-secondary av-btn-sm" disabled={acting || !!enrollmentBlock || !!unavailable || !!status} onclick={() => prepare(true)}>Record a new voice…</button><button class="av-btn av-btn-ghost av-btn-sm" disabled={acting || candidatesLoading || checkingSavedVoice || !native} onclick={checkSavedVoice}>{checkingSavedVoice ? "Checking saved voice…" : "Reload saved voices"}</button></div>
