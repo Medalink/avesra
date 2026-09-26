@@ -7,6 +7,7 @@ use avesra_contracts::{Action, ActionPayload, ErrorCode, Outcome};
 
 fn host(report: &Report) -> String {
     let Report::HostResources {
+        interval_ms,
         cpu_busy_basis_points,
         network,
         system_drive_space,
@@ -37,7 +38,7 @@ fn host(report: &Report) -> String {
     };
     let network = match rate {
         Some(value) => format!(
-            "the busiest interface averaged {:.2} megabytes per second, including other traffic",
+            "the highest measured interface receive rate was {:.2} megabytes per second, including other traffic",
             value as f64 / 1_000_000.0
         ),
         None => "network rates were unavailable".into(),
@@ -54,7 +55,10 @@ fn host(report: &Report) -> String {
     } else {
         "system-drive space was unavailable".into()
     };
-    format!("{cpu}; {network}; {local}. ")
+    format!(
+        "Over {:.2} seconds, {cpu}; {network}; {local}. ",
+        *interval_ms as f64 / 1000.0
+    )
 }
 
 pub(crate) fn describe(
@@ -89,7 +93,15 @@ pub(crate) fn describe(
                 else if report.endpoints.is_empty(){"Endpoint resolution was unavailable or timed out; that does not justify clearing DNS cache. ".into()}
                 else {let successful=report.endpoints.iter().filter_map(|e|match e.tcp_connect_micros{Reading::Available{value}=>Some(value),_=>None}).min();
                     match successful{Some(micros)=>format!("The fastest successful TCP connection took {:.1} milliseconds; this is not download throughput. ",micros as f64/1000.0),None=>"The endpoint connection checks did not complete successfully; the cause remains unknown. ".into()}};
-            value.push_str("App throughput, throttling, disk utilization and server capacity remain unmeasured. Nothing was changed.");value
+            value.push_str(&host(&report.resources));
+            match &report.destination_space {
+                Reading::Available { value: space } => value.push_str(&format!(
+                    "Destination drive {} had {:.1} gigabytes available under your quota. ",
+                    space.drive, space.caller_available_bytes as f64 / 1_000_000_000.0,
+                )),
+                Reading::Unavailable { .. } => value.push_str("Destination free space was unavailable. "),
+            }
+            value.push_str("App throughput, throttling, disk utilization and server capacity remain unmeasured. These observations do not establish the bottleneck. Nothing was changed.");value
         },
         Some(EffectObservation::DnsFlush{command_completed:true,..}) if outcome==Outcome::Success=>"The approved Windows DNS-cache flush command completed. This does not prove that stale cache caused the problem or that the download is fixed. Ask me to diagnose the download again to obtain fresh observations.".into(),
         Some(EffectObservation::DnsFlush{..})=>"The DNS-cache command's outcome is uncertain. I will not retry it automatically or claim the problem is fixed.".into(),

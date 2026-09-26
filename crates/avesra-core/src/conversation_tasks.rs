@@ -487,7 +487,9 @@ fn download_request(text: &str) -> Option<bool> {
         .or_else(|| text.strip_prefix("avesra "))
         .unwrap_or(&text);
     match text {
-        "diagnose download" => Some(false),
+        "diagnose download" | "why is my download slow" | "why are my downloads slow" => {
+            Some(false)
+        }
         "clear download dns cache" => Some(true),
         _ => None,
     }

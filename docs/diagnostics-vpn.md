@@ -270,8 +270,13 @@ owner's explicit override; independent source review and build checks apply.
 Optional Settings endpoint scope stores one selected endpoint (ASCII hostname
 or numeric address) and port80/443. Application label, destination drive and
 reported rate/unit/throttle are optional and remain unavailable when omitted. The protected read grant is distinct from the
-optional protected DNS-cache proposal scope. The exact whole requests are
-`diagnose download` and, after a measured same-context DNS failure,
+optional protected DNS-cache proposal scope. The exact whole read requests are
+`diagnose download`, `why is my download slow` and `why are my downloads slow`.
+They use the same read grant, optional selected endpoint and host-only fallback.
+Case, terminal sentence punctuation and the optional exact `Avesra`/`Avesra,`
+address are normalized by the existing whole-request grammar; extra clauses,
+embedded commands, fuzzy addressing and arbitrary speed-test requests are not
+matched. The sole unchanged write request is, after a measured same-context DNS failure,
 `clear download dns cache`. Fixed VPN, volume, app-open and diagnostic commands accept
 terminal `.`, `!` or `?` sentence punctuation. No embedded clauses are removed;
 quoted prompt text and browser URLs are not normalized by this rule. Only the
@@ -359,9 +364,31 @@ Host-only download diagnosis summarizes CPU and per-interface observations,
 local DNS/default-route presence and system-drive free space. It explicitly says
 that the selected download endpoint, app rate, throttle and destination are
 unknown and asks for the endpoint only when endpoint-specific evidence would
-help. A selected-endpoint report distinguishes DNS resolution, transport timing,
-and local counters: none alone establishes download throughput or stale cache.
+help. A selected-endpoint spoken report now retains the already collected host
+CPU, highest measured interface receive rate, local configuration/system-drive
+summary, and selected destination free space or its explicit unavailability.
+Interface rates use decimal megabytes per second and include other traffic;
+the observed interval is stated. The destination's caller-visible quota is not
+disk utilization. These are the original immutable observation, never a fresh
+probe or a model-supplied number. DNS resolution, TCP timing, host counters and
+free space alone do not establish download throughput, a bottleneck or stale
+cache. App rate/throttle and disk utilization remain unmeasured; no cause or
+successful repair is inferred. The existing 1,024-byte explanation bound remains
+and an overlong response fails rather than truncating a fact.
 A completed flush is described solely as command completion, with remeasurement
 needed. VPN output distinguishes already connected, newly observed target match,
 owner authentication, other connection and unresolved state; it never claims
 Spark reachability from VPN state alone.
+
+### Natural diagnosis slice entry points
+
+`conversation_tasks::download_request` changes only the read aliases; both its
+selected-endpoint branch and its HostResources fallback retain their original
+grants and accepted-turn ownership. `diagnostic_reply::describe` uses the existing
+validated Download observation and the existing host formatter. The original
+`conversation_observation::finish_observation_answer` transaction, NativeObservation
+provenance, one-shot reply, deadlines and normal TTS consumer are unchanged.
+DNS-write grammar, exact proposal approval, VPN actions, collectors, UI reports,
+planner wire and persistent schema are unaffected. No new measurement is started.
+The owner's no-tests override applies; source review/static verification and later
+owner-authorized actual diagnosis remain separate, with no runtime proof implied.
