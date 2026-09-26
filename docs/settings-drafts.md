@@ -109,4 +109,22 @@ or harnesses. Use source review, focused Svelte/static checks, coordinated nativ
 checks, and separately authorized real-app manual proof. No build, static pass or
 footer screenshot establishes complete functional parity or beta readiness.
 
-Integration follow-up: register the new bounded preference commands in the app-timing registry when that separately developed branch is merged. Timing coverage for these new commands is not yet claimed.
+Telemetry schema 7 now maps `apply_preferences`, `begin_preferences_editor`, `retire_preferences_editor`, `answer_preferences_close` and `show_settings` in the matching frontend/native finite registries. Only the existing frontend invoke round trip is observed; internal coordinator/writer stages and installed live proof remain open. The historical `save_settings` timing name remains readable although its IPC route is removed. See `app-timing.md`.
+
+## Profiles card presentation
+
+The three Profiles cards follow `design/mockups/Settings.dc.html` for name/status
+row, 13-pixel name, 11.5-pixel description, 6-pixel internal spacing, rings and focus treatment.
+The selected radio and accent reflect the current preference draft; only the
+actual runtime profile receives Active. Available means this build permits the
+preset to be selected, not that inference is healthy or qualified. Accelerated
+remains disabled and labeled Unavailable unless the runtime already reports it
+as Active; its unsupported selection path is not added. Arrow keys and Home/End
+move among enabled cards and edit only the local draft. Save/Discard retain their
+existing ownership and semantics. Duplicate, automatic Gaming, placement and
+machine management are outside this presentation slice.
+
+The only affected entry point is SettingsView's existing `profile` preference
+edit. Header Active status, native preference admission and runtime profile
+application remain unchanged. Validation is source review and a focused frontend
+check; no automated tests or installed visual/functional proof are claimed.
