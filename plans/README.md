@@ -31,7 +31,11 @@ Handoff and next-step boundaries: [Plan 001 handoff](001-handoff.md). The owner 
 
 ## Execution order
 
-Latest installed checkpoint: `75b5de0` (2026-09-26). Matching Windows/ARM static
+Latest Windows startup hotfix: `5bde1f5` (2026-09-26), with the unchanged75b5de0
+shared controller. It fixes rejection of the actual activity cancellation metadata,
+adds bounded read-only startup recovery and removes the unused Personal directedness
+dependency. Static/release and actual Models status inspection passed; accepted
+listening remains unproven. Previous matched checkpoint: `75b5de0`. Windows/ARM static
 and release builds passed and both sides were updated. A real isolated native
 preview completed with effects/music; screenshots,9.84-second audio and a
 synchronized sampled video are retained in
@@ -77,11 +81,11 @@ The later [streaming preview correction and fresh media](../docs/evidence/stream
 | C1 | Qualified owner recognition, continuous endpointing and directed intent without a mandatory wake word | C0 | Personal admission and continuous selected-microphone capture are installed under the owner override; release qualification and actual accepted-owner conversation remain unproven |
 | C2 | Qualified local reasoning and one real accepted spoken response | C0; C1 for activation | Controlled local reasoning and segmented normal speech are configured and deployed; service operation and preview proof do not establish a real accepted spoken response |
 | C3 | Accepted app/volume actions with observed effects | C1, C2 | Exact app/volume coordinator, typed proposals, protected permissions and durable task projection are integrated; real accepted effect and recovery cases remain unproven |
-| C4 | Owned browser publication, content, cleanup and settlement | C0; C1-C3 for live admission | Owned browser read producer/consumer and settlement are integrated; `0b2d54a` adds bounded provider-header inspection. Actual Chrome/Brave lifecycle/read observations remain unproven |
-| C5 | Claude/IRIS exact draft, latest ten emails and X ready state | C3, C4 | Claude driver exists but actual controls are unverified; Gmail enumeration and X readiness/navigation remain unfinished. Required OW1-OW3 proof is absent |
-| C6 | Sourced learning/history, routines and event-grounded chimes | C3, C4; C5 for supported workflow reuse | Explicit task-sourced memory and one-step routines exist. Native event-answer speech integration, demonstrations/passive learning and direct proof remain incomplete |
-| C7 | Bounded diagnostics and actual configured VPN | C3, C6 | Fixed resource/status diagnostics exist; exact saved-peer VPN action passes builds at `0b2d54a` but is uninvoked. Complete download diagnosis, approved fixes and live proof remain pending |
-| C8 | Profiles, packaging/recovery and complete per-stage metrics | Instrument C1-C7 as built; finalize after C7 | Bounded process-local preview/activity instrumentation implemented; actual preview measurements exposed the pre-ready buffering delay. Full tracing/profiles/recovery/release gates remain incomplete |
+| C4 | Owned browser publication, content, cleanup and settlement | C0; C1-C3 for live admission | Owned browser read producer/consumer and settlement are integrated; installed75b5de0 includes bounded provider-header inspection and X new-tab readiness. Actual Chrome/Brave lifecycle/read observations remain unproven |
+| C5 | Claude/IRIS exact draft, latest ten emails and X ready state | C3, C4 | Claude driver exists but actual controls are unverified; complete Gmail enumeration remains unfinished. Configured X readiness/navigation is installed but actual provider/account behavior and challenge continuation remain open. Required OW1-OW3 proof is absent |
+| C6 | Sourced learning/history, routines and event-grounded chimes | C3, C4; C5 for supported workflow reuse | Explicit task-sourced memory and one-step routines exist. Native event-answer speech and deletion-safe retrieval are installed; spoken named facts, demonstrations/passive learning and direct proof remain incomplete |
+| C7 | Bounded diagnostics and actual configured VPN | C3, C6 | Bounded host/optional-endpoint diagnostics, exact approval-bound DNS flush, spoken observation results and saved-peer VPN action are installed. Complete bottleneck evidence and actual approved-action/VPN proof remain pending |
+| C8 | Profiles, packaging/recovery and complete per-stage metrics | Instrument C1-C7 as built; finalize after C7 | Bounded accepted-request tracing/drilldown/export is installed; actual empty local/controller reads and export passed. Preview instrumentation measured first submitted speech. Populated accepted traces, remaining stage/hardware metrics, profiles/recovery and release gates remain incomplete |
 | C9 | Revision-matched A01-A29 evidence and eight-hour soak | C1-C8 | Release incomplete until all required direct gates pass |
 
 C2/C4 source can proceed while release qualification is pending. Personal development activation follows the explicit owner override and preserves current owner/grant/local-control checks; it does not close release qualification. C6 follows C5 in the recommended execution order. The owner's no-automated-tests override is reflected in the current command table and done criteria: use build/static checks and direct observations; do not implement an acceptance runner or report verifier. Old checkpoints below preserve history and must not override this current sequence.
