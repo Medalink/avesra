@@ -24,6 +24,9 @@ use uuid::Uuid;
 #[path = "actor_registration.rs"]
 mod actor_registration;
 #[cfg(unix)]
+#[path = "audio_startup.rs"]
+mod audio_startup;
+#[cfg(unix)]
 #[path = "directedness.rs"]
 mod directedness;
 #[cfg(unix)]
@@ -32,6 +35,9 @@ mod normal_speech;
 #[cfg(unix)]
 #[path = "planner_ingress.rs"]
 mod planner_ingress;
+#[cfg(unix)]
+#[path = "trace_query.rs"]
+mod trace_query;
 #[cfg(unix)]
 #[path = "voice_activity.rs"]
 mod voice_activity;
@@ -50,6 +56,8 @@ struct ServerState {
     planner_admission: Arc<Semaphore>,
     #[cfg(unix)]
     planner_cancellations: Arc<Semaphore>,
+    #[cfg(unix)]
+    planner_inspections: Arc<Semaphore>,
     #[cfg(unix)]
     reasoning: Option<Arc<crate::reasoning::http::Driver>>,
     auth: Mutex<AuthStore>,
@@ -89,6 +97,7 @@ struct LiveSession {
     action_permission: tokio::sync::watch::Sender<(u64, bool)>,
     actor_attempts: std::collections::HashMap<Uuid, (u64, bool)>,
     planner_requests: std::collections::HashMap<Uuid, planner_ingress::Entry>,
+    planner_ordinal: u64,
     enabled: bool,
     output_enabled: bool,
     output_permission: tokio::sync::watch::Sender<(u64, bool)>,
@@ -131,6 +140,9 @@ pub fn router(
     directory: &std::path::Path,
     easy_pairing: Arc<crate::discovery::PairingWindow>,
 ) -> Result<Router, String> {
+    let _ = avesra_core::trace::initialize(directory, avesra_core::trace::Host::Controller);
+    #[cfg(target_os = "linux")]
+    avesra_server::resources::start();
     #[cfg(unix)]
     let speaker = audio_client(directory, "speaker")?;
     #[cfg(unix)]
@@ -152,11 +164,19 @@ pub fn router(
     };
     #[cfg(not(unix))]
     let _ = directory;
+    #[cfg(unix)]
+    let startup = [
+        ("speaker", speaker.clone()),
+        ("asr", asr.clone()),
+        ("activity", activity.clone()),
+        ("tts", tts.clone()),
+    ];
     let router = Router::new()
         .route("/pair", post(pair))
         .route("/pair-local", post(pair_local))
         .route("/control", get(control))
         .route("/actors", post(actors))
+        .route("/traces", post(traces).layer(DefaultBodyLimit::max(2048)))
         .route("/actors/cancel", post(cancel_actor))
         .route(
             "/planner",
@@ -165,6 +185,12 @@ pub fn router(
             )),
         )
         .route("/planner/cancel", post(cancel_planner))
+        .route(
+            "/planner/retirement",
+            post(inspect_planner_retirement).layer(DefaultBodyLimit::max(
+                avesra_contracts::planner::retirement::MAX_BYTES,
+            )),
+        )
         .route("/speaker", get(speaker_health).post(speaker_infer))
         .route("/audio-lanes", get(audio_lane_health))
         .route("/voice-activity", get(voice_activity_health))
@@ -193,6 +219,8 @@ pub fn router(
             planner_admission: Arc::new(Semaphore::new(2)),
             #[cfg(unix)]
             planner_cancellations: Arc::new(Semaphore::new(2)),
+            #[cfg(unix)]
+            planner_inspections: Arc::new(Semaphore::new(2)),
             // Configuration is not qualification: each accepted request must
             // observe the exact controlled load before durable model admission.
             #[cfg(unix)]
@@ -222,6 +250,8 @@ pub fn router(
             #[cfg(unix)]
             actor_cancellations: Arc::new(Semaphore::new(2)),
         }));
+    #[cfg(unix)]
+    audio_startup::start(startup);
     Ok(router)
 }
 async fn planner(
@@ -250,6 +280,23 @@ async fn cancel_planner(
     {
         planner_ingress::cancel(auth, headers, body)?;
         Ok(StatusCode::NO_CONTENT)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (auth, headers, body);
+        Err(StatusCode::SERVICE_UNAVAILABLE)
+    }
+}
+async fn inspect_planner_retirement(
+    State(auth): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<avesra_contracts::planner::retirement::Request>,
+) -> Result<Json<avesra_contracts::planner::retirement::Reply>, StatusCode> {
+    #[cfg(unix)]
+    {
+        planner_ingress::inspect_retirement(auth, headers, body)
+            .await
+            .map(Json)
     }
     #[cfg(not(unix))]
     {
@@ -387,33 +434,88 @@ fn audio_client(
     directory: &std::path::Path,
     lane: &str,
 ) -> Result<Option<Arc<avesra_server::audio::AudioClient>>, String> {
-    use std::io::Read;
+    use std::{io::Read, os::unix::fs::MetadataExt};
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Configuration {
         socket: std::path::PathBuf,
         model_revision: String,
     }
-    let file = match std::fs::File::open(directory.join(format!("{lane}-deployment.json"))) {
-        Ok(file) => file,
+    let path = directory.join(format!("{lane}-deployment.json"));
+    let metadata = match std::fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(_) => return Err("Speaker deployment cannot be read".into()),
+        Err(_) => return Err("Audio deployment cannot be read".into()),
     };
+    let own_uid = std::fs::metadata("/proc/self")
+        .map_err(|_| "Audio deployment owner unavailable")?
+        .uid();
+    let parent = std::fs::symlink_metadata(directory)
+        .map_err(|_| "Audio deployment directory unavailable")?;
+    if !metadata.is_file()
+        || metadata.uid() != own_uid
+        || metadata.mode() & 0o077 != 0
+        || !parent.is_dir()
+        || parent.uid() != own_uid
+        || parent.mode() & 0o077 != 0
+    {
+        return Err("Audio deployment must be private and owned".into());
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let mut file = options
+        .open(&path)
+        .map_err(|_| "Audio deployment cannot be read")?;
+    let opened = file
+        .metadata()
+        .map_err(|_| "Audio deployment cannot be read")?;
+    if !opened.is_file()
+        || opened.uid() != own_uid
+        || opened.mode() & 0o077 != 0
+        || opened.dev() != metadata.dev()
+        || opened.ino() != metadata.ino()
+    {
+        return Err("Audio deployment changed while opening".into());
+    }
     let mut bytes = vec![];
-    file.take(4097)
+    (&mut file)
+        .take(4097)
         .read_to_end(&mut bytes)
-        .map_err(|_| "Speaker deployment cannot be read")?;
+        .map_err(|_| "Audio deployment cannot be read")?;
+    let final_metadata = file
+        .metadata()
+        .map_err(|_| "Audio deployment cannot be read")?;
+    let current =
+        std::fs::symlink_metadata(&path).map_err(|_| "Audio deployment cannot be read")?;
+    if !current.is_file()
+        || current.dev() != opened.dev()
+        || current.ino() != opened.ino()
+        || current.uid() != own_uid
+        || current.mode() & 0o077 != 0
+        || final_metadata.len() != opened.len()
+        || final_metadata.mtime() != opened.mtime()
+        || final_metadata.mtime_nsec() != opened.mtime_nsec()
+        || final_metadata.ctime() != opened.ctime()
+        || final_metadata.ctime_nsec() != opened.ctime_nsec()
+    {
+        return Err("Audio deployment changed while reading".into());
+    }
     if bytes.len() > 4096 {
-        return Err("Speaker deployment exceeds limit".into());
+        return Err("Audio deployment exceeds limit".into());
     }
     let config: Configuration =
-        serde_json::from_slice(&bytes).map_err(|_| "Invalid speaker deployment")?;
+        serde_json::from_slice(&bytes).map_err(|_| "Invalid audio deployment")?;
     let client = avesra_server::audio::AudioClient::for_deployment(
         &config.socket,
         lane,
         &config.model_revision,
     )
-    .map_err(|_| "Speaker deployment is unavailable")?;
+    .map_err(|_| "Audio deployment path is invalid or unsafe")?;
     Ok(Some(Arc::new(client)))
 }
 async fn authenticate_headers(auth: Shared, headers: &HeaderMap) -> Result<Uuid, StatusCode> {
@@ -669,7 +771,12 @@ async fn analyze(
         .map_err(|_| StatusCode::PAYLOAD_TOO_LARGE)?;
         let input: Input = serde_json::from_slice(&bytes).map_err(|_| StatusCode::BAD_REQUEST)?;
         drop(bytes);
-        if input.version != 1
+        if input.version
+            != if transcribe {
+                avesra_contracts::voice_timing::VERSION
+            } else {
+                1
+            }
             || input.request_id.is_nil()
             || input.session_id.is_nil()
             || input.capture_epoch == 0
@@ -762,28 +869,51 @@ async fn analyze(
             id: activity_worker,
             complete: false,
         });
-        let inference = client.infer_with_budget(
-            worker_id,
-            1,
-            input.request_id,
-            AudioInput::Pcm {
-                pcm_s16le: input.pcm_s16le,
-            },
-            Duration::from_secs(15),
-        );
+        let inference = async {
+            let timer = avesra_core::trace::AudioTimer::start();
+            let result = client
+                .infer_with_budget(
+                    worker_id,
+                    1,
+                    input.request_id,
+                    AudioInput::Pcm {
+                        pcm_s16le: input.pcm_s16le,
+                    },
+                    Duration::from_secs(15),
+                )
+                .await?;
+            Ok::<_, avesra_contracts::ErrorCode>((
+                result,
+                timer.finish(
+                    worker_id,
+                    avesra_contracts::voice_timing::Lane::Speaker,
+                    client.configured_revision().unwrap_or(""),
+                ),
+            ))
+        };
         let transcription = async {
             match (asr.as_ref(), asr_pcm) {
-                (Some(client), Some(pcm_s16le)) => client
-                    .infer_with_budget(
-                        asr_worker_id,
-                        1,
-                        input.request_id,
-                        AudioInput::Pcm { pcm_s16le },
-                        Duration::from_secs(15),
-                    )
-                    .await
-                    .map(Some),
-                _ => Ok(None),
+                (Some(client), Some(pcm_s16le)) => {
+                    let timer = avesra_core::trace::AudioTimer::start();
+                    let result = client
+                        .infer_with_budget(
+                            asr_worker_id,
+                            1,
+                            input.request_id,
+                            AudioInput::Pcm { pcm_s16le },
+                            Duration::from_secs(15),
+                        )
+                        .await?;
+                    Ok::<_, avesra_contracts::ErrorCode>((
+                        Some(result),
+                        timer.finish(
+                            asr_worker_id,
+                            avesra_contracts::voice_timing::Lane::Asr,
+                            client.configured_revision().unwrap_or(""),
+                        ),
+                    ))
+                }
+                _ => Ok((None, None)),
             }
         };
         let measure_activity = async {
@@ -801,7 +931,7 @@ async fn analyze(
                 _ => Ok(None),
             }
         };
-        let (result, transcript, activity_result) = tokio::select! {
+        let ((result, speaker_timing), (transcript, asr_timing), activity_result) = tokio::select! {
             biased;
             _=permission.changed()=>return Err(StatusCode::UNAUTHORIZED),
             result=async {tokio::try_join!(inference, transcription, measure_activity)}=>result.map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?,
@@ -840,7 +970,21 @@ async fn analyze(
                 AudioOutput::Insufficient { .. } => (None, "insufficient_speech"),
                 _ => return Err(StatusCode::UNPROCESSABLE_ENTITY),
             };
-            let mut reply = serde_json::json!({"version":1,"request_id":input.request_id,"session_id":input.session_id,
+            let timing = match (speaker_timing, asr_timing) {
+                (Some(speaker), Some(asr)) => {
+                    let receipt = avesra_contracts::voice_timing::Analysis {
+                        version: 1,
+                        request: input.request_id,
+                        receipts: vec![speaker, asr],
+                    };
+                    receipt
+                        .validate(input.request_id)
+                        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+                    Some(receipt)
+                }
+                _ => None,
+            };
+            let mut reply = serde_json::json!({"version":avesra_contracts::voice_timing::VERSION,"timing":timing,"request_id":input.request_id,"session_id":input.session_id,
                 "capture_epoch":input.capture_epoch,"speaker_revision":client.configured_revision(),
                 "asr_revision":asr.as_ref().and_then(|client| client.configured_revision()),
                 "transcript":text,"embedding":embedding,"outcome":"abstain","reason":reason,
@@ -1141,6 +1285,7 @@ async fn session(
                 action_permission: tokio::sync::watch::channel((envelope.action_epoch, !mode.2)).0,
                 actor_attempts: std::collections::HashMap::new(),
                 planner_requests: std::collections::HashMap::new(),
+                planner_ordinal: 0,
                 enabled: !mode.0 && !mode.1 && !mode.2,
                 output_enabled: !mode.1 && !mode.2,
                 output_permission: tokio::sync::watch::channel((
@@ -1227,4 +1372,22 @@ async fn session(
         }
     }
     let _ = send(&mut socket, Message::Close(None)).await;
+}
+
+async fn traces(
+    State(state): State<Shared>,
+    headers: HeaderMap,
+    Json(request): Json<avesra_core::trace::Query>,
+) -> Result<Json<avesra_core::trace::Remote>, StatusCode> {
+    #[cfg(unix)]
+    {
+        trace_query::operation(state, headers, request)
+            .await
+            .map(Json)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (state, headers, request);
+        Err(StatusCode::SERVICE_UNAVAILABLE)
+    }
 }

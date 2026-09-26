@@ -19,6 +19,81 @@ to control their active desktop, capture their microphone or record other apps.
 No successful build, capture or metadata response closes Plan 001. A01-A29 and
 OW1-OW3 still require their specific evidence. Record failures as failures.
 
+## Personal conversation and interruption evidence
+
+The continuous conversation requirement added on 2026-09-26 needs a separate,
+owner-operated observation in the ordinary application. The silent diagnostic
+instance below deliberately disables automatic microphone capture; its preview
+WAV, an operator reasoning greeting, or a successful build cannot establish
+continuous listening, native acceptance, dialogue context, or interruption.
+Do not remove those diagnostic guards to obtain a result. This procedure adds no
+microphone recording automation, input-desktop control, injected transcript,
+synthetic accepted turn, or automated acceptance harness.
+
+Record the matched desktop/controller source and binary identities, current
+reasoning incarnation, actual loaded audio lanes, selected stable input/output
+endpoints, and whether Personal admission is learning or has a native voice
+anchor. Keep identifiers in private evidence where appropriate; do not dump
+credentials, embeddings, raw microphone audio or unrelated application content.
+Personal operation is not release qualification. Its initial voice learning
+must not learn the assistant's own playback as the owner.
+
+The owner then performs these brief natural interactions on **both headphones
+and room speakers**, noting which endpoint and sound preset were actually used:
+
+1. Start ordinary Avesra and say a natural greeting or question. No exact wake
+   phrase or calibration script is required for Personal conversation. Observe
+   an actual native accepted turn, a correlated complete planner reply, and the
+   matching accepted-reply output stream. A generated answer stored in history
+   is not proof that output reached the callback or was heard.
+2. Ask a follow-up that depends on the previous answer. Record whether the answer
+   uses the recent dialogue correctly. The actual current-session native claim
+   must select that context; replaying a preview or an old stored reply is not
+   a second accepted turn. Context presently contains at most three completed
+   pairs. The controller bounds its retained planner roster at 64 entries,
+   compacting only retired actual owners; this is no longer a lifetime attempt
+   limit. Durable native claim ordinals survive restart, and the control session
+   keeps its admitted high-water mark so compaction cannot permit replay. Live
+   or uncertain owners still consume bounded capacity. Do not report a long
+   conversation or indefinite soak from this brief observation.
+3. While Avesra is still speaking, interrupt naturally with a new question, then
+   separately with one owner-chosen action that already has its explicit native
+   grant. Do not grant or invoke an unrelated action merely to manufacture proof.
+   Observe capture continuing during actual output, a distinct bounded utterance,
+   and the new request's current native provenance. Capture continuity alone
+   does not establish correct separation of the owner's speech from playback.
+4. For interruption, distinguish immediate old-output gate closure from actual
+   stream/device retirement and upstream job settlement. Record whether old
+   speech stops, whether the new request is accepted only once, and whether the
+   new answer/action starts under its own current ownership. A cancelled waiter
+   or dropped task handle does not prove inference or an OS effect was cancelled.
+   A committed action can remain an uncertain effect; interruption must not
+   silently replay it. A bounded pending request must retain its original age
+   and context rather than receive a fresh lifetime on dequeue.
+5. Let Avesra finish speaking without interrupting. Note any self-trigger, false
+   owner learning, repeated answer or unintended action. Repeat the interaction
+   with the user's normal effects/background music enabled, since the reference
+   must cover the actual full mix, including tails, rather than dry speech alone.
+   Check mute, deafen, pause and lock separately through the owner's normal
+   controls; neither listening nor output may survive its revoked permission.
+
+For source/runtime review, submitted output references must retain exact
+utterance/epoch, sample rate, continuity and original timing before buffers are
+recycled. Microphone hardware capture time and output callback submission time
+are different observations; account for actual scheduled playback time or an
+explicit bounded latency search. Missing or discontinuous references are unknown,
+not evidence of clean audio. Correlation or adaptive residual handling is a
+provisional Personal signal-processing observation, not a measured acoustic echo
+cancellation guarantee, biometric proof, or justification to label simultaneous
+playback as `NoOutput`. Headphone success does not prove speaker-room behavior.
+
+Retain the owner's observed success/failure and any existing bounded native
+metadata needed to correlate the steps. Do not add plaintext/biometric diagnostic
+logging for this procedure. If a boundary has no instrumentation, record it as
+unobserved instead of inferring it from a UI animation. Existing silent background
+screenshots/WAV/video procedures remain useful for their narrower output/UI
+claims and remain unchanged below.
+
 ## Preconditions
 
 1. Record `git rev-parse HEAD`, dirty source inventory, source snapshot identity,
@@ -76,6 +151,33 @@ Start-Process pwsh -WindowStyle Hidden -ArgumentList $arguments `
 The helper logs the exact child PID and package-identity check. Record that PID;
 only that explicitly owned inspection instance may be closed afterward. Do not
 kill every process named Avesra. No microphone operation is part of this procedure.
+
+If Codex's filesystem view is redirected and no existing Explorer window is
+available to launch the helper, a verified **local-only** fallback is CIM process
+creation. Use an already reviewed wrapper that invokes `inspect-background.ps1`
+with the exact executable, new WAV path and evidence logs:
+
+```powershell
+$startup = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0 }
+$created = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
+  CommandLine = 'pwsh.exe -WindowStyle Hidden -NoProfile -File "E:\absolute\existing-wrapper.ps1"'
+  ProcessStartupInformation = $startup
+}
+$created
+```
+
+Do not supply a remote computer/session or bypass the wrapper's guards. A success
+return and helper PID alone are insufficient: its log must still verify the
+physical normal voice store, native child package result `15700` (no MSIX
+identity), a new non-input desktop and unchanged `Default` input desktop. This
+fallback was observed on 2026-09-26 with helper PID `83428` and native inspection
+PID `80956` in session 1; no UI opened on the input desktop. That launch used
+source `dda8c65` and Windows executable SHA256
+`37fa18ba3ff70342c2e385b20c6cd5ac0a405b47928d146f2ebc9ec9ded6e812`.
+The launch checks establish isolation; the completed preview is recorded below.
+This is only a launch
+fallback for the already authorized diagnostic procedure, not general permission
+to create background processes or modify the guards.
 
 The native recorder writes a new float32 stereo WAV at the selected device rate
 and `<path>.json`. It captures only the first opened output stream, starting with
@@ -157,9 +259,57 @@ enough to reproduce the procedure.
 - Close only the recorded inspection PID after output/sidecar finalization.
   Confirm its debugging listener is gone. Leave the user's ordinary apps alone.
 
-## Controller update caveat
+## Controller installation and update
 
-The existing `avesra-controller-enrollment-preflight.service` is a transient user
+The current persistent method is `scripts/install-spark.py`: stage the controller
+with its binary and source hashes, then explicitly activate the owned
+`avesra-controller.service` against the existing private configuration directory.
+The installer preserves configuration and state, verifies pinned-TLS health, and
+retains the previous verified executable for explicit rollback. See
+[deployment lifecycle](deployment-lifecycle.md) for commands and ownership limits.
+An earlier transient listener must be retired separately by its owner; the
+installer does not find or stop unrelated processes.
+
+Source `3958812` contains the warm activity/TTS cancellation changes; `8613e48`
+adds the activity capture-age correction with identical audio Python source.
+On 2026-09-26, the actual Windows `8613e48` diagnostic application demonstrated
+preview cancellation followed by a successful fresh preview without reloading
+TTS. Evidence is retained under
+`E:/Dev/Avesra/artifacts/simple-conversation-20260926`:
+
+- `cancel.wav` is the **completed default preview**, 9.52 seconds, despite its
+  earlier chosen filename. It is not cancellation evidence.
+- In a fresh diagnostic process, the 366-byte preview started at
+  `06:47:22.825Z`; navigating to Models at `06:47:30.701Z` unmounted VoiceDesigner.
+  `interrupted.wav` finalized at 7.58 seconds with `stream_disposed` and hardware
+  silence. `tts-after-interrupt.json` reports loaded, idle TTS with the successful
+  inference count unchanged at two; cancellation was not counted as completion.
+- A fresh process started the resumed preview at `06:48:43.909Z`.
+  `resumed.wav` finalized at 9.60 seconds with hardware silence; the actual UI
+  returned idle without alerts. `tts-after-resumed.json` reports loaded, idle TTS,
+  three successful inferences and a last inference duration of 6221.746 ms.
+  No model reload occurred between the interrupted and resumed previews.
+
+The WAV sidecars identify actual native postmix/postformat output before hardware
+silencing. This establishes the observed TTS preview cancel/resume path, not
+audible-device playback, activity mute/resume, live Personal conversation,
+microphone acceptance or acoustic interruption. These cancel/resume artifacts
+describe `8613e48`.
+
+The merged frontend received a separate completed default preview in native
+inspection PID `80956`, started at `06:55:38.479Z` on 2026-09-26. `merged.wav` and
+its sidecar in the same artifact directory record 9.03 seconds, 216720 frames,
+24 kHz stereo float32, finalized with `stream_disposed` and hardware silence.
+`merged-complete.png` records the actual UI idle without alerts; the saved Razer
+Seiren X input and SPDIF output remained selected. The build source was
+`dda8c65` (`7ec4b0c` changes documentation only), with Windows executable SHA256
+`37fa18ba3ff70342c2e385b20c6cd5ac0a405b47928d146f2ebc9ec9ded6e812`.
+This completes the fresh merged-build preview observation with the same
+diagnostic limits above; it does not establish live conversation.
+
+### Historical transient-unit caveat (2026-09-25)
+
+The earlier `avesra-controller-enrollment-preflight.service` was a transient user
 unit. A separate `systemctl stop` can unload it, making a later `start` fail with
 "Unit not found." Preserve its full unit properties before an update. Install a
 verified binary by an atomic same-directory rename and use `systemctl --user

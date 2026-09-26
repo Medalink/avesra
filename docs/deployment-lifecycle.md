@@ -52,6 +52,98 @@ separate explicit deletion was requested.
 
 ## Spark package contract
 
+### Selected audio model startup
+
+The controller snapshots only the configured speaker, ASR, activity and TTS
+deployments. Its single background coordinator starts after configuration succeeds;
+TLS binding does not wait for models. Voice-design is excluded. No inference,
+qualification, deployment replacement or supervisor mutation occurs here.
+
+Configured socket paths must be absolute, normalized and bounded. An absent
+socket or its absent private parent is a temporary startup condition, not a fatal
+controller configuration error. Present unsafe objects are rejected. Every actual
+connection rechecks the exact socket and private parent, same-user ownership,
+permissions, non-symlink identity and peer UID. The standalone unconfigured audio
+CLI constructor still requires the socket to exist. Nothing creates runtime paths.
+
+One original 60-second availability window bounds read-only startup health waits.
+Each later lane still gets one health observation if earlier loading consumed that
+window. A loaded lane is skipped even when busy, without consuming a load attempt.
+Loading, busy or termination-pending work is never replaced. If it cannot retire
+within the availability window, the coordinator stops rather than overlapping a
+possibly active load. Missing lanes do not prevent observing other configured lanes.
+
+Model admissions are sequential. Each client may submit at most one load in this
+controller incarnation, with one original 120-second deadline established before
+worker enqueue and retained through preparation. The spawned worker owns admission
+even if its caller disappears. Success must be the exact private loaded terminal followed, within that same
+deadline, by exact lane/revision loaded health from the same socket. Selected
+activity/TTS must advertise streaming. Once that terminal settles the load, later
+health failure reports unavailable without cancelling or unloading it.
+On a lost, invalid or expired terminal it retains admission while requesting exact
+request cancellation for at most three additional seconds. Those seconds only
+settle the original request; they cannot extend its model-loading lifetime.
+Confirmed cancellation permits retirement. Otherwise the local client closes its
+admission permanently for this incarnation and reports local quarantine separately
+in controller diagnostics; its health becomes unavailable without inventing service
+health. The coordinator stops on quarantine, and never retries a load or infers
+retirement from an unknown request. A new controller observes current service health
+again; it does not repair credentials or resurrect a previous operation.
+
+Entry points: `transport::router` owns the startup coordinator; `AudioClient::load`
+owns the retained load; generic audio exchanges and the direct TTS stream use the
+same checked connector. Deployment installers, pinned supervisors and ordinary
+inference deadlines are unchanged. The manual cold-lane observation below verifies
+one recovery path; actual full-reboot and conversational evidence remain separate.
+
+### Manual cold-lane recovery proof
+
+This is an operator procedure for an authorized maintenance window, not an
+automated check or permission to interrupt normal use. Keep the companion closed
+and verify that no inference or stream is active before proceeding.
+
+1. Record the controller source revision, deployed executable hash, UTC or
+   explicitly zoned timestamps, boot ID, exact unit names and PID/start times.
+   Resolve the selected lane from its existing controller deployment and owned
+   installer manifest. Verify the exact full container/image IDs, pinned
+   supervisor/config hashes, model revision, socket and enabled persistent unit.
+   Do not substitute a candidate or rewrite ownership metadata. Snapshot the
+   other selected audio and reasoning process identities for comparison.
+2. Stop only that idle, owned lane through its existing unit. Before restarting
+   anything, prove actual retirement: unit inactive with MainPID zero, exact
+   container not running/restarting with a normal exit, and the supervisor journal
+   and durable operation marker consistent with a completed stop. Confirm the
+   selected endpoint is absent. A missing PID or killed Docker client alone is
+   insufficient. Do not manually erase a pending marker or socket to force success.
+3. Restart only the owned controller while that endpoint remains absent. Observe
+   pinned-certificate TLS health and retain its time before starting the lane.
+   This proves controller availability during the missing-endpoint condition.
+4. Start the exact previously verified lane unit within the controller's original
+   60-second availability window. Let the controller's startup coordinator perform
+   its one load; an administrative `load` call is not a substitute. Retain the
+   controller journal's load result and a subsequent private health observation:
+   exact lane/revision, required streaming metadata, `loaded_unqualified`, idle,
+   and zero successful inferences for this fresh service. Verify that the other
+   recorded process identities did not change.
+5. Stop the procedure on identity drift, outstanding work, timeout, quarantine,
+   unexpected restart or failed health. Preserve the exact logs and ownership
+   marker for reconciliation; do not repeat a load or restart to hide uncertainty.
+   An acknowledged loaded terminal remains settled even if its later health check
+   fails: that failure does not authorize cancelling or unloading it. Reconcile
+   actual state before any separately authorized recovery operation.
+
+Observed on 2026-09-26 with controller source `a8b0eb1`: the warm controller
+PID 1856368 at 05:48:14 CDT reported all four selected lanes already loaded. After a
+verified normal stop of the selected speaker unit, controller PID 1861301 started
+at 05:49:05 CDT and served pinned-certificate health while its socket was absent.
+The same owned speaker unit started at 05:49:06 CDT with PID 1861695; at 05:49:09 CDT
+the controller reported speaker loaded and the other three lanes already loaded.
+At05:49:17 CDT speaker health matched its selected revision, was loaded and idle,
+and reported zero successful inferences. ASR PID 2227, activity PID 482389, TTS
+PID 482390 and reasoning PID 32995 retained their prior start times. This proves
+one cold speaker-lane recovery plus loaded-lane skips, not a whole-host reboot,
+automatic listening, model qualification or a completed conversation.
+
 Pin controller executable, audio images, model revisions and serving manifests.
 Do not use floating image tags as installation identity. A persistent user unit
 owns only Avesra's controller. Its configuration path remains the existing
@@ -129,7 +221,7 @@ Example operator commands (hashes are from the trusted build record, never
 guessed; these commands are not executed by writing this specification):
 
 ```powershell
-./scripts/package-windows.ps1 -SourceIdentity <source-archive-sha256> -StoreSchema <13-through-16-from-frozen-build> -Output <new-package-directory>
+./scripts/package-windows.ps1 -SourceIdentity <source-archive-sha256> -StoreSchema <13-through-30-from-frozen-build> -Output <new-package-directory>
 python ./scripts/install-windows.py prepare-extension --package <package-directory> --sha256 <manifest-sha256>
 # Explicitly load/reload the printed stable extension path and inspect its ID.
 python ./scripts/install-windows.py stage --package <package-directory> --sha256 <manifest-sha256> --extension-id <actual-id>
@@ -141,12 +233,17 @@ that old trusted package's extension, reload the browser, then
 `rollback --version <that-retained-version> --browser chrome --data <actual-app-data>`.
 The explicit target is never inferred from a previous pointer modified by
 unregistration. Rollback refuses a store schema newer than the package's declared
-support. Package creation requires schema13,14,15 or16 to match the actual frozen
+support. Package creation requires schema13 through30 to match the actual frozen
 source's schema marker; the trusted build record must also bind those executables
 to that source archive. The installer never guesses schema from a filename and
 never restores an old database. `unregister` retains package directories, source
 manifests, extensions and protected data. Incomplete staging directories are
 retained and reported for explicit inspection, never silently overwritten.
+
+Current source writes schema30 (the preceding source marker was29). Schema30 adds the private ordinary-content FTS5 search table/shadow tables, stable accepted-rowid document metadata and owner/device backfill checkpoint/index revision. It enables SQLite and FTS5 secure-delete and does not rebuild accepted source tables. Backfill is explicit, bounded and resumable; source deletion updates the index in the same transaction. Packages below30 cannot reopen a migrated store. Schema29 adds the content-free conversation tombstone table and exact actor/device/session history index in both stores opened by the shared Store implementation. The migration is additive: accepted-conversation rowids and replay constraints are preserved without rebuilding that table. Once either store has migrated, rollback to a package declaring support below29 is refused; the installer does not downgrade or restore a database. Schema27 adds the passive teaching journal; schema28 adds typed disk-activity diagnostic observations. Schema25 adds the bounded owner demonstration journal; schema26 adds NativeMailbox reply provenance and adds no tables. Schema23 rebuilds private memory source columns for mutually exclusive task/accepted-turn provenance while preserving foreign keys; schema24 adds typed Gmail targets, payloads and bounded mailbox observations without new tables. Schema20 preserves explicit already-satisfied action outcomes; schema21 adds exact X-ready targets; schema22 adds typed model/native-event reply provenance. These compatibility markers prevent old readers from reopening newly written serialized records; they add no tables. Schema17 adds the monotonically increasing native
+planner claim counter;18 and19 mark VPN and browser-provider record compatibility.
+No database downgrade or counter reset is performed. Native/controller deployments
+must match planner-v4 and normal-speech-v6; older wire versions reject.
 
 `scripts/install-spark.py` stages a caller-hash-pinned controller, and installs or
 rolls back the owned persistent user unit against an existing private directory.
@@ -174,6 +271,15 @@ environment, UID, mounts, device/resource/network settings and image. It checks
 every mount field but canonicalizes the semantically unordered Docker `Mounts`
 array by its unique destination before hashing. Duplicate or malformed mount
 destinations are refused; no fields are omitted and no other arrays are reordered.
+The nullable Docker `HostConfig.OomKillDisable` field alone canonicalizes null
+to false: both mean the OOM killer is not disabled. True remains distinct, and
+non-boolean/non-null values are rejected. Actual first-start inspection on
+2026-09-26 changed only this field from false to null; Docker's daemon defaults
+null to false, then clears it on kernels without that optional capability
+([daemon source](https://github.com/moby/moby/blob/v28.3.3/daemon/daemon_unix.go#L351)).
+This correction applies to newly prepared owners only. Never rewrite existing
+manifest fingerprints or replace their pinned supervisor in place; retain the
+original operation evidence and explicitly prepare a reconciled replacement.
 Two fresh inspections of the stopped speaker and TTS containers on 2026-09-26
 differed only in mount order, confirming the original order-sensitive fingerprint
 could incorrectly refuse an unchanged container. Existing prepared owners remain

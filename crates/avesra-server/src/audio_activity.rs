@@ -50,11 +50,8 @@ impl AudioClient {
         {
             return Err(ErrorCode::Stale);
         }
-        let permit = self
-            .admission
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| ErrorCode::Unavailable)?;
+        let permit =
+            self.observed_admission(avesra_core::engine_observer::Operation::ActivityStream)?;
         let health = self.health().await?;
         if !health.streaming
             || health.state != "loaded_unqualified"
@@ -208,6 +205,8 @@ impl Drop for ActivityStream {
                 // Preserve ownership until cancellation acknowledgement or the
                 // complete fixed remote lifetime. Dropping a HTTP/socket caller
                 // is not evidence that the worker stopped processing.
+                // Success acknowledges actual child reset/CUDA retirement or
+                // completed kill/reap; mere socket closure never releases this permit.
                 if client.cancel(request).await.is_err() {
                     tokio::time::sleep(remaining).await;
                 }

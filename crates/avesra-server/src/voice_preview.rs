@@ -228,21 +228,28 @@ async fn produce(
         return Err(ErrorCode::Unavailable);
     }
     let mut stream = lane
-        .synthesize(1, request.request_id, &request.voice, &text, || async {
-            if active(auth.clone(), device).await
-                && voice_setup::current(
-                    auth,
-                    device,
-                    request.session_id,
-                    request.playback_epoch,
-                    true,
-                )
-            {
-                Ok(())
-            } else {
-                Err(ErrorCode::Stale)
-            }
-        })
+        .synthesize(
+            1,
+            request.request_id,
+            &request.voice,
+            &text,
+            None,
+            || async {
+                if active(auth.clone(), device).await
+                    && voice_setup::current(
+                        auth,
+                        device,
+                        request.session_id,
+                        request.playback_epoch,
+                        true,
+                    )
+                {
+                    Ok(())
+                } else {
+                    Err(ErrorCode::Stale)
+                }
+            },
+        )
         .await?;
     let mut received = 0usize;
     loop {

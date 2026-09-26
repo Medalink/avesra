@@ -23,14 +23,39 @@ the feature queue. End-of-input flushes real remaining features and trims only
 model padding; it never manufactures missing scores or speech endpoints.
 
 Paired `GET /voice-activity-stream` upgrades to a WebSocket after authenticated
-native capture permission checks. A correlated acknowledgment precedes microphone
-capture. The same existing eight-second explicit VoiceCheck capture supplies
+native capture permission checks. Public stream version 2 is required in Start,
+Acknowledgment and StreamReply; older peers reject, with no downgrade. The private
+model stream remains version 1. A correlated acknowledgment precedes an explicit
+VoiceCheck's microphone capture. Continuous Personal capture may already be
+running when the next bounded transport window opens. The same eight-second
+explicit VoiceCheck capture supplies
 200-ms packets to this stream through a bounded native queue. Each packet and
 reply retain request/session/capture epoch, sequence and immutable sample/frame
 offsets. Permission loss, original deadline or queue overflow cancels the stream.
-Server freshness conservatively estimates the oldest sample from the original
-acknowledgment clock plus the immutable packet start offset; the chunk's end
-only bounds forward pacing and never renews the 500-ms oldest-sample budget.
+Every packet carries required `captured_age_ms`, rounded up from the original
+oldest native frame's monotonic age immediately before sending. Reject future
+capture or age above 500 ms. This includes PCM buffered while the previous actual
+stream retires and the next one opens; do not discard it or stamp it fresh.
+The server anchors one capture origin from its first packet receipt minus that
+native age assertion. Each packet also carries `elapsed_since_ack_ms`, floored
+from the actual native acknowledgment receipt to the same send observation.
+The server freezes a conservative transit uncertainty equal to its interval
+from acknowledgment send initiation to first packet receipt minus that native
+elapsed time. This bounds both acknowledgment-out and packet-in transit without
+counting microphone startup or sample gathering twice. An impossible, decreasing,
+or over-lifetime native elapsed value fails. The fixed uncertainty is subtracted
+from every projected capture timestamp, never waived or renewed.
+Later receipt-minus-age claims must agree with the fixed
+origin plus immutable sample offset within 100 ms of transport/clock tolerance.
+The earlier of those two times, minus that fixed uncertainty, feeds the private
+model stream and must still be at most 500 ms old. A slow initial handoff can
+therefore conservatively fail even when native PCM itself is fresh. The packet
+end only bounds forward pacing (100 ms tolerance)
+and never renews oldest-sample age. This is an authenticated native age assertion
+projected to the server clock, not synchronized-clock proof of one-way network
+latency. Native freshness remains checked before every send. Original public and
+private stream deadlines, cumulative sample limits, retained cancellation owners
+and terminal correlation are unchanged.
 No diagnostic request opens an additional recording or enables normal listening.
 
 VoiceCheck offers batch or live measurements explicitly. The live option displays
@@ -75,8 +100,9 @@ configuration is not created automatically by the application. The isolated
 runtime observation below did not change controller or existing ASR configuration.
 
 `GET /voice-activity` supplies authenticated health for explicit preflight.
-`POST /voice-analysis` accepts an optional `activity: true`; omitted/false retains
-the original response shape and behavior. Explicit activity requests fail if the
+`POST /voice-analysis` version2 accepts an optional `activity: true`; omitted/false
+retains the base analysis shape, including its required nullable typed timing
+receipt ([voice-timing.md](voice-timing.md)). Explicit activity requests fail if the
 lane is absent/unready and never fall back to invented clean/unknown scores.
 The same PCM is processed concurrently with ASR/speaker under the existing
 15-second inference budget and current paired capture permission. Cancellation

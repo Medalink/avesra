@@ -65,6 +65,14 @@ def inspect(container):
 def fingerprint(value):
     # Hash potentially private environment values without persisting or logging them.
     selected = {key: value[key] for key in ("Id", "Name", "Image", "Created", "Path", "Args", "Config", "HostConfig", "Mounts")}
+    host = dict(selected["HostConfig"])
+    oom = host["OomKillDisable"]
+    if oom is not None and type(oom) is not bool:
+        raise ValueError("Invalid audio OOM policy")
+    # Docker defaults nil to false, and may clear false on first start when the
+    # kernel lacks this optional knob. Never erase an explicit true policy.
+    host["OomKillDisable"] = False if oom is None else oom
+    selected["HostConfig"] = host
     mounts = selected["Mounts"]
     if not isinstance(mounts, list) or any(
         not isinstance(mount, dict) or not isinstance(mount.get("Destination"), str)
@@ -129,7 +137,8 @@ def health(record):
                 or value.get("model_revision") != record["revision"]
                 or value.get("streaming") != record["streaming"]
                 or value.get("permission_authority") is not False
-                or value.get("cancellation") != "terminate_process"
+                or value.get("cancellation") not in {"terminate_process", "cooperative_reset_or_terminate"}
+                or (value.get("cancellation") == "cooperative_reset_or_terminate" and record["lane"] not in {"activity", "tts"})
                 or value.get("state") not in {"unavailable", "loading", "loaded_unqualified", "termination_pending"}):
             raise ValueError("Audio health identity/contract changed")
         return value["state"]

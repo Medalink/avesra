@@ -14,7 +14,7 @@ use axum::{
     response::Response,
 };
 use std::{
-    sync::Arc,
+    sync::{Arc, atomic::AtomicUsize},
     time::{Duration, Instant},
 };
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
@@ -26,9 +26,9 @@ pub(super) async fn upgrade(
     ws: WebSocketUpgrade,
 ) -> Result<Response, StatusCode> {
     let device = authenticate_headers(auth.clone(), &headers).await?;
-    // Startup has no reasoning qualifier and therefore cannot issue the required
-    // completed source. Do not activate a TTS-only arbitrary-text route.
-    if auth.reasoning.is_none() || auth.tts.is_none() {
+    // Model sources still require an actual completed planner entry. Native
+    // event sources register their separately typed accepted-ledger assertion.
+    if auth.tts.is_none() {
         return Err(StatusCode::SERVICE_UNAVAILABLE);
     }
     let connection = auth
@@ -105,6 +105,7 @@ async fn send(
 struct Inspector {
     admission: Arc<OwnedSemaphorePermit>,
     gate: Arc<Semaphore>,
+    private: Arc<AtomicUsize>,
 }
 async fn inspect(
     auth: &Shared,
@@ -142,8 +143,12 @@ async fn start(
         serde_json::from_str(&read(socket, Duration::from_secs(3)).await?)
             .map_err(|_| ErrorCode::Malformed)?;
     request.validate()?;
-    let _reservation = planner_ingress::reserve_speech(&auth, device, &request)?;
+    let reservation = planner_ingress::reserve_speech(&auth, device, &request, &admission)?;
     let context = request.stream_context();
+    let span = avesra_core::trace::begin(
+        avesra_core::trace::Link::planner(&request.source.planner).child(request.request),
+        avesra_core::trace::Stage::ControllerOutput,
+    );
     let (mut action, mut output) = {
         let sessions = auth.sessions.lock().map_err(|_| ErrorCode::Unavailable)?;
         let session = sessions
@@ -157,6 +162,7 @@ async fn start(
     let inspector = Inspector {
         admission,
         gate: Arc::new(Semaphore::new(1)),
+        private: reservation.private.clone(),
     };
     let monitor = async {
         loop {
@@ -174,22 +180,45 @@ async fn start(
             }
         }
     };
-    tokio::select! { biased;
+    let result = tokio::select! { biased;
         _=action.changed()=>Err(ErrorCode::Stale),
         _=output.changed()=>Err(ErrorCode::Stale),
         result=monitor=>result,
         result=authority=>result,
         result=stream(socket,&auth,&request,&context,&inspector,deadline)=>result,
-    }
+    };
+    span.result(&result);
+    result
 }
 enum Piece {
     Audio(Vec<i16>),
     End { samples: usize, outcome: Completion },
 }
+struct QueuedPiece {
+    piece: Piece,
+    ticket: Option<avesra_core::engine_observer::Ticket>,
+}
+async fn enqueue(
+    tx: &mpsc::Sender<QueuedPiece>,
+    queue: Option<&avesra_core::engine_observer::Queue>,
+    piece: Piece,
+) -> Result<(), ErrorCode> {
+    let wait = queue.map(avesra_core::engine_observer::Queue::waiting);
+    let capacity = tx.reserve().await;
+    if let Some(wait) = wait {
+        wait.finish(capacity.is_ok());
+    }
+    let capacity = capacity.map_err(|_| ErrorCode::Stale)?;
+    let ticket = queue.and_then(avesra_core::engine_observer::Queue::enqueue);
+    capacity.send(QueuedPiece { piece, ticket });
+    Ok(())
+}
 async fn produce<F, Fut>(
     lane: Arc<AudioClient>,
     request: &speech::Request,
-    tx: mpsc::Sender<Piece>,
+    tx: mpsc::Sender<QueuedPiece>,
+    queue: Option<&avesra_core::engine_observer::Queue>,
+    private: Arc<AtomicUsize>,
     mut authorize: F,
 ) -> Result<(), ErrorCode>
 where
@@ -202,7 +231,18 @@ where
         // Fresh private identity per actual job; the single public source and
         // output reservation remain owned by start/stream across every segment.
         let mut source = lane
-            .synthesize(1, Uuid::new_v4(), &request.voice, text, &mut authorize)
+            .synthesize(
+                1,
+                Uuid::new_v4(),
+                &request.voice,
+                text,
+                Some(avesra_server::audio::synthesis::Source {
+                    retirement: private.clone(),
+                    trace: avesra_core::trace::Link::planner(&request.source.planner)
+                        .child(request.request),
+                }),
+                &mut authorize,
+            )
             .await?;
         let mut segment_samples = 0usize;
         loop {
@@ -213,9 +253,7 @@ where
                     if total > speech::MAX_SAMPLES as usize {
                         return Err(ErrorCode::TooLarge);
                     }
-                    tx.send(Piece::Audio(samples))
-                        .await
-                        .map_err(|_| ErrorCode::Stale)?;
+                    enqueue(&tx, queue, Piece::Audio(samples)).await?;
                 }
                 SpeechEvent::End {
                     samples, outcome, ..
@@ -224,12 +262,15 @@ where
                         return Err(ErrorCode::Malformed);
                     }
                     if outcome == Completion::Truncated || index + 1 == segments.len() {
-                        tx.send(Piece::End {
-                            samples: total,
-                            outcome,
-                        })
-                        .await
-                        .map_err(|_| ErrorCode::Stale)?;
+                        enqueue(
+                            &tx,
+                            queue,
+                            Piece::End {
+                                samples: total,
+                                outcome,
+                            },
+                        )
+                        .await?;
                         return Ok(());
                     }
                     // Only actual Complete permits a successor. Intermediate
@@ -266,24 +307,43 @@ async fn stream(
     // At most 64 codec chunks (5.12s/245760 PCM bytes), not a whole-wave wait.
     // Queue pressure pauses private reads, never renews the 30s source budget.
     let (tx, rx) = mpsc::channel(64);
+    let queue = avesra_core::engine_observer::Queue::new(
+        avesra_core::trace::Link::planner(&request.source.planner).child(request.request),
+    );
     let synth_deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     let producer = async {
         tokio::time::timeout_at(
             synth_deadline,
-            produce(lane, request, tx, || {
-                inspect(auth, context, inspector, deadline)
-            }),
+            produce(
+                lane,
+                request,
+                tx,
+                queue.as_ref(),
+                inspector.private.clone(),
+                || inspect(auth, context, inspector, deadline),
+            ),
         )
         .await
         .map_err(|_| ErrorCode::Expired)?
     };
     let consumer = consume(socket, context, rx);
-    tokio::try_join!(producer, consumer)?;
+    let result = tokio::try_join!(producer, consumer);
+    if let Some(queue) = &queue {
+        queue.finish(result.is_ok());
+    }
+    result?;
     inspect(auth, context, inspector, deadline).await?;
     Ok(())
 }
-async fn next(socket: &mut WebSocket, rx: &mut mpsc::Receiver<Piece>) -> Result<Piece, ErrorCode> {
-    tokio::select! { biased; _=socket.recv()=>Err(ErrorCode::Stale), piece=rx.recv()=>piece.ok_or(ErrorCode::Unavailable) }
+async fn next(
+    socket: &mut WebSocket,
+    rx: &mut mpsc::Receiver<QueuedPiece>,
+) -> Result<Piece, ErrorCode> {
+    let queued = tokio::select! { biased; _=socket.recv()=>return Err(ErrorCode::Stale), piece=rx.recv()=>piece.ok_or(ErrorCode::Unavailable)? };
+    if let Some(ticket) = queued.ticket {
+        ticket.received();
+    }
+    Ok(queued.piece)
 }
 async fn packet(
     socket: &mut WebSocket,
@@ -316,7 +376,7 @@ async fn packet(
 async fn consume(
     socket: &mut WebSocket,
     context: &speech::Context,
-    mut rx: mpsc::Receiver<Piece>,
+    mut rx: mpsc::Receiver<QueuedPiece>,
 ) -> Result<(), ErrorCode> {
     let Piece::Audio(first) = next(socket, &mut rx).await? else {
         return Err(ErrorCode::Malformed);

@@ -34,6 +34,65 @@ a conversation-only replacement for the requested features. Unsupported features
 and unverified quality remain visible, and shipping a development build does not
 mark this whole plan or OW1–OW3 complete.
 
+### Latest owner override: launch and converse naturally
+
+On2026-09-26 the owner rejected the manual eight-second check and interval labels:
+"When I launch it it should just listen and learn my voice over the first few
+minutes and assign me the owner and let users change/add others later on."
+They then explicitly ordered implementation: "fix it with this simple version"
+and "get me talking back and forth with Avesra asap."
+
+This supersedes the preceding manual development-activation ritual. Normal
+launch on the current Windows account should reconnect to the saved Spark and
+begin personal conversation when the selected devices/services are available.
+Preserve saved mute, pause, deafen and lock behavior; a brand-new installation
+may select the actual default devices and start unmuted. Keep the diagnostic
+background-output mode microphone-free. No timing fields, prompted enrollment,
+calibration corpus or separate qualification-consent step gates this personal
+conversation mode.
+
+Bind the initial owner to the current Windows account through native create-only
+ownership, preserving any existing owner and paired registration. Voice learning
+associates real observed speech with that personal profile; hearing a voice does
+not grant Windows identity, site permissions or high-impact action authority.
+Reuse this owner's existing six saved phrases immediately where present. For a
+new voice, collect bounded genuine speaker observations during natural dialogue
+over the first few minutes and retain the protected derived profile, not raw
+recordings or invented enrollment/held-out counts. Additional people and owner
+changes remain explicit later management operations.
+
+Personal admission and its provisional endpoint/voice defaults must be represented
+honestly as personal operation, not release-qualified measurements. Use the normal
+native capture, accepted-conversation, planner and spoken-reply path, with bounded
+recent actual dialogue so follow-up questions refer to prior answers. Preserve
+current session/epoch cancellation, backend terminal ownership, local controls,
+existing action/site grants and protected confirmations. Do not substitute a
+preview, a typed synthetic accepted turn or a successful status label for this
+path. Show plain actual states such as Listening, Learning your voice, Paused or
+the concrete unavailable reason.
+
+Immediate delivery is a matched desktop/controller from a reviewed isolated
+branch, with compilation/static checks and genuine background output evidence.
+The user performs natural live conversation; no agent microphone capture or
+active-desktop automation is authorized for verification. Release quality,
+remaining integrations and full-plan completion stay open until their own
+requirements are proved. The unpublished interval-feedback branch is superseded.
+
+The owner additionally requires continuous input while Avesra speaks, so an
+interruption or new request can be heard and acted on mid-reply. Personal capture
+and streaming must not wait for planning, active-task completion or output quiet.
+Keep bounded ownership and backpressure, and preserve explicit mute, deafen,
+pause and Windows-lock controls. Use actual submitted postmix audio for playback
+reference handling; never label simultaneous playback as measured no-output.
+An accepted interruption must retire the affected reply through its existing
+cancellation owner while allowing the new request through normal authorization.
+Document and expose any unverified acoustic echo or barge-in limitation honestly;
+static checks alone do not prove real simultaneous speech.
+The owner clarified the device boundary: listen only on the chosen input and
+play only on the chosen output. Playback reference means an internal copy of
+Avesra's own mixed output; it must not introduce system-loopback capture or open
+other input/output endpoints.
+
 - Priority: P1.
 - Category: product/architecture implementation.
 - Effort: L; multiple separately verifiable milestones, not a one-session scaffold.

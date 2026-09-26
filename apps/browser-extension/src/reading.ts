@@ -1,6 +1,8 @@
 // Strict correlation data only. Parsing never admits a Chrome operation.
 import * as p from "./protocol.js";
+import {account as gmailAccount,type Incomplete} from "./gmail-job.js";
 import { candidate, type Candidate } from "./documents.js";
+import { origin as providerOrigin, type Provider, type Probe } from "./provider.js";
 export type Source = { device: string; session: string; capture_epoch: number; action_epoch: number };
 export type Context = {
   request: string; dispatch: string; task: string; step: string; actor: string;
@@ -9,9 +11,14 @@ export type Context = {
   browser_app: p.Pairing; browser_session: string; browser_generation: number;
   observation_revision: number; source: Source;
 };
-export type Request = { context: Context; origin: string; document: Candidate; message_limit: number; remaining_ms: number };
+export type Mode = { kind: "excerpt" } | { kind: "provider_inspection"; provider: Provider } | {kind:"x_ready";account:string} | {kind:"inbox";account:string};
+export type Request = { context: Context; origin: string; document: Candidate | null; message_limit: number; mode: Mode; remaining_ms: number };
 export type Settlement = { context: Context; kind: "actual_job_settled" };
 export type Outcome = { state: "excerpt"; excerpt: { coverage: "partial"; document: Candidate; dom_revision: number; title: string; blocks: string[]; truncated: boolean; excluded_content: boolean } }
+  | {state:"inbox";terminal:{document:Candidate;dom_revision:number;account:string;chunks:number;bytes:number;digest:string;incomplete:Incomplete|null}}
+  | { state: "provider_inspection"; probe: Probe }
+  | {state:"x_ready";ready:{document:Candidate;dom_revision:number;account:string;focused:true;created:boolean}}
+  | {state:"x_needs_input";evidence:{document:Candidate;dom_revision:number;account:string;created:boolean;reason:"login_required"|"account_mismatch"|"unsupported_page"}}
   | { state: "empty" | "changed" | "expired" | "unavailable" | "unsupported" };
 export type Reply = { context: Context; outcome: Outcome };
 const ids = ["request", "dispatch", "task", "step", "actor", "action_revision", "intent_revision", "grant", "selection", "browser_session"];
@@ -36,10 +43,16 @@ export function sameContext(a: Context, b: Context): boolean {
     && a.source.capture_epoch === b.source.capture_epoch && a.source.action_epoch === b.source.action_epoch;
 }
 export function request(value: unknown): value is Request {
-  return p.object(value, ["context", "origin", "document", "message_limit", "remaining_ms"])
-    && context(value.context) && p.origin(value.origin) && candidate(value.document, value.origin)
+  return p.object(value, ["context", "origin", "document", "message_limit", "mode", "remaining_ms"])
+    && context(value.context) && p.origin(value.origin) && (candidate(value.document, value.origin) || (value.document===null && p.object(value.mode,["kind","account"]) && value.mode.kind==="x_ready"))
     && p.counter(value.message_limit) && value.message_limit <= 100
-    && p.counter(value.remaining_ms) && value.remaining_ms <= 10000
+    && ((p.object(value.mode,["kind"]) && value.mode.kind === "excerpt")
+      || (p.object(value.mode,["kind","provider"]) && value.mode.kind === "provider_inspection"
+        && (value.mode.provider === "gmail" || value.mode.provider === "x") && value.origin === providerOrigin(value.mode.provider) && value.message_limit === 1)
+      || (p.object(value.mode,["kind","account"]) && value.mode.kind==="x_ready" && typeof value.mode.account==="string"
+        && /^[a-z0-9_]{1,15}$/.test(value.mode.account) && value.origin==="https://x.com" && value.message_limit===1)
+      || (p.object(value.mode,["kind","account"]) && value.mode.kind==="inbox" && gmailAccount(value.mode.account) && value.origin==="https://mail.google.com"))
+    && p.counter(value.remaining_ms) && value.remaining_ms <= (p.object(value.mode,["kind","account"]) && value.mode.kind==="inbox" ? 120000 : 10000)
     && new TextEncoder().encode(JSON.stringify(value)).length <= 65536 - 2048;
 }
 export function settlement(value: unknown): value is Settlement {

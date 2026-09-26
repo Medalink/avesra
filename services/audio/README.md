@@ -1,3 +1,9 @@
+Current activity/TTS cancellation uses a shared worker event and a correlated
+actual reset/CUDA-retirement terminal, preserving a warm model only after that
+acknowledgement. Uncertain work still uses kill/reap. See
+[the lifecycle contract](../../docs/audio-cancellation.md). Images built before
+this source change retain their previous cancellation behavior.
+
 # Spark audio lanes
 
 The optional `activity.config.json` lane uses the existing NeMo/ASR image recipe

@@ -3,6 +3,13 @@
 This callable C4 consumer is infrastructure for Plan001 C5. It does not establish
 mailbox enumeration, authenticated account readiness, navigation or posting.
 
+Wire7 also supports the exact accepted requests `inspect Gmail provider` and
+`inspect X provider`. They resolve the same explicit ReadPage grant and selected
+document at the respective fixed origin, then return bounded transient semantic
+metadata under the identical owned read/settlement/delivery path. See
+`browser-provider-operations.md`. Inspection is not mailbox completeness or X
+readiness, and introduces no clicks, navigation or new implicit site grant.
+
 Protected owner setup may grant ReadPage for one exact saved browser ScopeRef,
 origin, actor, pairing, selected browser/profile and app revision. The ordinary
 ledger grant remains separate from Chrome's host permission. Native setup reads

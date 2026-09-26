@@ -1,13 +1,15 @@
 """Original-lifetime Sortformer state with bounded PCM/features and immutable scores."""
 import time
 from .activity import REVISION
+from .cancellation import check
 
 
 class StreamingActivity:
-    def __init__(self, model, torch, deadline):
+    def __init__(self, model, torch, deadline, cancelled=lambda: False):
         import numpy as np
         self.model, self.torch, self.np = model, torch, np
         self.deadline = min(deadline, time.monotonic() + 30)
+        self.cancelled = cancelled
         f = model.preprocessor.featurizer
         if ((f.sample_rate, f.n_fft, f.hop_length, f.win_length, f.nfilt, f.frame_splicing)
                 != (16000, 512, 160, 400, 128, 1) or f.exact_pad
@@ -28,6 +30,7 @@ class StreamingActivity:
         self.raw = self.features = self.left = self.state = None
 
     def push(self, samples, final):
+        check(self.cancelled)
         if (self.closed or time.monotonic() >= self.deadline or type(final) is not bool
                 or samples.ndim != 1 or not 0 < samples.size <= 3200 or samples.size % 160
                 or self.total + samples.size > 160000 or not self.np.isfinite(samples).all()):
@@ -39,6 +42,7 @@ class StreamingActivity:
             with self.torch.inference_mode():
                 self._features(samples, final)
                 while self.features.size(-1):
+                    check(self.cancelled)
                     available = self.features.size(-1)
                     if not final and available < 104:
                         break
@@ -53,6 +57,7 @@ class StreamingActivity:
                         streaming_state=self.state, total_preds=empty,
                         left_offset=left, right_offset=right,
                     )
+                    check(self.cancelled)
                     expected = (take + 7) // 8
                     if (scores.shape != (1, expected, 4) or not self.torch.isfinite(scores).all().item()
                             or not ((scores >= 0) & (scores <= 1)).all().item()):
@@ -65,6 +70,7 @@ class StreamingActivity:
                         raise ValueError("activity_stream_expired")
             if len(output) > 16 or (final and self.output_frames != (self.total + 1279) // 1280):
                 raise ValueError("activity_stream_incomplete")
+            check(self.cancelled)
             result = {"model_revision": REVISION, "samples": int(self.total), "frame_offset": offset,
                       "frames": output, "final": final}
             if final:

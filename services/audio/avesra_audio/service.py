@@ -17,7 +17,7 @@ import uuid
 MAX_PACKET = 2_000_000
 
 
-def child(pipe, config):
+def child(pipe, config, cancelled):
     # Model libraries can print inputs on failure. The parent emits only fixed codes.
     with open(os.devnull, "w") as sink, contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
         os.dup2(sink.fileno(), 1)
@@ -25,16 +25,31 @@ def child(pipe, config):
         try:
             from .drivers import Driver
 
+            from .cancellation import Cancelled, check
             driver = Driver(config)
             pipe.send({"state": "loaded_unqualified"})
             while True:
                 payload = pipe.recv()
+                owner = payload["owner"]
                 try:
-                    result = driver.request(payload, lambda chunk: pipe.send({"chunk": chunk}))
+                    if payload["operation"] == "retire_stream":
+                        driver.retire_stream()
+                        pipe.send({"owner": owner, "retired": True})
+                        continue
+                    result = driver.request(payload, lambda chunk: pipe.send({"owner": owner, "chunk": chunk}), cancelled.is_set)
+                    check(cancelled.is_set)
+                    if payload["operation"] == "tts_stream" or (config["lane"] == "activity" and payload["operation"] == "stream" and payload["final"]):
+                        driver.retire_stream()
                     payload = None
-                    pipe.send({"result": result})
+                    pipe.send({"owner": owner, "result": result})
+                except Cancelled:
+                    try:
+                        driver.retire_stream()
+                        pipe.send({"owner": owner, "retired": True})
+                    except Exception:
+                        pipe.send({"owner": owner, "error": "retirement_unavailable"})
                 except Exception:
-                    pipe.send({"error": "inference_unavailable"})
+                    pipe.send({"owner": owner, "error": "inference_unavailable"})
                 finally:
                     payload = None
                     result = None
@@ -63,6 +78,11 @@ class Service:
         self.stream = None
         self.stream_timer = None
         self.streams_recent = {}
+        self.retired_recent = {}
+        self.cancel_event = None
+        self.cancelling = None
+        self.retirement_task = None
+        self.active_operation = None
 
     def clear_stream(self):
         self.stream = None
@@ -100,7 +120,15 @@ class Service:
                     process.close()
                     self.process = None
                     self.state = "unavailable"
-            return self.process is None
+            stopped = self.process is None
+            if self.cancelling is not None:
+                done = self.cancelling["done"]
+                self.cancelling = None
+                if not done.done():
+                    done.set_result(stopped)
+            if stopped:
+                self.cancel_event = None
+            return stopped
 
     async def start(self, generation):
         async with self.lifecycle:
@@ -118,7 +146,8 @@ class Service:
             context = mp.get_context("spawn")
             parent, worker = context.Pipe()
             self.pipe = parent
-            self.process = context.Process(target=child, args=(worker, self.config), daemon=True)
+            self.cancel_event = context.Event()
+            self.process = context.Process(target=child, args=(worker, self.config, self.cancel_event), daemon=True)
             self.process.start()
             worker.close()
             return True
@@ -134,6 +163,87 @@ class Service:
             await asyncio.sleep(0.02)
         raise ValueError("deadline_exceeded")
 
+    async def receive_owned(self, generation, deadline, owner):
+        result = await self.receive(generation, deadline)
+        if not isinstance(result, dict) or result.pop("owner", None) != str(owner[2]):
+            raise ValueError("worker_owner_changed")
+        return result
+
+    def mark_retired(self, owner):
+        now = time.monotonic()
+        self.retired_recent = {key: until for key, until in self.retired_recent.items() if until > now}
+        if len(self.retired_recent) < 256:
+            self.retired_recent[owner[:2]] = now + 31
+
+    async def retire_owned(self, generation, owner, result=None):
+        pending = self.cancelling
+        if pending is None or pending["owner"] != owner or generation != self.generation:
+            raise ValueError("retirement_owner_changed")
+        deadline = pending["deadline"]
+        # Drain actual TTS chunks until the child's unwind or successful terminal.
+        while result is not None and "chunk" in result:
+            if set(result) != {"chunk"}:
+                raise ValueError("retirement_packet_changed")
+            result = await self.receive_owned(generation, deadline, owner)
+        if result is None or set(result) == {"result"}:
+            envelope = {"owner": str(owner[2]), "operation": "retire_stream"}
+            await asyncio.wait_for(asyncio.to_thread(self.pipe.send, envelope), max(0.001, deadline - time.monotonic()))
+            result = await self.receive_owned(generation, deadline, owner)
+        if result != {"retired": True} or time.monotonic() >= deadline or generation != self.generation or self.active != owner or self.cancelling is not pending:
+            raise ValueError("retirement_unavailable")
+        self.clear_stream()
+        self.cancel_event.clear()
+        self.mark_retired(owner)
+        self.cancelling = None
+        if not pending["done"].done():
+            pending["done"].set_result(True)
+        return {"error": "cancelled"}
+
+    async def retire_idle(self, generation, owner):
+        try:
+            await self.retire_owned(generation, owner)
+        except (Exception, asyncio.CancelledError):
+            await self.stop(generation)
+        finally:
+            if self.active == owner:
+                self.active = None
+                self.active_operation = None
+
+    async def cancel_owned(self, request, deadline):
+        key = request["session_id"]
+        identity = (key, request["request_id"])
+        active_matches = self.active is not None and self.active[:2] == identity
+        stream_matches = self.stream is not None and (self.stream["session"], self.stream["id"]) == identity
+        if not active_matches and not stream_matches:
+            return {"outcome": "cancelled"} if self.retired_recent.get(identity, 0) > time.monotonic() else {"error": "unknown_request"}
+        generation = self.generation
+        cooperative = self.state == "loaded_unqualified" and self.cancel_event is not None and (
+            (self.config["lane"] == "activity" and stream_matches)
+            or (self.config["lane"] == "tts" and active_matches and self.active_operation == "tts_stream"))
+        if not cooperative:
+            stopped = await self.stop(generation)
+            return {"outcome": "cancelled" if stopped else "termination_pending"}
+        if self.cancelling is None:
+            owner = self.active if active_matches else (key, request["request_id"], uuid.uuid4())
+            self.cancelling = {"owner": owner, "deadline": min(deadline, time.monotonic() + 2), "done": asyncio.get_running_loop().create_future()}
+            self.cancel_event.set()
+            # The cancellation owner, not the old idle timer, now owns retirement.
+            timer, self.stream_timer = self.stream_timer, None
+            if timer is not None:
+                timer.cancel()
+            if not active_matches:
+                self.active = owner
+                self.active_operation = "retire_stream"
+                self.retirement_task = asyncio.create_task(self.retire_idle(generation, owner))
+        pending = self.cancelling
+        if pending["owner"][:2] != identity:
+            return {"error": "busy"}
+        try:
+            stopped = await asyncio.wait_for(asyncio.shield(pending["done"]), max(0.001, pending["deadline"] - time.monotonic()))
+        except (Exception, asyncio.CancelledError):
+            stopped = await self.stop(generation)
+        return {"outcome": "cancelled" if stopped else "termination_pending"}
+
     async def dispatch(self, request, on_chunk=None):
         if not isinstance(request, dict) or type(request.get("version")) is not int or request["version"] != 1:
             return {"error": "invalid_request"}
@@ -142,7 +252,7 @@ class Service:
             return {
                 "version": 1, "lane": self.config["lane"],
                 "model_revision": self.config["model_revision"], "state": self.state,
-                "streaming": self.config.get("asr_streaming", False) or self.config.get("tts_streaming", False) or self.config.get("activity_streaming", False), "cancellation": "terminate_process",
+                "streaming": self.config.get("asr_streaming", False) or self.config.get("tts_streaming", False) or self.config.get("activity_streaming", False), "cancellation": "cooperative_reset_or_terminate" if self.config["lane"] in {"activity", "tts"} else "terminate_process",
                 "permission_authority": False, "busy": self.active is not None or self.stream is not None,
                 "successful_inferences": self.successful_inferences,
                 "last_inference_ms": self.last_inference_ms,
@@ -186,12 +296,7 @@ class Service:
             return {"error": "session_capacity"}
         self.sessions[key] = (request["capture_epoch"], request["sequence"], monotonic)
         if operation == "cancel":
-            active_matches = self.active is not None and self.active[:2] == (key, request["request_id"])
-            stream_matches = self.stream is not None and (self.stream["session"], self.stream["id"]) == (key, request["request_id"])
-            if not active_matches and not stream_matches:
-                return {"error": "unknown_request"}
-            stopped = await self.stop(self.generation)
-            return {"outcome": "cancelled" if stopped else "termination_pending"}
+            return await self.cancel_owned(request, deadline)
         if self.stream is not None and operation == "stream" and (key, request["request_id"]) == (self.stream["session"], self.stream["id"]):
             expected = (self.stream["epoch"], self.stream["expires"], self.stream["next"])
             if self.active is not None or (request["capture_epoch"], request["expires_at_ms"], request["chunk_sequence"]) != expected:
@@ -221,6 +326,7 @@ class Service:
             deadline = self.stream["deadline"]
             self.arm_stream(self.generation)
         self.active = (key, request["request_id"], uuid.uuid4())
+        self.active_operation = operation
         owner = self.active
         epoch = request["capture_epoch"]
         payload = request.pop("payload", None)
@@ -249,11 +355,13 @@ class Service:
                     return {"error": "invalid_arguments"}
                 expected_voice = dict(identity(payload["voice"]))
             # Off-loop send: OS pipe capacity must never block cancellation/health.
-            envelope = {"operation": operation, "payload": payload, "first": first, "final": final, "deadline": deadline}
+            envelope = {"owner": str(owner[2]), "operation": operation, "payload": payload, "first": first, "final": final, "deadline": deadline}
             await asyncio.wait_for(asyncio.to_thread(self.pipe.send, envelope), max(0.001, min(2, deadline - time.monotonic())))
             envelope = None
             payload = None
-            result = await self.receive(generation, deadline)
+            result = await self.receive_owned(generation, deadline, owner)
+            if self.cancelling is not None and self.cancelling["owner"] == owner:
+                return await self.retire_owned(generation, owner, result)
             if not self.current(generation, key, epoch, deadline):
                 raise ValueError("stale_reply")
             chunk_count = 0
@@ -268,11 +376,25 @@ class Service:
                     raise ValueError("invalid_stream_reply")
                 chunk_count += 1
                 result.update(lane=self.config["lane"], model_revision=self.config["model_revision"], request_id=owner[1], session_id=key, capture_epoch=epoch)
-                await asyncio.wait_for(on_chunk(result), max(0.001, min(0.5, deadline - time.monotonic())))
+                try:
+                    await asyncio.wait_for(on_chunk(result), max(0.001, min(0.5, deadline - time.monotonic())))
+                except Exception:
+                    # Socket loss may precede the private cancel packet. Request
+                    # cooperative unwind locally while retaining this actual reader.
+                    if operation == "tts_stream" and self.cancel_event is not None:
+                        if self.cancelling is None:
+                            self.cancelling = {"owner": owner, "deadline": min(deadline, time.monotonic() + 2), "done": asyncio.get_running_loop().create_future()}
+                            self.cancel_event.set()
+                        return await self.retire_owned(generation, owner, {"chunk": result["chunk"]})
+                    raise
                 chunk = encoded = result = None
+                if self.cancelling is not None and self.cancelling["owner"] == owner:
+                    return await self.retire_owned(generation, owner, await self.receive_owned(generation, self.cancelling["deadline"], owner))
                 if not self.current(generation, key, epoch, deadline):
                     raise ValueError("stale_reply")
-                result = await self.receive(generation, deadline)
+                result = await self.receive_owned(generation, deadline, owner)
+                if self.cancelling is not None and self.cancelling["owner"] == owner:
+                    return await self.retire_owned(generation, owner, result)
                 if not self.current(generation, key, epoch, deadline):
                     raise ValueError("stale_reply")
             if operation == "tts_stream" and "result" in result:
@@ -287,6 +409,8 @@ class Service:
                     self.last_inference_ms = round((time.monotonic() - started) * 1000, 3)
                 result["lane"] = self.config["lane"]
                 result["model_revision"] = self.config["model_revision"]
+                if operation == "tts_stream":
+                    self.mark_retired(owner)
                 if operation in voice_operations:
                     result.update(request_id=owner[1], session_id=key, capture_epoch=epoch)
                 if operation == "stream":
@@ -295,6 +419,7 @@ class Service:
                     self.stream["next"] += 1
                     if final:
                         self.clear_stream()
+                        self.mark_retired(owner)
                     else:
                         self.arm_stream(generation)
             elif operation in {"stream", "tts_stream"}:
@@ -310,6 +435,7 @@ class Service:
             chunk = encoded = terminal = None
             if self.active == owner:
                 self.active = None
+                self.active_operation = None
 
     async def connection(self, reader, writer):
         if self.connections >= 8:

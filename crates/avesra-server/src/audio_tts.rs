@@ -4,7 +4,10 @@ use avesra_contracts::voice::VoiceIdentity;
 use base64::Engine;
 use serde::Deserialize;
 use std::{
-    sync::{Arc, atomic::Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
@@ -99,6 +102,46 @@ pub struct TtsStream {
     failed: bool,
     complete: bool,
     voice: VoiceIdentity,
+    retirement: Retirement,
+    trace: Option<avesra_core::trace::Span>,
+    first: Option<avesra_core::trace::Span>,
+}
+// The source roster may compact only after actual private retirement. A failed
+// cancellation intentionally leaves a nonzero uncertainty count, without leaking
+// the stream/permit or treating its bounded cleanup wait as terminal evidence.
+#[derive(Default)]
+struct Retirement {
+    counter: Option<Arc<AtomicUsize>>,
+    retired: bool,
+}
+impl Retirement {
+    fn new(counter: Option<Arc<AtomicUsize>>) -> Result<Self, ErrorCode> {
+        if let Some(value) = &counter {
+            value
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_add(1))
+                .map_err(|_| ErrorCode::TooLarge)?;
+        }
+        Ok(Self {
+            counter,
+            retired: true,
+        })
+    }
+    fn confirm(&mut self) {
+        self.retired = true;
+    }
+}
+impl Drop for Retirement {
+    fn drop(&mut self) {
+        if self.retired
+            && let Some(value) = self.counter.take()
+        {
+            value.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+}
+pub struct Source {
+    pub retirement: Arc<AtomicUsize>,
+    pub trace: avesra_core::trace::Link,
 }
 impl AudioClient {
     pub async fn synthesize<F, Fut>(
@@ -107,12 +150,15 @@ impl AudioClient {
         utterance_id: Uuid,
         voice: &VoiceIdentity,
         text: &str,
+        source: Option<Source>,
         authorize: F,
     ) -> Result<TtsStream, ErrorCode>
     where
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = Result<(), ErrorCode>>,
     {
+        let trace = source.as_ref().map(|s| s.trace);
+        let retirement = Retirement::new(source.map(|s| s.retirement))?;
         voice.validate()?;
         if utterance_id.is_nil() || epoch != self.epoch.load(Ordering::SeqCst) {
             return Err(ErrorCode::Stale);
@@ -126,11 +172,7 @@ impl AudioClient {
         {
             return Err(ErrorCode::Malformed);
         }
-        let permit = self
-            .admission
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| ErrorCode::Unavailable)?;
+        let permit = self.observed_admission(avesra_core::engine_observer::Operation::TtsStream)?;
         let health = self.health().await?;
         if !health.streaming
             || health.state != "loaded_unqualified"
@@ -151,6 +193,18 @@ impl AudioClient {
             recent.insert(utterance_id, Instant::now() + Duration::from_secs(31));
         }
         let request_id = Uuid::new_v4();
+        let link = trace.map(|v| v.child(request_id));
+        let trace = link.map(|link| {
+            let mut span = avesra_core::trace::begin(link, avesra_core::trace::Stage::PrivateTts);
+            span.deployment(avesra_core::trace::Deployment::observed(
+                &health.model_revision,
+                "",
+                "",
+            ));
+            span
+        });
+        let first =
+            link.map(|link| avesra_core::trace::begin(link, avesra_core::trace::Stage::FirstAudio));
         let mut request = self.request("tts_stream", request_id, epoch, 30_000)?;
         let issued = request["issued_at_ms"]
             .as_u64()
@@ -173,19 +227,18 @@ impl AudioClient {
             failed: false,
             complete: false,
             voice: voice.clone(),
+            retirement,
+            trace,
+            first,
         };
         tokio::time::timeout(Duration::from_secs(3), async {
-            let mut socket = UnixStream::connect(&self.socket)
-                .await
-                .map_err(|_| ErrorCode::Unavailable)?;
-            if socket.peer_cred().map_err(|_| ErrorCode::Denied)?.uid() != self.uid {
-                return Err(ErrorCode::Denied);
-            }
+            let mut socket = self.connect_checked().await?;
             // The caller's exact source/device/actor/output check follows all
             // preparation/peer awaits and immediately precedes request send.
             authorize().await?;
             stream.current()?;
             stream.sent = true;
+            stream.retirement.retired = false;
             socket
                 .write_u32(encoded.len() as u32)
                 .await
@@ -316,8 +369,14 @@ impl TtsStream {
                     return Err(ErrorCode::Malformed);
                 }
                 self.complete = true;
+                if let Some(span) = self.trace.take() {
+                    span.finish(avesra_core::trace::Outcome::Complete, None);
+                }
+
                 self.socket.take();
                 self.permit.take();
+                self.retirement.confirm();
+                self.retirement = Retirement::default();
                 SpeechEvent::End {
                     utterance_id: self.utterance_id,
                     session_id: session,
@@ -329,6 +388,11 @@ impl TtsStream {
             }
         };
         self.failed = false;
+        if matches!(event, SpeechEvent::Audio { .. })
+            && let Some(span) = self.first.take()
+        {
+            span.finish(avesra_core::trace::Outcome::Complete, None);
+        }
         Ok(event)
     }
 }
@@ -344,11 +408,20 @@ impl Drop for TtsStream {
         let client = self.client.clone();
         let request = self.request_id;
         let remaining = Duration::from_secs(31).saturating_sub(self.started.elapsed());
+        let mut retirement = std::mem::take(&mut self.retirement);
+        let trace = self.trace.take();
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             runtime.spawn(async move {
                 let _permit = permit;
+                // Success acknowledges actual child reset/CUDA retirement or
+                // completed kill/reap; mere socket closure never releases this permit.
                 if client.cancel(request).await.is_err() {
                     tokio::time::sleep(remaining).await;
+                } else {
+                    retirement.confirm();
+                    if let Some(span) = trace {
+                        span.finish(avesra_core::trace::Outcome::Withdrawn, None);
+                    }
                 }
             });
         } else {

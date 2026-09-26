@@ -30,6 +30,129 @@ pub fn read_candidate(directory: &Path, id: Uuid, revision: Uuid) -> Result<Cand
     let _lock = lock_directory(&directory.join("speaker-candidates"))?;
     read_candidate_locked(directory, id, revision)
 }
+/// Native startup reuses the selection, or an unambiguous sole saved candidate.
+pub fn personal_seed(directory: &Path) -> Result<Option<Candidate>, String> {
+    let _lock = lock_directory(&directory.join("speaker-candidates"))?;
+    if let Some(value) = selected(directory)? {
+        return read_candidate_locked(directory, value.id, value.revision).map(Some);
+    }
+    let mut found = None;
+    for entry in std::fs::read_dir(directory.join("speaker-candidates"))
+        .map_err(|_| "Saved voices unavailable")?
+    {
+        let entry = entry.map_err(|_| "Saved voice unreadable")?;
+        if entry.path().extension().is_none_or(|v| v != "dpapi") {
+            continue;
+        }
+        if found.is_some() {
+            return Err("Choose which saved voice belongs to you in People".into());
+        }
+        let name = entry.file_name();
+        let name = name.to_str().ok_or("Saved voice filename invalid")?;
+        let stem = name
+            .strip_suffix(".dpapi")
+            .ok_or("Saved voice filename invalid")?;
+        if stem.len() != 73 || !stem.is_ascii() || stem.as_bytes()[36] != b'-' {
+            return Err("Saved voice filename invalid".into());
+        }
+        let id = Uuid::parse_str(&stem[..36]).map_err(|_| "Saved voice identity invalid")?;
+        let revision = Uuid::parse_str(&stem[37..]).map_err(|_| "Saved voice revision invalid")?;
+        found = Some(read_candidate_locked(directory, id, revision)?);
+    }
+    Ok(found)
+}
+
+fn personal_path(
+    directory: &Path,
+    voice: &avesra_core::voice::personal::Voice,
+) -> std::path::PathBuf {
+    use sha2::{Digest, Sha256};
+    let binding = format!(
+        "{}\n{}\n{}\n{}\n{:?}",
+        voice.actor, voice.owner_revision, voice.microphone, voice.model_revision, voice.source
+    );
+    directory
+        .join("personal-voices")
+        .join(format!("{:x}.dpapi", Sha256::digest(binding.as_bytes())))
+}
+pub fn read_personal(
+    directory: &Path,
+    expected: &avesra_core::voice::personal::Voice,
+) -> Result<Option<avesra_core::voice::personal::Voice>, String> {
+    use std::io::Read;
+    let _lock = lock_directory(&directory.join("personal-voices"))?;
+    let path = personal_path(directory, expected);
+    let meta = match std::fs::symlink_metadata(&path) {
+        Ok(v) => v,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err("Personal voice unavailable".into()),
+    };
+    if !meta.is_file() || meta.is_symlink() || meta.len() > 262144 {
+        return Err("Personal voice record invalid".into());
+    }
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .and_then(|v| v.take(262145).read_to_end(&mut bytes))
+        .map_err(|_| "Personal voice unavailable")?;
+    if bytes.len() > 262144 {
+        return Err("Personal voice limit".into());
+    }
+    let clear = avesra_windows::credentials::unprotect(&bytes)
+        .map_err(|_| "Personal voice protection invalid")?;
+    let voice: avesra_core::voice::personal::Voice =
+        serde_json::from_slice(&clear).map_err(|_| "Personal voice invalid")?;
+    voice
+        .validate()
+        .map_err(|_| "Personal voice measurements invalid")?;
+    if voice.actor != expected.actor
+        || voice.owner_revision != expected.owner_revision
+        || voice.microphone != expected.microphone
+        || voice.model_revision != expected.model_revision
+        || voice.source != expected.source
+        || voice.seed != expected.seed
+    {
+        return Err("Personal voice binding changed".into());
+    }
+    Ok(Some(voice))
+}
+pub fn save_personal(
+    directory: &Path,
+    voice: &avesra_core::voice::personal::Voice,
+    publish: &mut dyn FnMut(&Path, &Path) -> Result<(), String>,
+) -> Result<(), String> {
+    voice
+        .validate()
+        .map_err(|_| "Invalid personal measurements")?;
+    let _lock = lock_directory(&directory.join("personal-voices"))?;
+    if crate::owner::identity(directory).map_err(|_| "Owner unavailable")?
+        != (voice.actor, voice.owner_revision)
+    {
+        return Err("Personal owner changed".into());
+    }
+    let bytes = serde_json::to_vec(voice).map_err(|_| "Personal voice encoding failed")?;
+    if bytes.len() > 200000 {
+        return Err("Personal voice limit".into());
+    }
+    let protected = avesra_windows::credentials::protect(&bytes)
+        .map_err(|_| "Personal voice protection failed")?;
+    let destination = personal_path(directory, voice);
+    let temporary = destination.with_extension("pending");
+    let result = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&temporary)
+            .map_err(|_| "Personal voice writer unavailable")?;
+        file.write_all(&protected)
+            .and_then(|_| file.sync_all())
+            .map_err(|_| "Personal voice write failed")?;
+        drop(file);
+        publish(&temporary, &destination)
+    })();
+    let _ = std::fs::remove_file(temporary);
+    result
+}
 fn read_candidate_locked(directory: &Path, id: Uuid, revision: Uuid) -> Result<Candidate, String> {
     use std::io::Read;
     if id.is_nil() || revision.is_nil() {

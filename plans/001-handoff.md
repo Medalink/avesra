@@ -1,5 +1,10 @@
 # Plan 001 handoff — 2026-09-25
 
+Current continuation: use [the 2026-09-26 acceptance ledger](001-acceptance-2026-09-26.md)
+and [plan index](README.md) for installed artifacts, actual evidence and remaining
+work. They supersede the historical checkpoint states below. Plan001 remains
+IN PROGRESS; previews and compilation do not establish the owner workflows.
+
 ## Latest owner priority: usable development build
 
 Latest delivery checkpoint: [development voice](../docs/evidence/development-voice-2026-09-26.md).
@@ -217,3 +222,14 @@ See `plans/spark2-model-setup.md`, `docs/evidence/m0-preflight.md`, and the exec
 ## Publication alert
 
 GitHub reported 13 dependency alerts (8 high, 5 moderate) during the handoff push. These were not triaged or fixed in this stopped session. Review the repository Dependabot alerts before claiming release readiness; this notice is not an independent vulnerability assessment.
+
+### Browser lifecycle follow-up observed in source
+
+Saved-selection reconnect now has a source implementation (browser-control.md):
+a native startup supervisor and extension alarm/backoff retry use fresh sessions
+under the existing 300-second cap. Each side persists its own explicit Disconnect
+opt-out until that side's Connect; no credential repair, browser launch, old job
+replay or uncertain-cleanup reset is added. Original job admission must fit the
+remaining session horizon. This slice does not perform early rotation. Live
+installation/pairing/reconnect proof remains open; no user browser/account was
+inspected or changed during this implementation.

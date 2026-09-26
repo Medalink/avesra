@@ -1,12 +1,14 @@
 // Bundled fixed functions serialized into the exact document's ISOLATED world.
 // No page-facing command or caller-selected code is accepted.
+import type { Choice, Provider } from "./provider.js";
 type Guard = {
   request: string; url: string; deadline: number; revision: number; settled: boolean;
   current(): boolean; finish(): boolean;
 };
 type Realm = typeof globalThis & { __avesraReadGuard1?: Guard };
-export type ReadParameters = { request: string; url: string; maxBlocks: number; budgetMs: number };
+export type ReadParameters = { request: string; url: string; maxBlocks: number; budgetMs: number; provider: Provider | null; xReady: boolean; inbox:boolean };
 export type Extracted = { started: true; state: "excerpt"; dom_revision: number; title: string; blocks: string[]; truncated: boolean; excluded_content: boolean }
+  | { started: true; state: "provider_inspection"; dom_revision: number; provider: Provider; complete: boolean; choices: Choice[] }
   | { started: true; state: "empty"; dom_revision: number }
   | { started: true; state: "changed" | "unavailable" }
   | { started: false; state: "unavailable"; request: string; url: string; guard_absent: true }
@@ -22,8 +24,11 @@ export function beginPageExcerpt(input: ReadParameters): Extracted {
     typeof input.url !== "string" || input.url.length > 2048 || location.href !== input.url ||
     location.protocol !== "https:" || self !== top || document.contentType !== "text/html" || document.readyState !== "complete" ||
     !Number.isSafeInteger(input.maxBlocks) || input.maxBlocks < 1 || input.maxBlocks > 16 ||
-    !Number.isSafeInteger(input.budgetMs) || input.budgetMs < 1 || input.budgetMs > 10_000 ||
+    !Number.isSafeInteger(input.budgetMs) || input.budgetMs < 1 || input.budgetMs > (input.inbox && input.provider==="gmail" ? 120_000 : 10_000) ||
     !document.body) return { started: false, state: "unavailable", request: input.request, url: input.url, guard_absent: true };
+  if (input.provider !== null && ((input.provider !== "gmail" && input.provider !== "x")
+    || location.origin !== (input.provider === "gmail" ? "https://mail.google.com" : "https://x.com")))
+    return { started: false, state: "unavailable", request: input.request, url: input.url, guard_absent: true };
 
   // Separate closure scope: no extracted text/arrays live in retained callbacks.
   function ownGuard(request: string, url: string, lifetime: number): Guard {
@@ -33,7 +38,7 @@ export function beginPageExcerpt(input: ReadParameters): Extracted {
       request, url, deadline: performance.now() + lifetime, revision: 1, settled: false,
       current() {
         if (performance.now() >= guard.deadline || location.href !== url || document.readyState !== "complete") retire(true);
-        if (!guard.settled && observer.takeRecords().length) retire(true);
+        if (!guard.settled && observer.takeRecords().some(relevant)) retire(true);
         return !guard.settled && !dirty;
       },
       finish() {
@@ -42,7 +47,16 @@ export function beginPageExcerpt(input: ReadParameters): Extracted {
         return unchanged;
       },
     };
-    const observer = new MutationObserver(() => retire(true));
+    // X readiness deliberately excludes the feed. Changes strictly within an
+    // excluded article/feed cannot change the observed account/composer. All
+    // structural changes outside those subtrees, including their replacement,
+    // remain invalidating. Generic excerpt behavior is unchanged.
+    function relevant(record: MutationRecord): boolean {
+      if(!input.xReady)return true;
+      const target=record.target instanceof Element?record.target:record.target.parentElement;
+      return !target?.closest('article,[role="article"],[role="feed"]');
+    }
+    const observer = new MutationObserver(records => {if(records.some(relevant))retire(true);});
     function changed() { retire(true); }
     function retire(changed: boolean) {
       if (changed) { dirty = true; guard.revision = 2; }
@@ -77,6 +91,123 @@ export function beginPageExcerpt(input: ReadParameters): Extracted {
   let visited = 0, bytes = 0, truncated = false, excluded = false;
   const blocks: string[] = [];
   function check() { if (++visited > 2048 || performance.now() >= cutoff) throw limit; }
+  if (input.provider !== null) {
+    const choices: Choice[] = [];
+    const observed = new Map<Element, string>();
+    let complete = true;
+    const bounded = (text: string, maximum: number) => text.length <= maximum
+      && encoder.encode(text).length <= maximum && !/[\p{Cc}\p{Cs}]/u.test(text);
+    const allowed = ["id", "role", "datetime", "aria-label", "aria-labelledby", "aria-controls", "aria-expanded", "aria-selected",
+      "data-testid", "data-message-id", "data-legacy-message-id", "data-thread-id", "data-legacy-thread-id"];
+    const visibility = new Map<HTMLElement,boolean>();
+    const visibleMetadata = (node: HTMLElement) => {
+      const pending: HTMLElement[] = [];
+      let visible = true;
+      for (let parent: HTMLElement | null = node, depth=0; parent; parent=parent.parentElement) {
+        check(); if (++depth>64) throw limit;
+        const cached=visibility.get(parent);if(cached!==undefined){visible=cached;break;}
+        pending.push(parent);
+        if (["SCRIPT","STYLE","NOSCRIPT","TEMPLATE","IFRAME","FRAME","OBJECT","EMBED","INPUT","TEXTAREA","SELECT"].includes(parent.tagName)
+          || parent.isContentEditable || parent.hidden || parent.inert || parent.getAttribute("aria-hidden") === "true"
+          || ["textbox","combobox","spinbutton"].includes(parent.getAttribute("role")??"")) {visible=false;break;}
+        const style=getComputedStyle(parent);
+        if(style.display==="none"||style.visibility!=="visible"||style.opacity==="0"||style.contentVisibility==="hidden"
+          ||style.clipPath!=="none"||style.maskImage!=="none"){visible=false;break;}
+      }
+      for(const item of pending)visibility.set(item,visible);
+      return visible;
+    };
+    const labelText = (element: HTMLElement) => {
+      if (!visibleMetadata(element)) return "";
+      let text=""; const textWalker=document.createTreeWalker(element,NodeFilter.SHOW_ELEMENT|NodeFilter.SHOW_TEXT,{acceptNode(node){
+        check();
+        return node instanceof HTMLElement&&!visibleMetadata(node)?NodeFilter.FILTER_REJECT:NodeFilter.FILTER_ACCEPT;
+      }});
+      for(let child=textWalker.nextNode();child;child=textWalker.nextNode()){
+        check(); if(!(child instanceof Text))continue;
+        if(child.length>128)throw limit;
+        text+=child.data;if(!bounded(text,128))throw limit;
+      }
+      return text.trim();
+    };
+    // No arbitrary selector or provider field meaning is inferred here. These
+    // are actual bounded element metadata for later independently reviewed binding.
+    try {
+      // Discover app chrome only. Message/feed/form/dialog subtrees cannot
+      // contribute a forged account header or consume the header choice budget.
+      const headers: HTMLElement[]=[];
+      const roots=document.createTreeWalker(document.body,NodeFilter.SHOW_ELEMENT,{acceptNode(node){
+        check();if(!(node instanceof HTMLElement)||!visibleMetadata(node))return NodeFilter.FILTER_REJECT;
+        if (["MAIN","ARTICLE","FORM","DIALOG","TABLE","UL","OL"].includes(node.tagName)
+          || ["main","article","feed","dialog","list","grid","table","tree"].includes(node.getAttribute("role")??""))return NodeFilter.FILTER_REJECT;
+        if(node.tagName==="HEADER"||node.getAttribute("role")==="banner"){
+          headers.push(node);return NodeFilter.FILTER_REJECT;
+        }
+        return NodeFilter.FILTER_ACCEPT;
+      }});
+      while(roots.nextNode()){check();}
+      if(headers.length!==1)throw limit;
+      const header=headers[0];
+      const headerId=crypto.randomUUID();observed.set(header,headerId);
+      choices.push({id:headerId,parent:null,role:"banner",label:"",attributes:[]});
+      const walker = document.createTreeWalker(header, NodeFilter.SHOW_ELEMENT, { acceptNode(node) {
+        check();
+        if (!(node instanceof HTMLElement) || ["SCRIPT","STYLE","NOSCRIPT","TEMPLATE","IFRAME","FRAME","OBJECT","EMBED","INPUT","TEXTAREA","SELECT"].includes(node.tagName)
+          || node.isContentEditable || node.hidden || node.inert || node.getAttribute("aria-hidden") === "true") return NodeFilter.FILTER_REJECT;
+        if (!visibleMetadata(node)) return NodeFilter.FILTER_REJECT;
+        if (node.shadowRoot) complete = false;
+        return NodeFilter.FILTER_ACCEPT;
+      }});
+      if (document.body.hidden || document.body.inert || document.body.isContentEditable
+        || document.body.getAttribute("aria-hidden") === "true") throw limit;
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        check();
+        if (!(node instanceof HTMLElement)) continue;
+        const nativeRole: Record<string,Choice["role"]> = { BUTTON:"button",A:"link",ARTICLE:"article",UL:"list",OL:"list",LI:"list_item",H1:"heading",H2:"heading",H3:"heading",H4:"heading",H5:"heading",H6:"heading",MAIN:"main",NAV:"navigation",HEADER:"banner" };
+        const explicit = node.getAttribute("role");
+        const role = explicit === "listitem" ? "list_item" : explicit;
+        const resolved = (["button","link","article","list","list_item","heading","group","banner","main","navigation"].includes(role ?? "") ? role : nativeRole[node.tagName]) as Choice["role"] | undefined;
+        if (!resolved) continue;
+        let label = (node.getAttribute("aria-label") ?? "").replace(/[\n\r\t]+/g," ");
+        const labelled = node.getAttribute("aria-labelledby");
+        if (!label && labelled) {
+          const ids = labelled.split(/\s+/); if (ids.length > 4) { complete = false; continue; }
+          const labels: string[] = [];
+          for (const id of ids) {
+            const element = document.getElementById(id);
+            if (!element || element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element.isContentEditable
+              || element.hidden || element.getAttribute("aria-hidden") === "true") { complete = false; continue; }
+            // textContent can allocate a page-sized string; bound the actual text
+            // nodes and refuse nested controls rather than reading their values.
+            labels.push(labelText(element));
+          }
+          label = labels.join(" ");
+        }
+        if (!label && ["button","link","heading"].includes(resolved)) {
+          label = labelText(node);
+        }
+        label = label.trim();
+        if (!bounded(label,128)) { complete = false; continue; }
+        const attributes: Choice["attributes"] = [];
+        for (const name of allowed) {
+          let value = node.getAttribute(name); if (value === null) continue;
+          if(name==="aria-label")value=value.replace(/[\n\r\t]+/g," ");
+          if (!bounded(value,96) || attributes.length === 4) { complete = false; continue; }
+          attributes.push({name,value});
+        }
+        let parent: string | null = null, depth = 0;
+        for (let ancestor = node.parentElement; ancestor; ancestor = ancestor.parentElement) {
+          check(); if (++depth > 64) throw limit;
+          const id = observed.get(ancestor); if (id) { parent=id;break; }
+        }
+        if (choices.length === 64) throw limit;
+        const id=crypto.randomUUID(); observed.set(node,id);
+        choices.push({id,parent,role:resolved,label,attributes});
+      }
+    } catch { complete = false; }
+    if (!guard.current()) return {started:true,state:"changed"};
+    return {started:true,state:"provider_inspection",dom_revision:guard.revision,provider:input.provider,complete,choices};
+  }
   function clipped(value: string, maximum: number) {
     let result = "", size = 0;
     // Caller already bounds this prefix before invoking the encoder/iteration.

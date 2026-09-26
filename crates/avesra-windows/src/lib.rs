@@ -4,9 +4,13 @@ use serde::Serialize;
 pub mod audio;
 #[cfg(windows)]
 pub mod authentication;
+#[cfg(windows)]
+mod clock;
 pub mod credentials;
 #[cfg(windows)]
 pub mod diagnostics;
+#[cfg(windows)]
+pub mod download;
 #[cfg(windows)]
 pub mod effects;
 #[cfg(windows)]
@@ -17,6 +21,8 @@ mod playback;
 pub mod prompt;
 #[cfg(windows)]
 mod resampling;
+#[cfg(windows)]
+pub mod resources;
 #[cfg(windows)]
 pub mod session;
 #[cfg(windows)]

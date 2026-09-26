@@ -62,19 +62,57 @@ impl Context {
 pub struct Request {
     pub context: Context,
     pub origin: Origin,
-    pub document: Candidate,
+    pub document: Option<Candidate>,
     pub message_limit: u16,
+    pub mode: Mode,
     /// Reduced from the original owner deadline; repeated status never renews it.
     pub remaining_ms: u64,
+}
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Mode {
+    Excerpt,
+    ProviderInspection { provider: super::provider::Provider },
+    XReady { account: String },
+    Inbox { account: String },
 }
 impl Request {
     pub fn validate(&self) -> Result<(), ErrorCode> {
         self.context.validate()?;
-        self.document.validate(&self.origin)?;
+        if let Some(document) = &self.document {
+            document.validate(&self.origin)?;
+        } else if !matches!(self.mode, Mode::XReady { .. }) {
+            return Err(ErrorCode::Malformed);
+        }
+        if let Mode::Inbox { account } = &self.mode
+            && (!super::mailbox::account(account)
+                || self.origin.as_str() != "https://mail.google.com")
+        {
+            return Err(ErrorCode::Malformed);
+        }
+        if let Mode::XReady { account } = &self.mode
+            && (!super::provider::x_account(account)
+                || self.origin.as_str() != super::provider::Provider::X.origin()
+                || self.message_limit != 1)
+        {
+            return Err(ErrorCode::Malformed);
+        }
+        if let Mode::ProviderInspection { provider } = self.mode
+            && (self.origin.as_str() != provider.origin() || self.message_limit != 1)
+        {
+            return Err(ErrorCode::Malformed);
+        }
         if !(1..=100).contains(&self.message_limit) {
             return Err(ErrorCode::Malformed);
         }
-        if self.remaining_ms == 0 || self.remaining_ms > LIFETIME_MS {
+        if self.remaining_ms == 0
+            || self.remaining_ms
+                > if matches!(self.mode, Mode::Inbox { .. }) {
+                    super::mailbox::LIFETIME_MS
+                } else {
+                    LIFETIME_MS
+                }
+        {
             return Err(ErrorCode::Expired);
         }
         encoded_bound(self)
@@ -82,12 +120,29 @@ impl Request {
     /// Correlation only. The ledger must independently claim/revalidate authority.
     pub fn matches_action(&self, action: &Action) -> Result<(), ErrorCode> {
         self.validate()?;
-        let ActionPayload::ReadPage {
-            origin,
-            message_limit,
-        } = &action.payload
-        else {
-            return Err(ErrorCode::Denied);
+        let (origin, message_limit) = match (&action.payload, &self.mode) {
+            (
+                ActionPayload::ReadPage {
+                    origin,
+                    message_limit,
+                },
+                Mode::Excerpt,
+            ) => (origin.as_str(), *message_limit),
+            (
+                ActionPayload::InspectBrowserProvider { provider },
+                Mode::ProviderInspection { provider: expected },
+            ) if provider == expected => (provider.origin(), 1),
+            (ActionPayload::OpenX { account }, Mode::XReady { account: expected })
+                if account == expected =>
+            {
+                (super::provider::Provider::X.origin(), 1)
+            }
+            (ActionPayload::ReadInbox { account, count }, Mode::Inbox { account: expected })
+                if account == expected =>
+            {
+                ("https://mail.google.com", *count)
+            }
+            _ => return Err(ErrorCode::Denied),
         };
         if action.task_id != self.context.task.uuid()
             || action.step_id != self.context.step.uuid()
@@ -97,7 +152,7 @@ impl Request {
             || action.revision != self.context.action_revision.uuid()
             || action.intent_revision != self.context.intent_revision.uuid()
             || Origin::parse(origin)? != self.origin
-            || message_limit != &self.message_limit
+            || message_limit != self.message_limit
         {
             return Err(ErrorCode::Stale);
         }
@@ -124,7 +179,21 @@ pub struct Excerpt {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Outcome {
-    Excerpt { excerpt: Excerpt },
+    Inbox {
+        terminal: super::mailbox::Terminal,
+    },
+    Excerpt {
+        excerpt: Excerpt,
+    },
+    ProviderInspection {
+        probe: super::provider::Probe,
+    },
+    XReady {
+        ready: super::provider::XReady,
+    },
+    XNeedsInput {
+        evidence: super::provider::XNeedsInput,
+    },
     Empty,
     Changed,
     Expired,
@@ -143,9 +212,83 @@ impl Reply {
         if self.context != request.context {
             return Err(ErrorCode::Stale);
         }
+        match (&request.mode, &self.outcome) {
+            (Mode::Inbox { account }, Outcome::Inbox { terminal }) => {
+                terminal.validate()?;
+                let original = request.document.as_ref().ok_or(ErrorCode::Stale)?;
+                let mut before =
+                    url::Url::parse(&original.url).map_err(|_| ErrorCode::Malformed)?;
+                let mut after =
+                    url::Url::parse(&terminal.document.url).map_err(|_| ErrorCode::Malformed)?;
+                before.set_fragment(None);
+                after.set_fragment(None);
+                if terminal.account != *account
+                    || terminal.document.tab != original.tab
+                    || terminal.document.window != original.window
+                    || terminal.document.frame != original.frame
+                    || terminal.document.document != original.document
+                    || before != after
+                {
+                    return Err(ErrorCode::Stale);
+                }
+            }
+            (
+                Mode::Inbox { .. },
+                Outcome::Excerpt { .. }
+                | Outcome::ProviderInspection { .. }
+                | Outcome::XReady { .. }
+                | Outcome::XNeedsInput { .. }
+                | Outcome::Empty,
+            ) => return Err(ErrorCode::Malformed),
+            (_, Outcome::Inbox { .. }) => return Err(ErrorCode::Malformed),
+            (Mode::XReady { account }, Outcome::XNeedsInput { evidence }) => {
+                evidence.validate()?;
+                if evidence.account != *account
+                    || evidence.created != request.document.is_none()
+                    || request
+                        .document
+                        .as_ref()
+                        .is_some_and(|document| evidence.document != *document)
+                {
+                    return Err(ErrorCode::Stale);
+                }
+            }
+            (Mode::XReady { account }, Outcome::XReady { ready }) => {
+                ready.validate()?;
+                if ready.account != *account
+                    || ready.created != request.document.is_none()
+                    || request
+                        .document
+                        .as_ref()
+                        .is_some_and(|document| ready.document != *document)
+                {
+                    return Err(ErrorCode::Stale);
+                }
+            }
+            (
+                Mode::XReady { .. },
+                Outcome::Excerpt { .. } | Outcome::ProviderInspection { .. } | Outcome::Empty,
+            )
+            | (
+                Mode::Excerpt | Mode::ProviderInspection { .. },
+                Outcome::XReady { .. } | Outcome::XNeedsInput { .. },
+            ) => return Err(ErrorCode::Malformed),
+            (Mode::Excerpt, Outcome::ProviderInspection { .. })
+            | (Mode::ProviderInspection { .. }, Outcome::Excerpt { .. } | Outcome::Empty) => {
+                return Err(ErrorCode::Malformed);
+            }
+            (Mode::ProviderInspection { provider }, Outcome::ProviderInspection { probe }) => {
+                probe.validate()?;
+                if probe.provider != *provider || Some(&probe.document) != request.document.as_ref()
+                {
+                    return Err(ErrorCode::Stale);
+                }
+            }
+            _ => {}
+        }
         if let Outcome::Excerpt { excerpt } = &self.outcome {
             excerpt.document.validate(&request.origin)?;
-            if excerpt.document != request.document
+            if Some(&excerpt.document) != request.document.as_ref()
                 || excerpt.dom_revision == 0
                 || excerpt.dom_revision > MAX_SAFE_COUNTER
             {
@@ -177,7 +320,7 @@ fn text(value: &str) -> bool {
         .chars()
         .all(|c| !c.is_control() || matches!(c, '\n' | '\t'))
 }
-fn encoded_bound(value: &impl Serialize) -> Result<(), ErrorCode> {
+pub(super) fn encoded_bound(value: &impl Serialize) -> Result<(), ErrorCode> {
     let bytes = serde_json::to_vec(value).map_err(|_| ErrorCode::Malformed)?;
     // Reserve space for the authenticated control envelope inside MAX_MESSAGE.
     if bytes.len() > MAX_MESSAGE - 2048 {

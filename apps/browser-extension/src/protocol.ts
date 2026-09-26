@@ -1,12 +1,13 @@
-import { context as readContext, request as readRequest, type Request as ReadRequest, type Context as ReadContext } from "./reading.js";
+import {ack as mailboxAck,type Ack as MailboxAck} from "./gmail-job.js";
+import { sameContext, context as readContext, request as readRequest, type Request as ReadRequest, type Context as ReadContext } from "./reading.js";
 import { request as documentRequest, type Request as DocumentRequest } from "./documents.js";
 export type Pairing = { id: string; revision: string };
-export type Challenge = { version: 6; installation: string; connection: string; session: string; challenge: string; nonce: string; pairing: Pairing | null };
+export type Challenge = { version: 10; installation: string; connection: string; session: string; challenge: string; nonce: string; pairing: Pairing | null };
 export type Saved = { version: 1; installation: string; pairing: Pairing; credential: string };
 export type Authority = { selection: string; action_epoch: number; mode_allowed: boolean };
 export type ScopeOperation = "read" | "navigate";
 export type Scope = { state: "pending"; reference: Pairing; origin: string; operations: ScopeOperation[]; remaining_ms: number } | { state: "saving" | "saved" | "declined" | "unavailable"; reference: Pairing };
-export type Status = { version: 6; session: string; generation: number; sequence: number; state: "pending" | "authenticated_no_scopes"; authority: Authority | null; scope: Scope | null; document: DocumentRequest | null; read: ReadRequest | null; read_ack: ReadContext | null };
+export type Status = { version: 10; session: string; generation: number; sequence: number; state: "pending" | "authenticated_no_scopes"; authority: Authority | null; scope: Scope | null; document: DocumentRequest | null; read: ReadRequest | null; read_ack: ReadContext | null; mailbox_ack:MailboxAck|null };
 export function origin(value: unknown): value is string {
   if (typeof value !== "string" || value.length > 512 || !/^[\x21-\x7e]+$/.test(value)) return false;
   try { const url = new URL(value); return url.protocol === "https:" && url.origin === value && !url.username && !url.password && !url.port && !url.search && !url.hash && url.hostname.length <= 253 && url.hostname.split(".").every(label => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label)) && !/^\d+(?:\.\d+){3}$/.test(url.hostname); } catch { return false; }
@@ -21,8 +22,8 @@ export function authority(value: unknown): value is Authority {
   return object(value, ["selection", "action_epoch", "mode_allowed"]) && id(value.selection) && counter(value.action_epoch) && typeof value.mode_allowed === "boolean";
 }
 export function status(value: unknown): value is Status {
-  return object(value, ["version", "session", "generation", "sequence", "state", "authority", "scope", "document", "read", "read_ack"])
-    && value.version === 6 && id(value.session) && counter(value.generation) && counter(value.sequence)
+  return object(value, ["version", "session", "generation", "sequence", "state", "authority", "scope", "document", "read", "read_ack", "mailbox_ack"])
+    && value.version === 10 && id(value.session) && counter(value.generation) && counter(value.sequence)
     && (value.state === "pending" || value.state === "authenticated_no_scopes")
     && (value.authority === null || (value.state === "authenticated_no_scopes" && authority(value.authority)))
     && (value.scope === null || (value.authority !== null && scope(value.scope)))
@@ -31,6 +32,7 @@ export function status(value: unknown): value is Status {
       && value.authority.mode_allowed && readRequest(value.read) && value.read.context.browser_session === value.session
       && value.read.context.browser_generation === value.generation && value.read.context.selection === value.authority.selection
       && value.read.context.source.action_epoch === value.authority.action_epoch))
+    && (value.mailbox_ack===null || (value.state==="authenticated_no_scopes" && mailboxAck(value.mailbox_ack) && readRequest(value.read) && value.read.mode.kind==="inbox" && sameContext(value.mailbox_ack.context,value.read.context)))
     && (value.read_ack === null || (value.state === "authenticated_no_scopes" && readContext(value.read_ack)))
     && new TextEncoder().encode(JSON.stringify(value)).length <= 65536 - 128;
 }
@@ -42,14 +44,14 @@ export function hex(value: unknown): value is string { return typeof value === "
 export function pairing(value: unknown): value is Pairing { return object(value, ["id", "revision"]) && id(value.id) && id(value.revision); }
 export function equal(a: Pairing | null, b: Pairing | null) { return a === null ? b === null : b !== null && a.id === b.id && a.revision === b.revision; }
 export function challenge(value: unknown): value is Challenge {
-  return object(value, ["version", "installation", "connection", "session", "challenge", "nonce", "pairing"]) && value.version === 6 && id(value.installation) && id(value.connection) && id(value.session) && id(value.challenge) && hex(value.nonce) && (value.pairing === null || pairing(value.pairing));
+  return object(value, ["version", "installation", "connection", "session", "challenge", "nonce", "pairing"]) && value.version === 10 && id(value.installation) && id(value.connection) && id(value.session) && id(value.challenge) && hex(value.nonce) && (value.pairing === null || pairing(value.pairing));
 }
 export function saved(value: unknown): value is Saved { return object(value, ["version", "installation", "pairing", "credential"]) && value.version === 1 && id(value.installation) && pairing(value.pairing) && hex(value.credential); }
 export function bytes(value: string): Uint8Array<ArrayBuffer> { return Uint8Array.from(value.match(/../g) ?? [], v => Number.parseInt(v, 16)); }
 export function toHex(value: Uint8Array) { return Array.from(value, v => v.toString(16).padStart(2, "0")).join(""); }
 export function nonce() { return toHex(crypto.getRandomValues(new Uint8Array(32))); }
 export async function comparison(value: Challenge) {
-  const text = ["AVESRA-BROWSER-COMPARE-6", value.installation, value.connection, value.session, value.challenge, value.nonce, ""].join("\n");
+  const text = ["AVESRA-BROWSER-COMPARE-10", value.installation, value.connection, value.session, value.challenge, value.nonce, ""].join("\n");
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
   return (new DataView(digest).getUint32(0, false) % 1_000_000).toString().padStart(6, "0");
 }
@@ -58,7 +60,7 @@ export async function proof(value: Challenge, record: Saved, clientNonce: string
   const raw = bytes(record.credential);
   try {
     const key = await crypto.subtle.importKey("raw", raw, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-    const text = ["AVESRA-BROWSER-AUTH-6", record.pairing.id, record.pairing.revision, value.installation, value.connection, value.session, clientNonce, value.nonce, chrome.runtime.id, ""].join("\n");
+    const text = ["AVESRA-BROWSER-AUTH-10", record.pairing.id, record.pairing.revision, value.installation, value.connection, value.session, clientNonce, value.nonce, chrome.runtime.id, ""].join("\n");
     return toHex(new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(text))));
   } finally { raw.fill(0); }
 }
@@ -116,4 +118,31 @@ export async function recoveryIdentity(): Promise<Pairing | null> {
   await trusted(); const current = await chrome.storage.local.get("avesraPairing");
   const value: unknown = current.avesraPairing;
   return value && typeof value === "object" && "pairing" in value && pairing(value.pairing) ? value.pairing : null;
+}
+
+// This preference carries no credential or grant. Automatic activation never
+// creates an installation identity or repairs malformed saved storage.
+export async function automatic(): Promise<boolean> {return await loadSaved()!==null;}
+
+let preferenceWrite:Promise<void>=Promise.resolve();
+export function automaticPreference(enabled:boolean):Promise<void> {
+  const work=preferenceWrite.then(async()=>{
+    await trusted();
+    const previous=await chrome.storage.local.get("avesraReconnectDisabled");
+    if(previous.avesraReconnectDisabled!==undefined && typeof previous.avesraReconnectDisabled!=="boolean")throw new Error("Reconnect preference unavailable");
+    await chrome.storage.local.set({avesraReconnectDisabled:!enabled});
+    const actual=await chrome.storage.local.get("avesraReconnectDisabled");
+    if(actual.avesraReconnectDisabled!==!enabled)throw new Error("Reconnect preference was not saved");
+  });
+  preferenceWrite=work.catch(()=>{});
+  return work;
+}
+
+export async function loadSaved():Promise<{installation:string;record:Saved}|null>{
+  await trusted();
+  const value=await chrome.storage.local.get(["avesraInstallation","avesraPairing","avesraReconnectDisabled"]);
+  if(value.avesraReconnectDisabled!==undefined && typeof value.avesraReconnectDisabled!=="boolean")throw new Error("Reconnect preference unavailable");
+  if(value.avesraReconnectDisabled===true || value.avesraPairing===undefined)return null;
+  if(!saved(value.avesraPairing) || value.avesraInstallation!==value.avesraPairing.installation)throw new Error("Saved pairing unavailable");
+  return {installation:value.avesraPairing.installation,record:value.avesraPairing};
 }

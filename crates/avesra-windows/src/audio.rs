@@ -172,6 +172,10 @@ impl PlaybackFrame {
 /// Actual post-format device samples. Two channels are L/R; other layouts
 /// replicate the first value to every channel and retain an equal second value.
 pub struct PlaybackReference {
+    /// Stream-local sequence of reference chunks; missing chunks are not silence.
+    pub sequence: u64,
+    /// Predicted first DAC sample mapped from the output callback clock.
+    pub played_at: Option<Instant>,
     /// Final content sample submitted, not proof of audible delivery.
     pub final_submitted: bool,
     pub mix_final_submitted: bool,
@@ -712,6 +716,8 @@ impl Playback {
         for _ in 0..=MAX_AUDIO_QUEUE {
             recycle
                 .try_send(Box::new(PlaybackReference {
+                    sequence: 0,
+                    played_at: None,
                     final_submitted: false,
                     mix_final_submitted: false,
                     speech: false,

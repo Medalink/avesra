@@ -36,6 +36,7 @@ struct Shared {
     reservation: AtomicU64,
     finished: AtomicBool,
     native_lost: AtomicBool,
+    successor_transferred: AtomicBool,
     publication: Mutex<Publication>,
 }
 #[derive(Default)]
@@ -45,6 +46,8 @@ struct Publication {
     published: Option<PublishedRequest>,
     terminal: bool,
     attempted: bool,
+    successor_registered: bool,
+    mailbox_ack: Option<avesra_contracts::browser::mailbox::Ack>,
 }
 impl Shared {
     fn current(&self) -> Result<u64, ErrorCode> {
@@ -63,6 +66,7 @@ impl Shared {
 }
 /// One native preparation offer. Dropping withdraws, never releases resources.
 pub struct Offer {
+    scope: avesra_core::browser_scopes::Grant,
     shared: Arc<Shared>,
     reply: Option<SyncSender<Prepared>>,
     completed: bool,
@@ -73,7 +77,71 @@ pub struct NativeEndpoint {
     shared: Arc<Shared>,
     content: Option<SyncSender<crate::browser_receive::Content>>,
 }
+fn slot_context_invalid(
+    shared: &Shared,
+    context: &avesra_contracts::browser::reading::Context,
+) -> Result<bool, ErrorCode> {
+    shared.current()?;
+    let slot = shared
+        .publication
+        .lock()
+        .map_err(|_| ErrorCode::Unavailable)?;
+    Ok(slot.terminal || slot.context.as_ref() != Some(context))
+}
+/// Actual native endpoint registration, held until the successor output retires.
+/// It keeps cancellation and the original deadline, but grants no new Chrome job.
+pub struct ReadSuccessor {
+    shared: Arc<Shared>,
+}
+impl ReadSuccessor {
+    pub fn current(&self) -> bool {
+        self.shared.current().is_ok() && !self.shared.native_lost.load(Ordering::SeqCst)
+    }
+}
+impl Drop for ReadSuccessor {
+    fn drop(&mut self) {
+        self.shared.preparation.withdraw();
+    }
+}
 impl NativeEndpoint {
+    pub fn successor_transferred(&self) -> bool {
+        self.shared.successor_transferred.load(Ordering::SeqCst)
+    }
+    pub fn mailbox_successor(
+        &self,
+        context: &avesra_contracts::browser::reading::Context,
+    ) -> Result<ReadSuccessor, ErrorCode> {
+        self.shared.current()?;
+        self.shared.reserved()?;
+        let mut slot = self
+            .shared
+            .publication
+            .lock()
+            .map_err(|_| ErrorCode::Unavailable)?;
+        if !slot.terminal || slot.context.as_ref() != Some(context) || slot.successor_registered {
+            return Err(ErrorCode::Stale);
+        }
+        slot.successor_registered = true;
+        Ok(ReadSuccessor {
+            shared: self.shared.clone(),
+        })
+    }
+
+    pub fn mailbox_ack(
+        &self,
+    ) -> Result<Option<avesra_contracts::browser::mailbox::Ack>, ErrorCode> {
+        self.shared.current()?;
+        let slot = self
+            .shared
+            .publication
+            .lock()
+            .map_err(|_| ErrorCode::Unavailable)?;
+        Ok(if slot.terminal {
+            None
+        } else {
+            slot.mailbox_ack.clone()
+        })
+    }
     /// Last operation of the actual native preparation job, after installation.
     pub fn prepared(&self) {
         self.shared.finished.store(true, Ordering::SeqCst);
@@ -126,7 +194,16 @@ impl NativeEndpoint {
             return Ok(());
         }
         drop(slot);
-        if let Some(send) = self.content.take() {
+        if value.is_chunk() {
+            if slot_context_invalid(&self.shared, value.context())? {
+                return Err(ErrorCode::Stale);
+            }
+            self.content
+                .as_ref()
+                .ok_or(ErrorCode::Stale)?
+                .try_send(value)
+                .map_err(|_| ErrorCode::Unavailable)?;
+        } else if let Some(send) = self.content.take() {
             send.try_send(value).map_err(|_| ErrorCode::Unavailable)?;
         }
         Ok(())
@@ -135,8 +212,10 @@ impl NativeEndpoint {
 impl Drop for NativeEndpoint {
     fn drop(&mut self) {
         self.shared.finished.store(true, Ordering::SeqCst);
-        self.shared.native_lost.store(true, Ordering::SeqCst);
-        self.shared.preparation.withdraw();
+        if !self.shared.successor_transferred.load(Ordering::SeqCst) {
+            self.shared.native_lost.store(true, Ordering::SeqCst);
+            self.shared.preparation.withdraw();
+        }
         if let Ok(mut slot) = self.shared.publication.lock() {
             slot.terminal = true;
             slot.held.take();
@@ -178,7 +257,17 @@ pub struct WorkerPreparation {
     released: bool,
 }
 impl WorkerOwner {
-    pub fn offer(&self, execution: &mut ReadExecution<'_>) -> Result<WorkerPreparation, ErrorCode> {
+    pub fn offer(
+        &self,
+        execution: &mut ReadExecution<'_>,
+        scope: avesra_core::browser_scopes::Grant,
+    ) -> Result<WorkerPreparation, ErrorCode> {
+        scope.validate()?;
+        if scope.id.uuid() != execution.permit().action.target_id
+            || scope.actor.uuid() != execution.permit().action.actor_id
+        {
+            return Err(ErrorCode::Denied);
+        }
         let preparation = execution.take_preparation()?;
         if let Err(error) = preparation.remaining_ms() {
             preparation.withdraw();
@@ -190,11 +279,13 @@ impl WorkerOwner {
             reservation: AtomicU64::new(0),
             finished: AtomicBool::new(false),
             native_lost: AtomicBool::new(false),
+            successor_transferred: AtomicBool::new(false),
             publication: Mutex::new(Publication::default()),
         });
         let (reply, receive) = mpsc::sync_channel(1);
         let (content_send, content) = mpsc::sync_channel(1);
         let offer = Offer {
+            scope,
             shared: shared.clone(),
             reply: Some(reply),
             completed: false,
@@ -227,6 +318,9 @@ impl PreparationReceiver {
     }
 }
 impl Offer {
+    pub fn scope(&self) -> &avesra_core::browser_scopes::Grant {
+        &self.scope
+    }
     pub fn withdrawal(&self) -> Withdrawal {
         Withdrawal(self.shared.clone())
     }
@@ -328,6 +422,44 @@ impl Drop for Offer {
     }
 }
 impl WorkerPreparation {
+    pub(crate) fn transfer_mailbox(&self) -> Result<(), ErrorCode> {
+        self.shared.current()?;
+        self.shared.reserved()?;
+        let slot = self
+            .shared
+            .publication
+            .lock()
+            .map_err(|_| ErrorCode::Unavailable)?;
+        if !slot.terminal
+            || !slot.successor_registered
+            || self.shared.native_lost.load(Ordering::SeqCst)
+            || self.shared.successor_transferred.load(Ordering::SeqCst)
+        {
+            return Err(ErrorCode::Stale);
+        }
+        self.shared
+            .successor_transferred
+            .store(true, Ordering::SeqCst);
+        Ok(())
+    }
+
+    pub(crate) fn acknowledge_chunk(
+        &self,
+        ack: avesra_contracts::browser::mailbox::Ack,
+    ) -> Result<(), ErrorCode> {
+        self.shared.current()?;
+        self.shared.reserved()?;
+        let mut slot = self
+            .shared
+            .publication
+            .lock()
+            .map_err(|_| ErrorCode::Unavailable)?;
+        if slot.terminal || slot.context.as_ref() != Some(&ack.context) {
+            return Err(ErrorCode::Stale);
+        }
+        slot.mailbox_ack = Some(ack);
+        Ok(())
+    }
     pub(crate) fn publish(&self, permit: PublicationPermit) -> Result<(), ErrorCode> {
         self.shared.current()?;
         self.shared.reserved()?;
@@ -409,6 +541,8 @@ impl WorkerPreparation {
 }
 impl Drop for WorkerPreparation {
     fn drop(&mut self) {
-        self.shared.preparation.withdraw();
+        if !self.released || !self.shared.successor_transferred.load(Ordering::SeqCst) {
+            self.shared.preparation.withdraw();
+        }
     }
 }

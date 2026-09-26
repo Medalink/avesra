@@ -1,9 +1,12 @@
 //! Native measured qualification, protected review, and revocable live admission.
 #[path = "activity_calibration.rs"]
 pub mod activity;
+#[path = "personal_voice.rs"]
+mod personal;
 use crate::Runtime;
 use avesra_contracts::actors;
 use avesra_core::voice::qualification::COLLECTION_LIFETIME;
+pub use personal::{learn_personal, start_personal};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
@@ -361,21 +364,6 @@ fn gate_condition(value: Condition) -> Option<avesra_core::voice::qualification:
 pub const OUTPUT_REVISION: &str = "native-output-observation-v2";
 pub const SIGNAL_REVISION: &str =
     "sortformer-frame-signal-v1-cd03eee90fbec18297ac31b8c21546e596b7f71c";
-/// Read-only restart revalidation. Device opening remains in the normal producer.
-pub async fn restore(
-    app: &tauri::AppHandle,
-    pairing: &crate::connection::PairingRecord,
-    acknowledged: crate::connection::SessionIdentity,
-) -> Result<bool, String> {
-    let state = app.state::<Runtime>();
-    let _mutation = state
-        .qualification
-        .1
-        .clone()
-        .try_lock_owned()
-        .map_err(|_| "Voice permission management is busy")?;
-    restore_checked(app, pairing, acknowledged, false, || Ok(())).await
-}
 async fn restore_checked(
     app: &tauri::AppHandle,
     pairing: &crate::connection::PairingRecord,
@@ -620,10 +608,11 @@ pub async fn revalidate_voice_admission(window: tauri::WebviewWindow) -> Result<
     Ok(())
 }
 pub struct Admission {
+    pub kind: avesra_core::voice::AdmissionKind,
     pub session: Uuid,
     pub context: avesra_core::voice::Context,
     pub policy: avesra_core::voice::utterance::Policy,
-    pub directed: crate::connection::directedness::Binding,
+    pub directed: Option<crate::connection::directedness::Binding>,
     pub registration: actors::Binding,
 }
 impl State {
@@ -650,6 +639,27 @@ impl State {
         self.0
             .lock()
             .is_ok_and(|v| !v.revoked && !v.suspended && v.active.is_none())
+    }
+    pub fn resume_personal(&self) {
+        if let Ok(mut slot) = self.0.lock()
+            && slot.active.is_none()
+        {
+            slot.revoked = false;
+            slot.suspended = false;
+        }
+    }
+    pub fn suspend_personal(&self, session: Uuid) {
+        if let Ok(mut slot) = self.0.lock()
+            && slot.active.as_ref().is_some_and(|v| {
+                v.id == session
+                    && v.profile
+                        .as_ref()
+                        .is_some_and(|p| p.kind() == avesra_core::voice::AdmissionKind::Personal)
+            })
+        {
+            slot.clear();
+            slot.suspended = true;
+        }
     }
     pub fn capture_gate_pcm(
         &self,
@@ -724,11 +734,17 @@ impl State {
             .as_ref()
             .filter(|v| v.binding.current(state, local))?;
         let profile = session.profile.as_ref().filter(|v| v.valid())?;
+        if profile.kind() != avesra_core::voice::AdmissionKind::Personal
+            && session.directed.is_none()
+        {
+            return None;
+        }
         Some(Admission {
+            kind: profile.kind(),
             session: session.id,
             context: session.context(local.capture_epoch),
             policy: profile.endpoint_policy(),
-            directed: session.directed.clone()?,
+            directed: session.directed.clone(),
             registration: session.binding.registration.clone(),
         })
     }
@@ -1683,7 +1699,7 @@ pub async fn revoke_voice_admission(window: tauri::WebviewWindow) -> Result<(), 
         .clone()
         .try_lock_owned()
         .map_err(|_| "Voice permission management is busy")?;
-    {
+    let pending = {
         let mut local = state.local.lock().map_err(|_| "Local state unavailable")?;
         let mut slot = state
             .qualification
@@ -1695,18 +1711,20 @@ pub async fn revoke_voice_admission(window: tauri::WebviewWindow) -> Result<(), 
         drop(slot);
         local.voice_ready = false;
         local.enrolled = false;
+        local.settings.explicit_mute = true;
         local.capture_epoch = local.capture_epoch.saturating_add(1);
         local.refresh();
         state.publish(&local);
         use tauri::Emitter;
         let _ = app.emit("runtime-state", local.clone());
-    }
+        crate::enqueue(&state, local.settings.clone())
+    };
     let directory = app
         .path()
         .app_data_dir()
         .map_err(|_| "Profile directory unavailable")?;
     // The actual revocation coordinator survives a disappearing Settings caller.
-    tauri::async_runtime::spawn(async move {
+    let result = tauri::async_runtime::spawn(async move {
         let _mutation = mutation;
         let owner = app
             .state::<Runtime>()
@@ -1722,7 +1740,9 @@ pub async fn revoke_voice_admission(window: tauri::WebviewWindow) -> Result<(), 
         .map_err(|_| "Qualification revocation writer stopped")?
     })
     .await
-    .map_err(|_| "Qualification revocation coordinator stopped")?
+    .map_err(|_| "Qualification revocation coordinator stopped")?;
+    pending?.await.map_err(|_| "Settings writer stopped")??;
+    result
 }
 
 #[tauri::command]

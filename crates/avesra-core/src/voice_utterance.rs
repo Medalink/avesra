@@ -69,6 +69,7 @@ struct Active {
 }
 pub struct Segmenter {
     policy: Policy,
+    minimum_samples: u64,
     next: u64,
     quiet: u32,
     active: Option<Active>,
@@ -82,6 +83,7 @@ impl Segmenter {
     pub fn new(policy: Policy) -> Self {
         Self {
             policy,
+            minimum_samples: 0,
             next: 0,
             quiet: 0,
             active: None,
@@ -171,7 +173,14 @@ impl Segmenter {
                         events.push(Boundary::Cancel {
                             frame: self.next + 1,
                         });
-                    } else if self.quiet >= self.policy.quiet {
+                    } else if self.quiet >= self.policy.quiet
+                        && (self.next + 1 - active.start) * u64::from(FRAME_SAMPLES)
+                            + active
+                                .start
+                                .saturating_mul(u64::from(FRAME_SAMPLES))
+                                .min(PRE_ROLL)
+                            >= self.minimum_samples
+                    {
                         let active = self.active.take().ok_or(ErrorCode::InvalidTransition)?;
                         events.push(Boundary::End {
                             start: active.start,
@@ -246,7 +255,9 @@ pub struct Owner {
     base: u64,
     samples: u64,
     sequence: u64,
-    origin: Option<Instant>,
+    // Actual hardware-projected frame times, bounded alongside retained PCM.
+    // A continuous device clock can drift from nominal rate over many windows.
+    times: VecDeque<(u64, Instant)>,
     active: Option<(Uuid, u64)>,
     failed: bool,
 }
@@ -272,7 +283,7 @@ impl Owner {
             base: 0,
             samples: 0,
             sequence: 0,
-            origin: None,
+            times: VecDeque::new(),
             active: None,
             failed: false,
         })
@@ -294,33 +305,41 @@ impl Owner {
         {
             self.failed = true;
             self.pcm.clear();
+            self.times.clear();
             return Err(ErrorCode::Stale);
         }
-        let origin = *self.origin.get_or_insert(captured);
-        let expected = origin
-            .checked_add(Duration::from_micros(
-                self.samples
-                    .checked_mul(1_000_000)
-                    .ok_or(ErrorCode::TooLarge)?
-                    / 16_000,
-            ))
-            .ok_or(ErrorCode::TooLarge)?;
-        if if captured >= expected {
-            captured.duration_since(expected)
-        } else {
-            expected.duration_since(captured)
-        } > Duration::from_millis(1)
-        {
-            self.failed = true;
-            self.pcm.clear();
-            return Err(ErrorCode::Stale);
+        if let Some((_, previous)) = self.times.back() {
+            let expected = previous
+                .checked_add(Duration::from_millis(20))
+                .ok_or(ErrorCode::TooLarge)?;
+            let drift = captured
+                .checked_duration_since(expected)
+                .or_else(|| expected.checked_duration_since(captured))
+                .ok_or(ErrorCode::Stale)?;
+            // Match the native capture clock's established adjacent jitter bound.
+            if captured <= *previous || drift > Duration::from_millis(2) {
+                self.failed = true;
+                self.pcm.clear();
+                self.times.clear();
+                return Err(ErrorCode::Stale);
+            }
         }
+        self.times.push_back((self.samples, captured));
         self.pcm.extend(samples);
         self.samples = self
             .samples
             .checked_add(samples.len() as u64)
             .ok_or(ErrorCode::TooLarge)?;
         self.sequence = sequence;
+        Ok(())
+    }
+    /// Retain genuine quiet until the analysis backend's minimum real span.
+    /// Must be set before capture starts; never pads PCM or renews timestamps.
+    pub fn retain_minimum_samples(&mut self, samples: u32) -> Result<(), ErrorCode> {
+        if self.samples != 0 || self.segmenter.next != 0 || u64::from(samples) >= MAX_SAMPLES {
+            return Err(ErrorCode::InvalidTransition);
+        }
+        self.segmenter.minimum_samples = u64::from(samples);
         Ok(())
     }
     pub fn observe(
@@ -333,6 +352,7 @@ impl Owner {
         if result.is_err() {
             self.failed = true;
             self.pcm.clear();
+            self.times.clear();
             self.active = None;
         }
         result
@@ -352,7 +372,6 @@ impl Owner {
         if self.failed || scored_samples > self.samples || (end && scored_samples != self.samples) {
             return Err(ErrorCode::Stale);
         }
-        let origin = self.origin.ok_or(ErrorCode::InvalidTransition)?;
         let mut completed = Vec::new();
         for event in self.segmenter.push(offset, frames, end)? {
             match event {
@@ -378,8 +397,8 @@ impl Owner {
                     if start < self.base || last > self.samples || last - start > MAX_SAMPLES {
                         return Err(ErrorCode::Stale);
                     }
-                    let started = origin + Duration::from_micros(start * 1_000_000 / 16_000);
-                    let ended = origin + Duration::from_micros(last * 1_000_000 / 16_000);
+                    let started = self.sample_time(start)?;
+                    let ended = self.sample_time(last)?;
                     if started.elapsed() >= Duration::from_secs(10) {
                         return Err(ErrorCode::Expired);
                     }
@@ -413,10 +432,33 @@ impl Owner {
         let discard = keep.saturating_sub(self.base).min(self.pcm.len() as u64);
         self.pcm.drain(..discard as usize);
         self.base += discard;
+        while self
+            .times
+            .front()
+            .is_some_and(|(sample, _)| sample.saturating_add(320) <= self.base)
+        {
+            self.times.pop_front();
+        }
         if end {
             self.pcm.clear();
+            self.times.clear();
             self.active = None;
         }
         Ok(completed)
+    }
+    fn sample_time(&self, offset: u64) -> Result<Instant, ErrorCode> {
+        let (sample, captured) = self
+            .times
+            .iter()
+            .rev()
+            .find(|(sample, _)| *sample <= offset)
+            .ok_or(ErrorCode::Stale)?;
+        let within = offset
+            .checked_sub(*sample)
+            .filter(|v| *v <= 320)
+            .ok_or(ErrorCode::Stale)?;
+        captured
+            .checked_add(Duration::from_micros(within * 1_000_000 / 16_000))
+            .ok_or(ErrorCode::TooLarge)
     }
 }

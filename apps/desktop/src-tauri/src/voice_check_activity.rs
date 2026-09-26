@@ -4,7 +4,9 @@ use crate::{
     Runtime,
     connection::{MediaEndpoint, PairingRecord, SessionIdentity},
 };
-use avesra_contracts::activity::{Acknowledgment, Activity, Packet, REVISION, Start, StreamReply};
+use avesra_contracts::activity::{
+    Acknowledgment, Activity, Packet, REVISION, STREAM_VERSION, Start, StreamReply,
+};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use futures_util::{SinkExt, StreamExt};
 use std::time::{Duration, Instant};
@@ -16,6 +18,7 @@ pub struct Stream {
     session: SessionIdentity,
     request: Uuid,
     started: Instant,
+    acknowledged: Instant,
     sequence: u64,
     samples: u32,
     frames: u32,
@@ -38,7 +41,7 @@ impl Stream {
         let request = Uuid::new_v4();
         let started = Instant::now();
         let start = Start {
-            version: 1,
+            version: STREAM_VERSION,
             session_id: session.id,
             capture_epoch: session.epoch,
             request_id: request,
@@ -57,12 +60,13 @@ impl Stream {
                 .await
                 .ok_or("Activity disconnected")?
                 .map_err(|_| "Activity connection lost")?;
+            let acknowledged = Instant::now();
             let Message::Text(text) = reply else {
                 return Err("Invalid activity acknowledgment");
             };
             let ack: Acknowledgment =
                 serde_json::from_str(&text).map_err(|_| "Invalid activity acknowledgment")?;
-            if ack.version != 1
+            if ack.version != STREAM_VERSION
                 || ack.session_id != session.id
                 || ack.capture_epoch != session.epoch
                 || ack.request_id != request
@@ -70,9 +74,9 @@ impl Stream {
             {
                 return Err("Activity acknowledgment changed");
             }
-            Ok(())
+            Ok(acknowledged)
         };
-        tokio::time::timeout(Duration::from_secs(3), work)
+        let acknowledged = tokio::time::timeout(Duration::from_secs(3), work)
             .await
             .map_err(|_| "Activity start timed out")??;
         Ok(Self {
@@ -80,6 +84,7 @@ impl Stream {
             session,
             request,
             started,
+            acknowledged,
             sequence: 1,
             samples: 0,
             frames: 0,
@@ -122,14 +127,29 @@ impl Stream {
             .checked_add((frame.pcm.len() / 2) as u32)
             .filter(|v| *v <= 160000)
             .ok_or("Activity sample limit exceeded")?;
-        let packet = Packet {
+        let mut packet = Packet {
             sequence: self.sequence,
             sample_offset: self.samples,
+            captured_age_ms: 0,
+            elapsed_since_ack_ms: 0,
             pcm_s16le: STANDARD.encode(frame.pcm),
             r#final: frame.final_chunk,
         };
         let span = performance.begin(Operation::Activity, Stage::ActivityExchange, check);
         let work = async {
+            // Recheck after preparation/telemetry; neither a new socket nor queue
+            // residence gives old microphone samples a fresh capture timestamp.
+            let now = Instant::now();
+            let age = now
+                .checked_duration_since(frame.captured)
+                .filter(|age| *age <= Duration::from_millis(500))
+                .ok_or("Activity capture expired before send")?;
+            packet.captured_age_ms = age.as_micros().div_ceil(1000) as u16;
+            let elapsed = now.duration_since(self.acknowledged);
+            if elapsed >= Duration::from_secs(20) {
+                return Err("Activity stream expired before send");
+            }
+            packet.elapsed_since_ack_ms = elapsed.as_millis() as u32;
             self.socket
                 .send(Message::Text(
                     serde_json::to_string(&packet)
@@ -160,7 +180,7 @@ impl Stream {
         });
         let reply = result?;
         current()?;
-        if reply.version != 1
+        if reply.version != STREAM_VERSION
             || reply.session_id != self.session.id
             || reply.capture_epoch != self.session.epoch
             || reply.request_id != self.request

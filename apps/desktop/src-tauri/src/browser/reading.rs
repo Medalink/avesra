@@ -13,6 +13,7 @@ pub(super) struct Coordinator {
 struct Slot {
     generation: u64,
     active: Option<Active>,
+    successor: Option<(Id, Uuid, Uuid, Withdrawal)>,
 }
 struct Active {
     id: Uuid,
@@ -25,6 +26,9 @@ struct Active {
 impl Coordinator {
     pub(super) fn invalidate(&self) {
         if let Ok(mut slot) = self.slot.lock() {
+            if let Some((_, _, _, signal)) = slot.successor.take() {
+                signal.cancel();
+            }
             slot.generation = slot.generation.saturating_add(1);
             if let Some(active) = slot.active.take() {
                 active.signal.cancel();
@@ -38,6 +42,14 @@ impl Coordinator {
         let Ok(mut slot) = self.slot.lock() else {
             return true;
         };
+        if slot
+            .successor
+            .as_ref()
+            .is_some_and(|(_, a, r, _)| *a == actor && *r == revision)
+            && let Some((_, _, _, signal)) = slot.successor.take()
+        {
+            signal.cancel();
+        }
         if slot
             .active
             .as_ref()
@@ -59,6 +71,9 @@ impl Coordinator {
     }
     fn claim(&self, actor: Uuid, signal: Withdrawal) -> Result<Owner, ErrorCode> {
         let mut slot = self.slot.lock().map_err(|_| ErrorCode::Unavailable)?;
+        if let Some((_, _, _, signal)) = slot.successor.take() {
+            signal.cancel();
+        }
         if slot.active.is_some() || slot.generation == u64::MAX {
             return Err(ErrorCode::Unavailable);
         }
@@ -142,6 +157,65 @@ impl Coordinator {
         }
         Ok(())
     }
+    pub(super) fn retire_mailbox_successor(&self, request: Id) {
+        if let Ok(mut slot) = self.slot.lock()
+            && slot
+                .successor
+                .as_ref()
+                .is_some_and(|(id, _, _, _)| *id == request)
+            && let Some((_, _, _, signal)) = slot.successor.take()
+        {
+            signal.cancel();
+        }
+    }
+    pub(super) fn mailbox_successor(
+        &self,
+        state: &Runtime,
+        local: &avesra_core::state::LocalState,
+        inner: &Inner,
+        context: &browser::reading::Context,
+    ) -> Result<avesra_windows::browser_read_channel::ReadSuccessor, ErrorCode> {
+        let admission = self
+            .slot
+            .lock()
+            .map_err(|_| ErrorCode::Unavailable)?
+            .active
+            .as_ref()
+            .and_then(|v| v.admission.upgrade())
+            .ok_or(ErrorCode::Stale)?;
+        admission.current_locked(state, local, inner)?;
+        let mut slot = self.slot.lock().map_err(|_| ErrorCode::Unavailable)?;
+        if slot.successor.is_some() {
+            return Err(ErrorCode::Unavailable);
+        }
+        let active = slot
+            .active
+            .as_ref()
+            .filter(|v| v.id == admission.owner.id && v.actor == context.actor.uuid())
+            .ok_or(ErrorCode::Stale)?;
+        let registration = active.registration.ok_or(ErrorCode::Stale)?;
+        let successor = active
+            .endpoint
+            .as_ref()
+            .ok_or(ErrorCode::Stale)?
+            .mailbox_successor(context)?;
+        slot.successor = Some((
+            context.request,
+            active.actor,
+            registration,
+            active.signal.clone(),
+        ));
+        Ok(successor)
+    }
+    pub(super) fn mailbox_ack(&self) -> Result<Option<browser::mailbox::Ack>, ErrorCode> {
+        let slot = self.slot.lock().map_err(|_| ErrorCode::Unavailable)?;
+        slot.active
+            .as_ref()
+            .and_then(|a| a.endpoint.as_ref())
+            .map(NativeEndpoint::mailbox_ack)
+            .transpose()
+            .map(Option::flatten)
+    }
     pub(super) fn settled(
         &self,
         proof: &avesra_windows::browser_receive::Settlement,
@@ -194,6 +268,10 @@ impl Drop for Owner {
         if let Ok(mut slot) = self.slot.lock()
             && slot.active.as_ref().is_some_and(|v| v.id == self.id)
             && let Some(active) = slot.active.take()
+            && !active
+                .endpoint
+                .as_ref()
+                .is_some_and(NativeEndpoint::successor_transferred)
         {
             active.signal.cancel();
         }
@@ -275,6 +353,14 @@ fn admit(app: &tauri::AppHandle, offer: &Offer) -> Result<Arc<Admission>, ErrorC
         || session.generation != state.connection_generation.load(Ordering::SeqCst)
     {
         return Err(ErrorCode::Stale);
+    }
+    let attempt = inner.attempt.as_ref().ok_or(ErrorCode::Stale)?;
+    let remaining = offer.remaining_ms()?.saturating_add(1);
+    let horizon = Duration::from_secs(300)
+        .checked_sub(attempt.started.elapsed())
+        .ok_or(ErrorCode::Expired)?;
+    if horizon <= Duration::from_millis(remaining) {
+        return Err(ErrorCode::Expired);
     }
     let signal = offer.withdrawal();
     let target = documents::reserve_target(&state, &local, &inner, offer)?;

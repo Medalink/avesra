@@ -2,12 +2,19 @@
 use crate::ErrorCode;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-pub const VERSION: u16 = 2;
+#[path = "planner_retirement.rs"]
+pub mod retirement;
+pub const VERSION: u16 = 4;
 pub const MAX_BUDGET_MS: u64 = 30_000;
 pub const MAX_REQUEST_BYTES: usize = 32_768;
+pub const MAX_DIALOGUE_PAIRS: usize = 3;
+pub const MAX_DIALOGUE_BYTES: usize = 4096;
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Context {
+    /// Durable native claim order. Zero exists only in read-only legacy history.
+    #[serde(default)]
+    pub ordinal: u64,
     pub request: Uuid,
     pub turn: Uuid,
     pub turn_revision: Uuid,
@@ -33,7 +40,7 @@ impl Context {
         ]
         .iter()
         .any(Uuid::is_nil)
-            || [self.capture_epoch, self.action_epoch]
+            || [self.ordinal, self.capture_epoch, self.action_epoch]
                 .iter()
                 .any(|v| *v == 0 || *v > crate::browser::MAX_SAFE_COUNTER)
         {
@@ -55,7 +62,16 @@ pub struct Request {
     pub version: u16,
     pub context: Context,
     pub text: String,
+    /// Bounded native-selected content, never an acceptance or action capability.
+    #[serde(default)]
+    pub dialogue: Vec<DialoguePair>,
     pub remaining_ms: u64,
+}
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DialoguePair {
+    pub user: String,
+    pub assistant: Response,
 }
 impl Request {
     pub fn validate(&self) -> Result<(), ErrorCode> {
@@ -65,6 +81,20 @@ impl Request {
         self.context.validate()?;
         if !valid_text(&self.text) || self.remaining_ms == 0 || self.remaining_ms > MAX_BUDGET_MS {
             return Err(ErrorCode::Malformed);
+        }
+        if self.dialogue.len() > MAX_DIALOGUE_PAIRS {
+            return Err(ErrorCode::TooLarge);
+        }
+        let mut bytes = 0usize;
+        for pair in &self.dialogue {
+            if !valid_text(&pair.user) || matches!(pair.assistant, Response::Proposal { .. }) {
+                return Err(ErrorCode::Malformed);
+            }
+            pair.assistant.validate()?;
+            bytes += pair.user.len() + pair.assistant.text().len();
+        }
+        if bytes > MAX_DIALOGUE_BYTES {
+            return Err(ErrorCode::TooLarge);
         }
         Ok(())
     }

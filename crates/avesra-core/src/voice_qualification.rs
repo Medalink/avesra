@@ -205,11 +205,11 @@ impl Report {
         let point = measurement.point(&candidate, &context, adapters)?;
         let mut profile = Qualification::new(candidate, context, point.clone())?.profile;
         profile.kind = super::AdmissionKind::Development;
-        profile.valid_until = Instant::now() + Duration::from_secs(12 * 3600);
+        profile.valid_until = Some(Instant::now() + Duration::from_secs(12 * 3600));
         let report = Self {
             version: 2,
-            candidate: profile.candidate.id,
-            candidate_revision: profile.candidate.revision,
+            candidate: profile.candidate.as_ref().ok_or(ErrorCode::Malformed)?.id,
+            candidate_revision: profile.candidate_revision(),
             qualification: profile.qualification_revision,
             point,
             counts: [Count::default(); 9],
@@ -279,7 +279,7 @@ impl Report {
             let mut profile = Qualification::new(candidate, context, point)?.profile;
             profile.kind = super::AdmissionKind::Development;
             profile.qualification_revision = self.qualification;
-            profile.valid_until = Instant::now() + Duration::from_secs(12 * 3600);
+            profile.valid_until = Some(Instant::now() + Duration::from_secs(12 * 3600));
             return Ok(profile);
         }
         if self.version != 1
@@ -349,7 +349,8 @@ impl Qualification {
         Ok(Self {
             profile: QualifiedProfile {
                 kind: super::AdmissionKind::ReleaseQualified,
-                candidate,
+                candidate: Some(candidate),
+                personal: None,
                 actor: point.actor,
                 grant_revision: point.grant_revision,
                 qualification_revision: Uuid::new_v4(),
@@ -363,7 +364,7 @@ impl Qualification {
                 endpoint_policy: point.endpoint_policy,
                 minimum_voiced_samples: point.minimum_voiced_samples,
                 maximum_clipped_fraction: point.maximum_clipped_fraction,
-                valid_until: frozen + COLLECTION_LIFETIME,
+                valid_until: Some(frozen + COLLECTION_LIFETIME),
             },
             context,
             gate: TurnGate::default(),
@@ -439,7 +440,7 @@ impl Qualification {
                     && *utterance == value.utterance
                     && context == current
             }
-            super::DirectedIntent::Unknown => false,
+            super::DirectedIntent::Unknown | super::DirectedIntent::Personal { .. } => false,
         };
         let signal_known = matches!(&value.signal, super::SignalEvidence::Measured {
             adapter_revision, voiced_samples, total_samples, clipped_samples,
@@ -544,8 +545,8 @@ impl Qualification {
         let profile = &self.profile;
         Ok(Report {
             version: 1,
-            candidate: profile.candidate.id,
-            candidate_revision: profile.candidate.revision,
+            candidate: profile.candidate.as_ref().ok_or(ErrorCode::Malformed)?.id,
+            candidate_revision: profile.candidate_revision(),
             qualification: profile.qualification_revision,
             point: OperatingPoint {
                 actor: profile.actor,
@@ -570,7 +571,7 @@ impl Qualification {
         if !self.same_authority(current) || !self.reviewable() {
             return Err(ErrorCode::Denied);
         }
-        self.profile.valid_until = Instant::now() + Duration::from_secs(12 * 3600);
+        self.profile.valid_until = Some(Instant::now() + Duration::from_secs(12 * 3600));
         Ok(self.profile)
     }
 }

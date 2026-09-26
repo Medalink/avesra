@@ -5,11 +5,14 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+#[path = "memory_conversation.rs"]
+pub mod conversation;
+
+pub(crate) const LEGACY_MEMORY_SCHEMA: &str = "CREATE TABLE private_memories(id TEXT PRIMARY KEY NOT NULL,actor TEXT NOT NULL,revision TEXT NOT NULL,source_task TEXT NOT NULL REFERENCES tasks(id),body TEXT CHECK(body IS NULL OR length(CAST(body AS BLOB))<=8192))";
+pub(crate) const MEMORY_SCHEMA: &str = "CREATE TABLE \"private_memories\"(id TEXT PRIMARY KEY NOT NULL,actor TEXT NOT NULL,revision TEXT NOT NULL,source_task TEXT REFERENCES tasks(id),body TEXT CHECK(body IS NULL OR length(CAST(body AS BLOB))<=8192),source_turn TEXT REFERENCES accepted_conversations(id),CHECK((source_task IS NULL)!=(source_turn IS NULL)))";
+
 pub(crate) const TABLES: [(&str, &str); 4] = [
-    (
-        "private_memories",
-        "CREATE TABLE private_memories(id TEXT PRIMARY KEY NOT NULL,actor TEXT NOT NULL,revision TEXT NOT NULL,source_task TEXT NOT NULL REFERENCES tasks(id),body TEXT CHECK(body IS NULL OR length(CAST(body AS BLOB))<=8192))",
-    ),
+    ("private_memories", LEGACY_MEMORY_SCHEMA),
     (
         "memory_revisions",
         "CREATE TABLE memory_revisions(revision TEXT PRIMARY KEY NOT NULL,memory TEXT NOT NULL REFERENCES private_memories(id),body TEXT CHECK(body IS NULL OR length(CAST(body AS BLOB))<=8192))",
@@ -24,7 +27,12 @@ pub(crate) const TABLES: [(&str, &str); 4] = [
     ),
 ];
 pub(crate) fn check_schema(db: &Connection, version: u64) -> Result<(), ErrorCode> {
-    for (name, schema) in TABLES {
+    for (name, old_schema) in TABLES {
+        let schema = if name == "private_memories" && version >= 23 {
+            MEMORY_SCHEMA
+        } else {
+            old_schema
+        };
         let mut query = db
             .prepare(
                 "SELECT type,name,sql FROM sqlite_master WHERE tbl_name=?1 ORDER BY type LIMIT 3",
@@ -63,19 +71,30 @@ pub struct Source {
     pub target: TaskTarget,
     pub payload: ActionPayload,
 }
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AcceptedSource {
+    pub turn: Uuid,
+    pub revision: Uuid,
+}
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Content {
+    NamedFact { key: String, value: String },
     Fact { value: String },
     Routine { name: String, disabled: bool },
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Entry {
+    #[serde(default)]
+    pub accepted_source: Option<AcceptedSource>,
+    #[serde(default)]
+    pub changed_by: Option<AcceptedSource>,
     pub id: Uuid,
     pub actor: Uuid,
     pub revision: Uuid,
-    pub source: Source,
+    pub source: Option<Source>,
     pub content: Content,
     pub corrected: bool,
     pub created_ms: u64,
@@ -129,23 +148,13 @@ fn compact(tx: &rusqlite::Transaction<'_>) -> Result<(), ErrorCode> {
     tx.execute("DELETE FROM private_memories WHERE body IS NULL AND id NOT IN (SELECT memory FROM memory_revisions) AND id NOT IN (SELECT memory FROM routine_invocations) AND id NOT IN (SELECT memory FROM memory_events)",[]).map_err(|_|ErrorCode::Storage)?;
     Ok(())
 }
-impl Entry {
+impl Source {
     fn validate(&self) -> Result<(), ErrorCode> {
-        if [
-            self.id,
-            self.actor,
-            self.revision,
-            self.source.task,
-            self.source.turn,
-            self.source.action,
-        ]
-        .iter()
-        .any(Uuid::is_nil)
-        {
+        if [self.task, self.turn, self.action].iter().any(Uuid::is_nil) {
             return Err(ErrorCode::Malformed);
         }
-        self.source.target.validate()?;
-        let same = match (&self.source.target, &self.source.payload) {
+        self.target.validate()?;
+        let same = match (&self.target, &self.payload) {
             (
                 TaskTarget::Prompt { binding },
                 ActionPayload::FillPrompt {
@@ -156,18 +165,63 @@ impl Entry {
                 app == app_id
             }
             (TaskTarget::Volume { .. }, ActionPayload::SetVolume { percent }) => *percent <= 100,
+            (TaskTarget::Vpn { profile }, ActionPayload::ConnectVpn { profile_id }) => {
+                profile.id == *profile_id
+            }
             (TaskTarget::Diagnostic { catalog }, ActionPayload::Diagnostic { catalog_entry }) => {
                 catalog.id() == *catalog_entry
             }
             _ => false,
         };
-        if !same {
+        if same {
+            Ok(())
+        } else {
+            Err(ErrorCode::Malformed)
+        }
+    }
+}
+impl Entry {
+    pub(crate) fn validate(&self) -> Result<(), ErrorCode> {
+        if [self.id, self.actor, self.revision]
+            .iter()
+            .any(Uuid::is_nil)
+            || self.source.is_some() == self.accepted_source.is_some()
+        {
             return Err(ErrorCode::Malformed);
         }
+        if let Some(source) = &self.source {
+            source.validate()?;
+            if self.changed_by.is_some() {
+                return Err(ErrorCode::Malformed);
+            }
+        }
+        for source in [self.accepted_source.as_ref(), self.changed_by.as_ref()]
+            .into_iter()
+            .flatten()
+        {
+            if source.turn.is_nil() || source.revision.is_nil() {
+                return Err(ErrorCode::Malformed);
+            }
+        }
         match &self.content {
-            Content::Fact { value } => text(value)?,
+            Content::NamedFact { key, value } => {
+                if self.accepted_source.is_none()
+                    || conversation::key(key)?.as_str() != key
+                    || value.len() > 512
+                    || value.chars().any(char::is_control)
+                {
+                    return Err(ErrorCode::Malformed);
+                }
+                text(value)?;
+            }
+            Content::Fact { value } => {
+                if self.source.is_none() {
+                    return Err(ErrorCode::Malformed);
+                }
+                text(value)?;
+            }
             Content::Routine { name, .. } => {
-                if crate::apps::alias_phrase(name)? != *name {
+                if self.source.is_none() || crate::apps::alias_phrase(name)? != *name {
                     return Err(ErrorCode::Malformed);
                 }
             }
@@ -175,8 +229,9 @@ impl Entry {
         Ok(())
     }
 }
-fn read(db: &Connection, actor: Uuid, id: Uuid) -> Result<Entry, ErrorCode> {
-    let (revision,source,body):(String,String,Vec<u8>)=db.query_row("SELECT revision,source_task,substr(CAST(body AS BLOB),1,8193) FROM private_memories WHERE id=?1 AND actor=?2 AND body IS NOT NULL",params![id.to_string(),actor.to_string()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(|_|ErrorCode::Stale)?;
+
+pub(crate) fn read(db: &Connection, actor: Uuid, id: Uuid) -> Result<Entry, ErrorCode> {
+    let (revision,source,body,source_turn):(String,Option<String>,Vec<u8>,Option<String>)=db.query_row("SELECT revision,source_task,substr(CAST(body AS BLOB),1,8193),source_turn FROM private_memories WHERE id=?1 AND actor=?2 AND body IS NOT NULL",params![id.to_string(),actor.to_string()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).map_err(|_|ErrorCode::Stale)?;
     if body.len() > 8192 {
         return Err(ErrorCode::Malformed);
     }
@@ -185,16 +240,20 @@ fn read(db: &Connection, actor: Uuid, id: Uuid) -> Result<Entry, ErrorCode> {
     if entry.id != id
         || entry.actor != actor
         || entry.revision.to_string() != revision
-        || entry.source.task.to_string() != source
+        || entry.source.as_ref().map(|v| v.task.to_string()) != source
+        || entry.accepted_source.as_ref().map(|v| v.turn.to_string()) != source_turn
     {
         return Err(ErrorCode::Malformed);
     }
-    if crate::conversations::verified_task_source(db, actor, entry.source.task)? != entry.source {
+    if let Some(source) = &entry.source
+        && crate::conversations::verified_task_source(db, actor, source.task)? != *source
+    {
         return Err(ErrorCode::Stale);
     }
+    validate_accepted_source(db, &entry)?;
     Ok(entry)
 }
-fn ids(db: &Connection, actor: Uuid) -> Result<Vec<Uuid>, ErrorCode> {
+pub(crate) fn ids(db: &Connection, actor: Uuid) -> Result<Vec<Uuid>, ErrorCode> {
     let mut query=db.prepare("SELECT id FROM private_memories WHERE actor=?1 AND body IS NOT NULL ORDER BY rowid DESC LIMIT 257").map_err(|_|ErrorCode::Storage)?;
     let rows = query
         .query_map([actor.to_string()], |r| r.get::<_, String>(0))
@@ -271,7 +330,7 @@ impl Store {
             let entry=read(&self.connection,actor,id)?;
             let successful:Option<String>=self.connection.query_row("SELECT i.task FROM routine_invocations i JOIN steps s ON s.task_id=i.task JOIN native_finalizations f ON f.action_revision=(SELECT revision FROM action_heads WHERE step_id=s.id) WHERE i.memory=?1 AND i.revision=?2 AND f.actor_id=?3 AND f.outcome='\"success\"' ORDER BY i.rowid DESC LIMIT 1",params![id.to_string(),entry.revision.to_string(),actor.to_string()],|r|r.get(0)).optional().map_err(|_|ErrorCode::Storage)?;
             let validated=match successful {
-                Some(task)=>{let actual=crate::conversations::verified_task_source(&self.connection,actor,Uuid::parse_str(&task).map_err(|_|ErrorCode::Malformed)?)?; actual.target==entry.source.target && actual.payload==entry.source.payload},
+                Some(task)=>{let actual=crate::conversations::verified_task_source(&self.connection,actor,Uuid::parse_str(&task).map_err(|_|ErrorCode::Malformed)?)?; entry.source.as_ref().is_some_and(|source|actual.target==source.target && actual.payload==source.payload)},
                 None=>false,
             };
             Ok(View{entry,validated})
@@ -292,30 +351,7 @@ impl Store {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|_| ErrorCode::Storage)?;
         if let Change::Delete { id, revision } = &change {
-            // Deletion remains available if the original source task can no
-            // longer be resolved. It needs exact current ownership/revision,
-            // not a successful reinterpretation of the content being removed.
-            let actual: Option<String> = tx.query_row("SELECT revision FROM private_memories WHERE id=?1 AND actor=?2 AND body IS NOT NULL",params![id.to_string(),actor.to_string()],|r|r.get(0)).optional().map_err(|_|ErrorCode::Storage)?;
-            if actual.as_deref() != Some(revision.to_string().as_str()) {
-                return Err(ErrorCode::Stale);
-            }
-            tx.execute(
-                "UPDATE private_memories SET body=NULL WHERE id=?1",
-                [id.to_string()],
-            )
-            .map_err(|_| ErrorCode::Storage)?;
-            tx.execute(
-                "UPDATE memory_revisions SET body=NULL WHERE memory=?1",
-                [id.to_string()],
-            )
-            .map_err(|_| ErrorCode::Storage)?;
-            tx.execute(
-                "UPDATE memory_events SET body=NULL WHERE memory=?1",
-                [id.to_string()],
-            )
-            .map_err(|_| ErrorCode::Storage)?;
-            crate::notifications::redact_memory(&tx, actor, *id)?;
-            compact(&tx)?;
+            delete_exact(&tx, actor, *id, *revision)?;
             authorize()?;
             return tx.commit().map_err(|_| ErrorCode::Storage);
         }
@@ -326,7 +362,11 @@ impl Store {
                 id: Uuid::new_v4(),
                 actor,
                 revision: Uuid::new_v4(),
-                source: crate::conversations::verified_task_source(&tx, actor, task)?,
+                source: Some(crate::conversations::verified_task_source(
+                    &tx, actor, task,
+                )?),
+                accepted_source: None,
+                changed_by: None,
                 content: Content::Fact { value },
                 corrected: false,
                 created_ms: now,
@@ -335,7 +375,11 @@ impl Store {
                 id: Uuid::new_v4(),
                 actor,
                 revision: Uuid::new_v4(),
-                source: crate::conversations::verified_task_source(&tx, actor, task)?,
+                source: Some(crate::conversations::verified_task_source(
+                    &tx, actor, task,
+                )?),
+                accepted_source: None,
+                changed_by: None,
                 content: Content::Routine {
                     name: crate::apps::alias_phrase(&name)?,
                     disabled: false,
@@ -356,6 +400,10 @@ impl Store {
                 }
                 let content = match &entry.content {
                     Content::Fact { .. } if !disabled => Content::Fact { value },
+                    Content::NamedFact { key, .. } if !disabled => Content::NamedFact {
+                        key: key.clone(),
+                        value,
+                    },
                     Content::Routine { .. } => Content::Routine {
                         name: crate::apps::alias_phrase(&value)?,
                         disabled,
@@ -367,6 +415,7 @@ impl Store {
                     return Ok(());
                 }
                 entry.content = content;
+                entry.changed_by = None;
                 entry.revision = Uuid::new_v4();
                 entry.corrected = true;
                 entry.created_ms = now;
@@ -374,62 +423,173 @@ impl Store {
             }
             Change::Delete { .. } => return Err(ErrorCode::Malformed),
         };
-        entry.validate()?;
-        let current = ids(&tx, actor)?;
-        if !existing && current.len() >= 256 {
-            return Err(ErrorCode::TooLarge);
-        }
-        for id in current {
-            let other = read(&tx, actor, id)?;
-            if other.id == entry.id {
-                continue;
-            }
-            if !existing
-                && encode(&other.content)? == encode(&entry.content)?
-                && other.source.task == entry.source.task
-            {
-                authorize()?;
-                return Ok(());
-            }
-            if matches!((&other.content,&entry.content),(Content::Routine{name:a,..},Content::Routine{name:b,..}) if a==b)
-            {
-                return Err(ErrorCode::Denied);
-            }
-        }
-        let body = encode(&entry)?;
-        if existing {
-            tx.execute(
-                "UPDATE memory_events SET body=NULL WHERE memory=?1",
-                [entry.id.to_string()],
-            )
-            .map_err(|_| ErrorCode::Storage)?;
-            crate::notifications::redact_memory(&tx, actor, entry.id)?;
-        }
-        tx.execute("INSERT INTO private_memories VALUES(?1,?2,?3,?4,?5) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,body=excluded.body",params![entry.id.to_string(),actor.to_string(),entry.revision.to_string(),entry.source.task.to_string(),body]).map_err(|_|ErrorCode::Storage)?;
-        tx.execute(
-            "INSERT INTO memory_revisions VALUES(?1,?2,?3)",
-            params![entry.revision.to_string(), entry.id.to_string(), body],
-        )
-        .map_err(|_| ErrorCode::Storage)?;
-        let event = match &entry.content {
-            Content::Fact { value } => format!("Saved explicit fact: {value}"),
-            Content::Routine { name, .. } => format!("Saved routine candidate: {name}"),
-        };
-        tx.execute(
-            "INSERT INTO memory_events VALUES(?1,?2,?3,?4,?5,?6)",
-            params![
-                Uuid::new_v4().to_string(),
-                actor.to_string(),
-                entry.id.to_string(),
-                entry.revision.to_string(),
-                i64::try_from(now).map_err(|_| ErrorCode::Expired)?,
-                event
-            ],
-        )
-        .map_err(|_| ErrorCode::Storage)?;
-        crate::notifications::memory_committed(&tx, &entry)?;
-        compact(&tx)?;
+        write_entry(&tx, entry, existing)?;
         authorize()?;
         tx.commit().map_err(|_| ErrorCode::Storage)
     }
+}
+
+pub(crate) fn write_entry(
+    tx: &rusqlite::Transaction<'_>,
+    entry: Entry,
+    existing: bool,
+) -> Result<bool, ErrorCode> {
+    entry.validate()?;
+    validate_accepted_source(tx, &entry)?;
+    if let Content::Routine { name, .. } = &entry.content
+        && crate::demonstration::routine(tx, entry.actor, name)?.is_some()
+    {
+        return Err(ErrorCode::Denied);
+    }
+    let current = ids(tx, entry.actor)?;
+    if !existing && current.len() >= 256 {
+        return Err(ErrorCode::TooLarge);
+    }
+    for id in current {
+        let other = read(tx, entry.actor, id)?;
+        if other.id == entry.id {
+            continue;
+        }
+        if !existing
+            && encode(&other.content)? == encode(&entry.content)?
+            && other.source == entry.source
+            && other.accepted_source == entry.accepted_source
+        {
+            return Ok(false);
+        }
+        if matches!((&other.content,&entry.content),(Content::Routine{name:a,..},Content::Routine{name:b,..}) | (Content::NamedFact{key:a,..},Content::NamedFact{key:b,..}) if a==b)
+        {
+            return Err(ErrorCode::Denied);
+        }
+    }
+    let body = encode(&entry)?;
+    if existing {
+        tx.execute(
+            "UPDATE memory_events SET body=NULL WHERE memory=?1",
+            [entry.id.to_string()],
+        )
+        .map_err(|_| ErrorCode::Storage)?;
+        crate::notifications::redact_memory(tx, entry.actor, entry.id)?;
+    }
+    tx.execute("INSERT INTO private_memories VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,body=excluded.body",params![entry.id.to_string(),entry.actor.to_string(),entry.revision.to_string(),entry.source.as_ref().map(|v|v.task.to_string()),body,entry.accepted_source.as_ref().map(|v|v.turn.to_string())]).map_err(|_|ErrorCode::Storage)?;
+    tx.execute(
+        "INSERT INTO memory_revisions VALUES(?1,?2,?3)",
+        params![entry.revision.to_string(), entry.id.to_string(), body],
+    )
+    .map_err(|_| ErrorCode::Storage)?;
+    let event = match &entry.content {
+        Content::Fact { value } => format!("Saved explicit fact: {value}"),
+        Content::NamedFact { key, value } => format!("Saved explicit fact {key}: {value}"),
+        Content::Routine { name, .. } => format!("Saved routine candidate: {name}"),
+    };
+    tx.execute(
+        "INSERT INTO memory_events VALUES(?1,?2,?3,?4,?5,?6)",
+        params![
+            Uuid::new_v4().to_string(),
+            entry.actor.to_string(),
+            entry.id.to_string(),
+            entry.revision.to_string(),
+            i64::try_from(entry.created_ms).map_err(|_| ErrorCode::Expired)?,
+            event
+        ],
+    )
+    .map_err(|_| ErrorCode::Storage)?;
+    crate::notifications::memory_committed(tx, &entry)?;
+    compact(tx)?;
+
+    Ok(true)
+}
+
+fn validate_accepted_source(db: &Connection, entry: &Entry) -> Result<(), ErrorCode> {
+    let Some(source) = &entry.accepted_source else {
+        return Ok(());
+    };
+    let Content::NamedFact { key, value } = &entry.content else {
+        return Err(ErrorCode::Malformed);
+    };
+    let original = crate::conversations::memory_source_text(db, entry.actor, source)?;
+    let Some(conversation::Command::Remember {
+        key: original_key,
+        value: original_value,
+    }) = conversation::parse(&original)
+    else {
+        return Err(ErrorCode::Malformed);
+    };
+    if original_key != *key || (!entry.corrected && original_value != *value) {
+        return Err(ErrorCode::Malformed);
+    }
+    if let Some(changed) = &entry.changed_by {
+        let changed = crate::conversations::memory_source_text(db, entry.actor, changed)?;
+        if !entry.corrected
+            || !matches!(conversation::parse(&changed),Some(conversation::Command::Update{key:changed_key,value:changed_value}) if changed_key==*key && changed_value==*value)
+        {
+            return Err(ErrorCode::Malformed);
+        }
+    }
+    Ok(())
+}
+pub(crate) fn named(db: &Connection, actor: Uuid, key: &str) -> Result<Option<Entry>, ErrorCode> {
+    let mut found = None;
+    for id in ids(db, actor)? {
+        let entry = read(db, actor, id)?;
+        if matches!(&entry.content,Content::NamedFact{key:saved,..} if saved==key) {
+            if found.is_some() {
+                return Err(ErrorCode::Malformed);
+            }
+            found = Some(entry);
+        }
+    }
+    Ok(found)
+}
+pub(crate) fn delete_exact(
+    tx: &rusqlite::Transaction<'_>,
+    actor: Uuid,
+    id: Uuid,
+    revision: Uuid,
+) -> Result<(), ErrorCode> {
+    let actual: Option<String> = tx
+        .query_row(
+            "SELECT revision FROM private_memories WHERE id=?1 AND actor=?2 AND body IS NOT NULL",
+            params![id.to_string(), actor.to_string()],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|_| ErrorCode::Storage)?;
+    if actual.as_deref() != Some(revision.to_string().as_str()) {
+        return Err(ErrorCode::Stale);
+    }
+    tx.execute(
+        "UPDATE private_memories SET body=NULL WHERE id=?1",
+        [id.to_string()],
+    )
+    .map_err(|_| ErrorCode::Storage)?;
+    tx.execute(
+        "UPDATE memory_revisions SET body=NULL WHERE memory=?1",
+        [id.to_string()],
+    )
+    .map_err(|_| ErrorCode::Storage)?;
+    tx.execute(
+        "UPDATE memory_events SET body=NULL WHERE memory=?1",
+        [id.to_string()],
+    )
+    .map_err(|_| ErrorCode::Storage)?;
+    crate::notifications::redact_memory(tx, actor, id)?;
+    compact(tx)
+}
+
+/// Rebuild only this source column contract; the same Store owns all rows.
+/// Caller disables foreign keys before its migration transaction and checks all
+/// foreign keys before commit, then reenables enforcement on that connection.
+pub(crate) fn migrate(tx: &rusqlite::Transaction<'_>, version: u64) -> Result<(), ErrorCode> {
+    if version >= 23 {
+        return Ok(());
+    }
+    tx.execute_batch(&MEMORY_SCHEMA.replace("\"private_memories\"", "private_memories_v23"))
+        .map_err(|_| ErrorCode::Storage)?;
+    tx.execute("INSERT INTO private_memories_v23(id,actor,revision,source_task,body,source_turn) SELECT id,actor,revision,source_task,body,NULL FROM private_memories",[]).map_err(|_|ErrorCode::Storage)?;
+    tx.execute_batch(
+        "DROP TABLE private_memories; ALTER TABLE private_memories_v23 RENAME TO private_memories;",
+    )
+    .map_err(|_| ErrorCode::Storage)?;
+    check_schema(tx, 23)
 }

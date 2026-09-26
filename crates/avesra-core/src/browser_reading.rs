@@ -29,6 +29,30 @@ pub struct Observation {
     pub truncated: bool,
     pub excluded_content: bool,
     pub coverage: avesra_contracts::browser::reading::Coverage,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<ProviderObservation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inbox: Option<MailboxObservation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x_account_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x_needs_input: Option<avesra_contracts::browser::provider::XInputReason>,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MailboxObservation {
+    pub account_sha256: String,
+    pub chunks: u16,
+    pub bytes: u32,
+    pub digest: String,
+    pub incomplete: Option<avesra_contracts::browser::mailbox::Incomplete>,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderObservation {
+    pub provider: avesra_contracts::browser::provider::Provider,
+    pub choices: u16,
+    pub complete: bool,
 }
 impl Observation {
     pub(crate) fn from_reply(request: &Request, reply: &Reply) -> Result<Self, ErrorCode> {
@@ -44,16 +68,41 @@ impl Observation {
                     excerpt.excluded_content,
                 ),
                 avesra_contracts::browser::reading::Outcome::Empty => (None, 0, 0, 0, false, false),
+                avesra_contracts::browser::reading::Outcome::ProviderInspection { probe } => {
+                    (Some(probe.dom_revision), 0, 0, 0, !probe.complete, false)
+                }
+                avesra_contracts::browser::reading::Outcome::XReady { ready } => {
+                    (Some(ready.dom_revision), 0, 0, 0, false, false)
+                }
+                avesra_contracts::browser::reading::Outcome::XNeedsInput { evidence } => {
+                    (Some(evidence.dom_revision), 0, 0, 0, false, false)
+                }
+                avesra_contracts::browser::reading::Outcome::Inbox { terminal } => {
+                    (Some(terminal.dom_revision), 0, 0, 0, false, false)
+                }
                 _ => return Err(ErrorCode::Denied),
             };
         let body = serde_json::to_vec(reply).map_err(|_| ErrorCode::Malformed)?;
+        let document = match (&request.document, &reply.outcome) {
+            (_, avesra_contracts::browser::reading::Outcome::Inbox { terminal }) => {
+                &terminal.document
+            }
+            (Some(document), _) => document,
+            (None, avesra_contracts::browser::reading::Outcome::XReady { ready }) => {
+                &ready.document
+            }
+            (None, avesra_contracts::browser::reading::Outcome::XNeedsInput { evidence }) => {
+                &evidence.document
+            }
+            _ => return Err(ErrorCode::Malformed),
+        };
         Ok(Self {
             context: reply.context.clone(),
             origin: request.origin.clone(),
-            document: request.document.document,
-            tab: request.document.tab,
-            window: request.document.window,
-            url_sha256: format!("{:x}", Sha256::digest(request.document.url.as_bytes())),
+            document: document.document,
+            tab: document.tab,
+            window: document.window,
+            url_sha256: format!("{:x}", Sha256::digest(document.url.as_bytes())),
             reply_sha256: format!("{:x}", Sha256::digest(body)),
             dom_revision,
             blocks: blocks as u16,
@@ -62,19 +111,120 @@ impl Observation {
             truncated,
             excluded_content,
             coverage: avesra_contracts::browser::reading::Coverage::Partial,
+            inbox: match &reply.outcome {
+                avesra_contracts::browser::reading::Outcome::Inbox { terminal } => {
+                    Some(MailboxObservation {
+                        account_sha256: format!(
+                            "{:x}",
+                            Sha256::digest(terminal.account.as_bytes())
+                        ),
+                        chunks: terminal.chunks,
+                        bytes: terminal.bytes,
+                        digest: terminal.digest.clone(),
+                        incomplete: terminal.incomplete,
+                    })
+                }
+                _ => None,
+            },
+            x_account_sha256: match &reply.outcome {
+                avesra_contracts::browser::reading::Outcome::XReady { ready } => {
+                    Some(format!("{:x}", Sha256::digest(ready.account.as_bytes())))
+                }
+                avesra_contracts::browser::reading::Outcome::XNeedsInput { evidence } => {
+                    Some(format!("{:x}", Sha256::digest(evidence.account.as_bytes())))
+                }
+                _ => None,
+            },
+            provider: match &reply.outcome {
+                avesra_contracts::browser::reading::Outcome::ProviderInspection { probe } => {
+                    Some(ProviderObservation {
+                        provider: probe.provider,
+                        choices: probe.choices.len() as u16,
+                        complete: probe.complete,
+                    })
+                }
+                _ => None,
+            },
+            x_needs_input: match &reply.outcome {
+                avesra_contracts::browser::reading::Outcome::XNeedsInput { evidence } => {
+                    Some(evidence.reason)
+                }
+                _ => None,
+            },
         })
     }
     pub fn validate(&self, action: &Action, outcome: Outcome) -> Result<(), ErrorCode> {
         self.context.validate()?;
-        let ActionPayload::ReadPage {
-            origin,
-            message_limit,
-        } = &action.payload
-        else {
-            return Err(ErrorCode::Denied);
+        let (origin, message_limit) = match (&action.payload, &self.provider) {
+            (ActionPayload::ReadInbox { account, count }, None) => {
+                let m = self.inbox.as_ref().ok_or(ErrorCode::Malformed)?;
+                if m.account_sha256 != format!("{:x}", Sha256::digest(account.as_bytes()))
+                    || self.dom_revision.is_none()
+                    || self.blocks != 0
+                    || self.text_bytes != 0
+                    || self.title_bytes != 0
+                    || self.truncated
+                    || self.excluded_content
+                    || m.chunks > avesra_contracts::browser::mailbox::MAX_CHUNKS
+                    || m.bytes as usize > avesra_contracts::browser::mailbox::STREAM_BYTES
+                    || !avesra_contracts::browser::mailbox::digest(&m.digest)
+                    || (m.chunks == 0) != (m.bytes == 0)
+                    || (m.chunks == 0
+                        && (m.incomplete.is_none()
+                            || m.digest != avesra_contracts::browser::mailbox::EMPTY_DIGEST))
+                {
+                    return Err(ErrorCode::Malformed);
+                }
+                ("https://mail.google.com", *count)
+            }
+            (ActionPayload::OpenX { account }, None)
+                if self.x_account_sha256.as_ref()
+                    == Some(&format!("{:x}", Sha256::digest(account.as_bytes()))) =>
+            {
+                if self.dom_revision.is_none()
+                    || self.blocks != 0
+                    || self.text_bytes != 0
+                    || self.title_bytes != 0
+                    || self.truncated
+                    || self.excluded_content
+                {
+                    return Err(ErrorCode::Malformed);
+                }
+                (avesra_contracts::browser::provider::Provider::X.origin(), 1)
+            }
+            (
+                ActionPayload::ReadPage {
+                    origin,
+                    message_limit,
+                },
+                None,
+            ) => (origin.as_str(), *message_limit),
+            (ActionPayload::InspectBrowserProvider { provider }, Some(observation))
+                if *provider == observation.provider =>
+            {
+                if observation.choices > 64
+                    || self.dom_revision.is_none()
+                    || self.blocks != 0
+                    || self.text_bytes != 0
+                    || self.title_bytes != 0
+                    || self.excluded_content
+                    || self.truncated == observation.complete
+                {
+                    return Err(ErrorCode::Malformed);
+                }
+                (provider.origin(), 1)
+            }
+            _ => return Err(ErrorCode::Denied),
         };
         let context = &self.context;
-        if outcome != Outcome::Success
+        if outcome
+            != if self.x_needs_input.is_some()
+                || self.inbox.as_ref().is_some_and(|v| v.incomplete.is_some())
+            {
+                Outcome::NeedsInput
+            } else {
+                Outcome::Success
+            }
             || context.task.uuid() != action.task_id
             || context.step.uuid() != action.step_id
             || context.actor.uuid() != action.actor_id
@@ -87,13 +237,20 @@ impl Observation {
             || self.tab > i32::MAX as u32
             || self.window == 0
             || self.window > i32::MAX as u32
-            || self.blocks > 16u16.min(*message_limit)
+            || self.blocks > 16u16.min(message_limit)
             || self.text_bytes > 4096
             || self.title_bytes > 256
             || self
                 .dom_revision
                 .is_some_and(|v| v == 0 || v > avesra_contracts::browser::MAX_SAFE_COUNTER)
-            || (self.blocks == 0
+            || (self.x_account_sha256.is_some()
+                && !matches!(action.payload, ActionPayload::OpenX { .. }))
+            || (self.x_needs_input.is_some() && self.x_account_sha256.is_none())
+            || (self.inbox.is_some() && !matches!(action.payload, ActionPayload::ReadInbox { .. }))
+            || (self.provider.is_none()
+                && self.inbox.is_none()
+                && self.x_account_sha256.is_none()
+                && self.blocks == 0
                 && (self.dom_revision.is_some()
                     || self.text_bytes != 0
                     || self.title_bytes != 0

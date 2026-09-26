@@ -2,11 +2,24 @@
 
 Avesra means **A Very Effective Smart Reasoning Assistant**.
 
+Current installed Windows: **1eab298**, controller **695fc3e**, 2026-09-26. The UI-only follow-up preserves identical native/controller source. Store30 and telemetry7 are verified. Real Save/Discard, native reopen refresh and Models/Profiles/Voice screenshots are retained; full parity remains unproven. Plan001 remains
+**IN PROGRESS**. The [current acceptance ledger](001-acceptance-2026-09-26.md)
+takes precedence over the historical checkpoints below.
+
 Repository: https://github.com/Medalink/avesra
 
 Original planning baseline: `eb0189ff64b276b4f1e2d850ab3cff6979189ad9` on `main`, inspected on 2026-09-24; at that baseline the repository contained only an MIT `LICENSE`. The owner subsequently requested publication and execution. Completion planning on 2026-09-25 inspected the primary checkout `E:\Dev\Avesra` on `main`, initially at `e894025`, then concurrently advanced to `c82fed21ea259c7fd1dc6902bf2a5a07b10e231f`, with additional uncommitted enrollment/UI work. The initial live worktree list contained only this checkout. Branch/worktree names in historical checkpoints below are not current execution locations.
 
 Model provisioning evidence and remaining serving gaps: [Spark2 setup record](spark2-model-setup.md). Approved UI direction and interactive mockups: [design](../design/README.md) (simulated prototype, not application code). The main plan includes the owner's later requests for optional client GPU acceleration and instrumentation throughout the pipeline.
+
+Historical development baseline, 2026-09-26: `3958812`/`8613e48` implement simple
+Personal conversation and continuous selected-device input. Matching Windows and
+ARM static/release builds passed. Real isolated native previews completed before
+and after cancellation; the cancelled TTS request retired while the model stayed
+loaded. See [background evidence](../docs/background-evidence.md). These observations
+do not prove live owner conversation, acoustic interruption, actions, or full-plan
+acceptance. Plan 001 remains in progress. The canonical development executable is
+`E:\Dev\Avesra\target\release\avesra-desktop.exe`; preserve the dirty primary source.
 
 ## Owner-defined completion tests
 
@@ -22,26 +35,45 @@ Handoff and next-step boundaries: [Plan 001 handoff](001-handoff.md). The owner 
 
 ## Execution order
 
+Historical Windows startup hotfix: `5bde1f5` (2026-09-26), with the unchanged75b5de0
+shared controller. It fixes rejection of the actual activity cancellation metadata,
+adds bounded read-only startup recovery and removes the unused Personal directedness
+dependency. Static/release and actual Models status inspection passed; accepted
+listening remains unproven. Previous matched checkpoint: `75b5de0`. Windows/ARM static
+and release builds passed and both sides were updated. A real isolated native
+preview completed with effects/music; screenshots,9.84-second audio and a
+synchronized sampled video are retained in
+`E:/Dev/Avesra/artifacts/plan001-75b5de0`. The new trace UI read/exported empty
+stores correctly. These are scoped UI/output observations; genuine accepted
+conversation, owner workflows and full A01-A29 evidence remain open. See the
+current ledger for artifact identities and precise boundaries.
+
+The owner resumed full completion on 2026-09-26. The current
+[acceptance ledger](001-acceptance-2026-09-26.md) supersedes stale implementation
+and activation claims in the historical tables below. All required live outcomes
+remain explicit; successful preview/build evidence does not close them.
+
 Latest owner priority: ship working development features promptly for the owner's
 own testing. The large voice corpus remains release validation and must no longer
 block initial use for hours. Follow the explicit development-admission override
 in [Plan001](001-single-spark-assistant.md#later-owner-override-ship-development-features-for-owner-testing).
-Saved enrollment plus a short genuine live check, explicit listening consent and
-existing action grants remain required; do not claim completed release evidence.
+The later simple Personal conversation override removes the mandatory short-check
+ritual. Preserve saved local controls, native owner identity and existing action
+grants; do not claim completed release evidence.
 
 | Plan | Outcome | Priority | Effort | Dependencies | Status |
 | --- | --- | --- | --- | --- | --- |
-| [001](001-single-spark-assistant.md) | Build and verify Avesra on Spark2 with Local Studio, a Windows companion, optional client GPU acceleration and per-stage metrics | P1 | L, multiple milestones | Current-state reconciliation C0; scoped hardware/app qualification | IN PROGRESS / PARTIAL — isolated execution through `e986d76` implements bounded reply segmentation, directed-request contract reconciliation and the owned browser-read lifecycle. C1 qualification and C2 reasoning activation remain blocked on concrete qualification dependencies; C5 consumers and live owner workflows remain incomplete. See the [current execution review](001-execution-2026-09-25.md). |
+| [001](001-single-spark-assistant.md) | Build and verify Avesra on Spark2 with Local Studio, a Windows companion, optional client GPU acceleration and per-stage metrics | P1 | L, multiple milestones | Current-state reconciliation C0; scoped hardware/app qualification | IN PROGRESS / PARTIAL — Windows/controller131d7b9 installed after Static/release checks. Native reply ownership and unlock-resume fixes reviewed; actual startup/disconnect/reconnect and preserved audio selection observed. Real Windows lock/unlock and live voice remain unrun. Prior7d8d3e2 history evidence follows. Real History tab rendered and native missing-proof refusal observed; successful protected history/source inspection remains unrun. Prior73cfb04 report evidence follows. Protected manual saved-comparison UI loaded0of16reports through the actual native bridge; empty save/compare disabled, no populated report proof. Prior a8b0eb1 startup proof remains scoped below. Actual missing-speaker-endpoint TLS availability and automatic cold model load passed; other audio/reasoning process identities stayed unchanged. Subsequent preview produced9.36seconds of native postmix and35.001seconds of sampled video; actual export shows one load/one TTS admission, no accepted spans. Actual action-store27-to28 migration passed integrity checks. Gaming saved and survived an actual isolated process restart; Single Spark and selected audio devices restored/preserved. No live conversation, PDH diagnostic, game-load or A27 pass is inferred. Earlier61118aa preview retains its9.77-second native audio/30.196-second sampled video proof. Genuine conversation, browser reconnect, teaching invocation, owner workflows and all full A01-A29 criteria remain open; see the [current acceptance ledger](001-acceptance-2026-09-26.md). |
 | [002](002-voice-atmosphere.md) | Add native voice character, looping atmosphere, stereo mixing and an easy live bypass | P1 | L, staged | Existing Plan 001 preview/output ownership; normal speech retains its qualification gates | IN PROGRESS — Digital sound approved and saved as defaults; adjustable pitch and animated overlay implemented. Human audition/approval remains deferred. |
-| [003](003-voice-avatar.md) | Draw each enrolled person's voice as a unique, reproducible avatar from their stored profile and a 20-word voice portrait | P2 | M, staged | Plan 001 protected owner and enrollment flow | PROPOSED |
+| [003](003-voice-avatar.md) | Draw each enrolled person's voice as a reproducible avatar matching the authoritative mock | P2 | M, staged | Plan 001 protected owner and enrollment flow | IN PROGRESS — PR14 (5b43c37) adds protected native parameters and the mock-aligned People card. Static/source review and production builds passed. Actual installed People card geometry and unavailable state are retained; a real owner-bound avatar, repeatability and full acceptance remain unproven. Optional portrait capture is unfinished and parked. See the [UI parity ledger](003-ui-parity-status-2026-09-26.md). |
 
 Plan 002 records the owner's 2026-09-25 sound-design request: Digital as the default preset, Human as the second preset, an easy off toggle and permission to expand the app. It can start with explicit generated-reference preview without waiting for every Plan 001 milestone. It does not mark normal voice readiness complete or change Plan 001's existing execution status.
 
 Read the entire plan before implementation. Execute the remaining slices in [section 15](001-single-spark-assistant.md#15-completion-sequence-and-verification-commands), retain verification evidence, and update this index only when the corresponding evidence exists. Planning does not authorize deployment, account access, production changes, or publication by itself.
 
-## Current completion order — 2026-09-25
+## Current completion order — 2026-09-26
 
-The planning refresh was followed by isolated execution from the owner's requested baseline commit `de2e8c8`. That checkpoint was subsequently fast-forwarded and pushed to `origin/main` at `1704d2badf40f5521de372d162d2f420e6bdcb6c`. Current follow-up work is uncommitted in the primary `E:\Dev\Avesra` checkout; the sibling worktree is retained for its build cache. The [execution review](001-execution-2026-09-25.md) records the historical source checks. The newer [background preview evidence](../docs/evidence/background-preview-2026-09-25.md) identifies its exact frozen dirty-source archive, deployed binaries, actual native UI/audio/video results and preservation of effects/background music. Source written after that archive is not covered by those recordings.
+The planning refresh was followed by isolated execution from the owner's requested baseline commit `de2e8c8`. That checkpoint was subsequently fast-forwarded and pushed to `origin/main` at `1704d2badf40f5521de372d162d2f420e6bdcb6c`. Current implementation is isolated in `E:\Dev\Avesra-simple-conversation` on `codex/simple-conversation` (PR12). The primary dirty checkout is preserved; `E:\Dev\Avesra-plan-001-completion` supplies the build cache. The [execution review](001-execution-2026-09-25.md) records the historical source checks. The newer [background preview evidence](../docs/evidence/background-preview-2026-09-25.md) identifies its exact frozen dirty-source archive, deployed binaries, actual native UI/audio/video results and preservation of effects/background music. Source written after that archive is not covered by those recordings.
 
 The preview checkpoint corrected hard-coded model status and a stale saved output endpoint. Both default and typed text completed through the actual Settings controls and native mixer on a separate desktop, with physical output deliberately silenced. Native qualification tooling, activity streaming and action integration remain work in progress; none closes C1, C2, C3, OW1-OW3 or overall acceptance.
 
@@ -50,17 +82,17 @@ The later [streaming preview correction and fresh media](../docs/evidence/stream
 | Slice | Required outcome | Dependencies | Current boundary |
 | --- | --- | --- | --- |
 | C0 | Reconcile live source/worktree ownership, normal-user store and verification baseline | — | Source/worktree ownership and immutable Windows/ARM baseline checks complete; later background runs directly verified the physical normal-user store |
-| C1 | Qualified owner recognition, continuous endpointing and directed intent without a mandatory wake word | C0 | Native calibration measurement tooling and optional batch/activity-streaming adapters implemented; generated-input observations do not qualify the owner, endpointing or directness. Activation still incomplete; native producer abstains |
-| C2 | Qualified local reasoning and one real accepted spoken response | C0; C1 for activation | Bounded reply segmentation and controlled engine adapter implemented. Startup is configuration-gated; no qualified deployment configuration or accepted spoken-response proof exists |
-| C3 | Accepted app/volume actions with observed effects | C1, C2 | Exact app/volume coordinator, protected permissions and durable task projection integrated. Schema migration and empty read view observed; qualified ingress, typed model proposals/clarification and real effects remain unproven |
-| C4 | Owned browser publication, content, cleanup and settlement | C0; C1-C3 for live admission | Source lifecycle integrated through `e986d76`; qualified task producer and concrete C5 consumer absent, so no live admission/read proof |
-| C5 | Claude/IRIS exact draft, latest ten emails and X ready state | C3, C4 | Required OW1-OW3 proof remains absent |
-| C6 | Sourced learning/history, routines and event-grounded chimes | C3, C4; C5 for supported workflow reuse | Remaining integration and direct proof |
-| C7 | Bounded diagnostics and actual configured VPN | C3, C6 | Exact VPN surface and live proof pending |
-| C8 | Profiles, packaging/recovery and complete per-stage metrics | Instrument C1-C7 as built; finalize after C7 | Bounded process-local preview/activity instrumentation implemented; actual preview measurements exposed the pre-ready buffering delay. Full tracing/profiles/recovery/release gates remain incomplete |
+| C1 | Qualified owner recognition, continuous endpointing and directed intent without a mandatory wake word | C0 | Personal admission and continuous selected-microphone capture are installed under the owner override; release qualification and actual accepted-owner conversation remain unproven |
+| C2 | Qualified local reasoning and one real accepted spoken response | C0; C1 for activation | Controlled local reasoning and segmented normal speech are configured and deployed; service operation and preview proof do not establish a real accepted spoken response |
+| C3 | Accepted app/volume actions with observed effects | C1, C2 | Exact app/volume coordinator, typed proposals, protected permissions and durable task projection are integrated; real accepted effect and recovery cases remain unproven |
+| C4 | Owned browser publication, content, cleanup and settlement | C0; C1-C3 for live admission | Owned browser read producer/consumer and settlement are integrated; installed75b5de0 includes bounded provider-header inspection and X new-tab readiness. Actual Chrome/Brave lifecycle/read observations remain unproven |
+| C5 | Claude/IRIS exact draft, latest ten emails and X ready state | C3, C4 | Claude driver exists but actual controls are unverified; complete Gmail enumeration remains unfinished. Configured X readiness/navigation is installed but actual provider/account behavior and challenge continuation remain open. Required OW1-OW3 proof is absent |
+| C6 | Sourced learning/history, routines and event-grounded chimes | C3, C4; C5 for supported workflow reuse | Explicit task-sourced memory and one-step routines exist. Native event-answer speech and deletion-safe retrieval are installed; spoken named facts, demonstrations/passive learning and direct proof remain incomplete |
+| C7 | Bounded diagnostics and actual configured VPN | C3, C6 | Bounded host/optional-endpoint diagnostics, exact approval-bound DNS flush, spoken observation results and saved-peer VPN action are installed. Complete bottleneck evidence and actual approved-action/VPN proof remain pending |
+| C8 | Profiles, packaging/recovery and complete per-stage metrics | Instrument C1-C7 as built; finalize after C7 | Bounded accepted-request tracing/drilldown/export is installed; actual empty local/controller reads and export passed. Preview instrumentation measured first submitted speech. Populated accepted traces, remaining stage/hardware metrics, profiles/recovery and release gates remain incomplete |
 | C9 | Revision-matched A01-A29 evidence and eight-hour soak | C1-C8 | Release incomplete until all required direct gates pass |
 
-C2/C4 source can proceed while C1 live qualification is pending, but activation cannot bypass it. C6 follows C5 in the recommended execution order. The owner's no-automated-tests override is reflected in the current command table and done criteria: use build/static checks and direct observations; do not implement an acceptance runner or report verifier. Old checkpoints below preserve history and must not override this current sequence.
+C2/C4 source can proceed while release qualification is pending. Personal development activation follows the explicit owner override and preserves current owner/grant/local-control checks; it does not close release qualification. C6 follows C5 in the recommended execution order. The owner's no-automated-tests override is reflected in the current command table and done criteria: use build/static checks and direct observations; do not implement an acceptance runner or report verifier. Old checkpoints below preserve history and must not override this current sequence.
 
 Historical execution instructions, 2026-09-24: the owner requested `/improve execute 001`, emphasized matching the approved designs, and then instructed "no tests here either, just specs and code!" The plan records this override: no automated tests or test harnesses; use build/static checks and direct inspection, and report unverified live behavior explicitly. That execution used `C:\Users\medal\.codex\worktrees\avesra-plan-001\Avesra`; rediscover current worktrees rather than assuming it still exists.
 
@@ -121,3 +153,10 @@ Specific home-light integration, multiple-Spark distribution, additional desktop
 ## Completion boundary
 
 Implementation is in progress, with intermediate source/build/native UI evidence recorded in [the execution review](001-execution-review.md). A functioning voice assistant has not been demonstrated or deployed. The owner authorized model setup through Local Studio on `ssh spark2`; that target is reachable, all six selected model packages are downloaded and hash checked, and earlier reasoning recipe verification is recorded in the setup evidence. The earlier failed `spark` alias is superseded. The owner chose dedicated local speech/speaker drivers alongside Local Studio. No Avesra microphone, enrollment, desktop-automation, or end-to-end performance proof exists. Downloads, build checks and static UI inspection cannot satisfy the owner workflows.
+# Current execution priority
+
+The2026-09-26 owner request supersedes manual voice calibration: normal launch
+should start personal conversation and learn the voice during natural dialogue.
+Existing owner/enrollment is reused. Implemented work is on
+`codex/simple-conversation`; the unpublished interval-feedback change is deferred.
+See Plan001's latest owner override. Full-plan and release validation remain open.

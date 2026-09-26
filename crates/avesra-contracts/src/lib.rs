@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 pub mod activity;
 pub mod actors;
+pub mod clock;
 pub mod directedness;
 pub mod discovery;
 pub mod media;
@@ -10,6 +11,7 @@ pub mod planner;
 pub mod preview;
 pub mod speech;
 pub mod voice;
+pub mod voice_timing;
 pub mod voices;
 
 pub const PROTOCOL_VERSION: u16 = 2;
@@ -154,7 +156,6 @@ impl Operation {
                 | Self::Spend
                 | Self::ChangePermission
                 | Self::ChangeConfiguration
-                | Self::ConnectVpn
         )
     }
 }
@@ -176,6 +177,16 @@ pub enum ActionPayload {
         origin: String,
         message_limit: u16,
     },
+    InspectBrowserProvider {
+        provider: browser::provider::Provider,
+    },
+    OpenX {
+        account: String,
+    },
+    ReadInbox {
+        account: String,
+        count: u16,
+    },
     FillPrompt {
         app_id: Uuid,
         project_id: Uuid,
@@ -188,6 +199,15 @@ pub enum ActionPayload {
     },
     Diagnostic {
         catalog_entry: Uuid,
+    },
+    DiagnoseDownload {
+        context: Uuid,
+        revision: Uuid,
+    },
+    FlushDownloadDns {
+        context: Uuid,
+        revision: Uuid,
+        evidence: Uuid,
     },
     ConnectVpn {
         profile_id: Uuid,
@@ -202,15 +222,27 @@ pub enum ActionPayload {
     },
 }
 impl ActionPayload {
+    pub fn maximum_age_ms(&self) -> u64 {
+        if matches!(self, Self::ReadInbox { .. }) {
+            browser::mailbox::LIFETIME_MS
+        } else {
+            MAX_ACTION_AGE_MS
+        }
+    }
     pub fn operation(&self) -> Operation {
         match self {
             Self::LaunchApp { .. } => Operation::LaunchApp,
             Self::SetVolume { .. } => Operation::SetVolume,
             Self::Navigate { .. } => Operation::Navigate,
             Self::ReadPage { .. } => Operation::ReadPage,
+            Self::InspectBrowserProvider { .. } => Operation::ReadPage,
+            Self::OpenX { .. } => Operation::Navigate,
+            Self::ReadInbox { .. } => Operation::ReadPage,
             Self::FillPrompt { .. } => Operation::FillPrompt,
             Self::SubmitPrompt { .. } => Operation::SubmitPrompt,
             Self::Diagnostic { .. } => Operation::Diagnostic,
+            Self::DiagnoseDownload { .. } => Operation::Diagnostic,
+            Self::FlushDownloadDns { .. } => Operation::ChangeConfiguration,
             Self::ConnectVpn { .. } => Operation::ConnectVpn,
             Self::ApprovedProposal { operation, .. } => *operation,
         }
@@ -224,6 +256,11 @@ impl ActionPayload {
                 origin,
                 message_limit,
             } => canonical_https(origin, true) && (1..=100).contains(message_limit),
+            Self::InspectBrowserProvider { .. } => true,
+            Self::OpenX { account } => browser::provider::x_account(account),
+            Self::ReadInbox { account, count } => {
+                browser::mailbox::account(account) && (1..=100).contains(count)
+            }
             Self::FillPrompt {
                 app_id,
                 project_id,
@@ -242,6 +279,12 @@ impl ActionPayload {
                     && expected_text.len() <= 16_384
             }
             Self::Diagnostic { catalog_entry } => !catalog_entry.is_nil(),
+            Self::DiagnoseDownload { context, revision } => !context.is_nil() && !revision.is_nil(),
+            Self::FlushDownloadDns {
+                context,
+                revision,
+                evidence,
+            } => !context.is_nil() && !revision.is_nil() && !evidence.is_nil(),
             Self::ConnectVpn { profile_id } => !profile_id.is_nil(),
             Self::ApprovedProposal {
                 operation,
@@ -320,7 +363,7 @@ impl Action {
         }
         if self.issued_at_ms > now_ms
             || now_ms >= self.expires_at_ms
-            || self.expires_at_ms.saturating_sub(self.issued_at_ms) > MAX_ACTION_AGE_MS
+            || self.expires_at_ms.saturating_sub(self.issued_at_ms) > self.payload.maximum_age_ms()
         {
             return Err(ErrorCode::Expired);
         }
@@ -447,6 +490,8 @@ impl Envelope {
 #[serde(rename_all = "snake_case")]
 pub enum Outcome {
     Success,
+    /// Native evidence proves the exact requested state without a write.
+    AlreadySatisfied,
     Failed,
     NeedsInput,
     Cancelled,

@@ -1,21 +1,66 @@
 //! One durable planner claim per opaque accepted turn, with no replay handle recovery.
 use super::{DurableTurn, Record, Store};
 use crate::ledger::DispatchSession;
-use avesra_contracts::{ErrorCode, actors::Binding, planner};
+use avesra_contracts::{ErrorCode, actors::Binding, planner, speech::Provenance};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use std::{
     sync::{
-        Arc,
+        Arc, Weak,
         atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant},
 };
 use uuid::Uuid;
+#[path = "conversation_observation.rs"]
+mod observation;
+pub use observation::{ObservationClaim, ObservationRequest};
+#[path = "conversation_deletion.rs"]
+pub mod deletion;
+
 const MAX_BODY: usize = 65_536;
+#[path = "conversation_memory.rs"]
+mod memory;
+pub use memory::{MemoryAnswer, PendingMemory};
+enum ReplyInput {
+    Memory(Option<crate::memory::conversation::Deletion>),
+    Model(Box<planner::Reply>),
+    Events,
+    Clock(crate::clock::Observation),
+}
 pub(crate) const PLAN_SCHEMA: &str = "CREATE TABLE conversation_plans(turn TEXT PRIMARY KEY NOT NULL REFERENCES accepted_conversations(id),request TEXT UNIQUE NOT NULL,actor TEXT NOT NULL,body TEXT NOT NULL CHECK(length(CAST(body AS BLOB))<=65536),state TEXT NOT NULL CHECK(state IN ('pending','replied','cancelled','suspended')))";
 pub(crate) const REPLY_SCHEMA: &str = "CREATE TABLE conversation_replies(turn TEXT PRIMARY KEY NOT NULL REFERENCES conversation_plans(turn),revision TEXT UNIQUE NOT NULL,request TEXT UNIQUE NOT NULL REFERENCES conversation_plans(request),body TEXT NOT NULL CHECK(length(CAST(body AS BLOB))<=65536))";
+pub(crate) const SEQUENCE_SCHEMA: &str = "CREATE TABLE planner_claim_sequence(id INTEGER PRIMARY KEY CHECK(id=1),value INTEGER NOT NULL CHECK(value>=0 AND value<=9007199254740991))";
 pub(super) fn check_schema(db: &Connection, version: u64) -> Result<(), ErrorCode> {
+    let objects: i64 = db.query_row("SELECT COUNT(*) FROM sqlite_master WHERE name='planner_claim_sequence' OR tbl_name='planner_claim_sequence'", [], |r| r.get(0)).map_err(|_| ErrorCode::Storage)?;
+    if version < 17 {
+        if objects != 0 {
+            return Err(ErrorCode::Malformed);
+        }
+    } else {
+        let sql: String = db.query_row("SELECT sql FROM sqlite_master WHERE type='table' AND name='planner_claim_sequence'", [], |r| r.get(0)).map_err(|_| ErrorCode::Malformed)?;
+        let (count, minimum, maximum): (i64, Option<i64>, Option<i64>) = db
+            .query_row(
+                "SELECT COUNT(*),MIN(value),MAX(value) FROM planner_claim_sequence WHERE id=1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .map_err(|_| ErrorCode::Malformed)?;
+        let rows: i64 = db
+            .query_row("SELECT COUNT(*) FROM planner_claim_sequence", [], |r| {
+                r.get(0)
+            })
+            .map_err(|_| ErrorCode::Malformed)?;
+        if objects != 1
+            || sql != SEQUENCE_SCHEMA
+            || rows != 1
+            || count != 1
+            || minimum != maximum
+            || !minimum.is_some_and(|v| (0..=9007199254740991).contains(&v))
+        {
+            return Err(ErrorCode::Malformed);
+        }
+    }
     for (table, sql, columns) in [
         (
             "conversation_plans",
@@ -116,14 +161,30 @@ impl PlannerCancellation {
         }
     }
 }
+/// Weak native content-lifetime receipt, never an acceptance or output authority.
+#[derive(Clone)]
+pub struct PlannerLifetime(Weak<()>);
+impl PlannerLifetime {
+    pub fn is_alive(&self) -> bool {
+        self.0.strong_count() != 0
+    }
+    pub fn same_owner(&self, other: &Self) -> bool {
+        self.0.ptr_eq(&other.0)
+    }
+}
 pub struct PlannerRequest {
     turn: DurableTurn,
     session: DispatchSession,
     binding: Binding,
     started: Instant,
     cancellation: PlannerCancellation,
+    // Last: all content-bearing fields retire before the weak receipt expires.
+    lifetime: Arc<()>,
 }
 impl PlannerRequest {
+    pub fn lifetime(&self) -> PlannerLifetime {
+        PlannerLifetime(Arc::downgrade(&self.lifetime))
+    }
     /// Shares the original native caller's withdrawal; it cannot create a turn.
     pub fn with_withdrawal(mut self, signal: Arc<AtomicBool>) -> Self {
         self.cancellation = PlannerCancellation(signal);
@@ -168,6 +229,7 @@ impl PlannerRequest {
             binding,
             started: Instant::now(),
             cancellation: PlannerCancellation(Arc::new(AtomicBool::new(false))),
+            lifetime: Arc::new(()),
         })
     }
 }
@@ -179,11 +241,16 @@ struct Plan {
 }
 impl Plan {
     fn validate(&self) -> Result<(), ErrorCode> {
-        // Historical v1 has exactly the same strict request shape. This local
-        // read validation does not relax the wire or construct a live claim.
+        // Historical records have no dialogue. This local read validation does
+        // not relax the wire or construct a live claim from saved history.
         let mut request = self.request.clone();
-        if request.version == 1 {
+        if matches!(request.version, 1..=3) {
+            if request.context.ordinal != 0 || (request.version < 3 && !request.dialogue.is_empty())
+            {
+                return Err(ErrorCode::Malformed);
+            }
             request.version = planner::VERSION;
+            request.context.ordinal = 1;
         }
         request.validate()?;
         self.binding.validate()?;
@@ -208,6 +275,7 @@ pub struct PlannerAuthority<'a> {
 #[derive(Clone)]
 pub struct PlannerRetirement {
     plan: Plan,
+    _lifetime: Arc<()>,
 }
 impl PlannerRetirement {
     pub fn target(&self) -> super::CancellationTarget {
@@ -230,6 +298,7 @@ pub struct PlannerClaim {
     plan: Plan,
     started: Instant,
     cancellation: PlannerCancellation,
+    lifetime: Arc<()>,
 }
 impl Drop for PlannerClaim {
     fn drop(&mut self) {
@@ -256,6 +325,7 @@ impl PlannerClaim {
     pub fn retirement(&self) -> PlannerRetirement {
         PlannerRetirement {
             plan: self.plan.clone(),
+            _lifetime: self.lifetime.clone(),
         }
     }
     pub fn transport(&self) -> Result<planner::Request, ErrorCode> {
@@ -282,15 +352,24 @@ impl PlannerClaim {
 struct ReplyRecord {
     revision: Uuid,
     reply: planner::Reply,
+    #[serde(default)]
+    provenance: Provenance,
 }
 /// Only a successful current ledger commit constructs this normal-output source.
 pub struct StoredReply {
+    mailbox_lifetime: Option<MailboxLifetime>,
     binding: Binding,
     publication: PlannerCancellation,
     revision: Uuid,
     reply: planner::Reply,
     task: Option<super::tasks::LinkedTask>,
     started: Instant,
+    provenance: Provenance,
+    lifetime: Arc<()>,
+}
+pub(super) struct MailboxLifetime {
+    deadline: Instant,
+    current: Box<dyn Fn() -> bool + Send + Sync>,
 }
 impl Drop for StoredReply {
     fn drop(&mut self) {
@@ -298,11 +377,34 @@ impl Drop for StoredReply {
     }
 }
 impl StoredReply {
+    pub fn lifetime(&self) -> PlannerLifetime {
+        PlannerLifetime(Arc::downgrade(&self.lifetime))
+    }
+    pub fn provenance(&self) -> &Provenance {
+        &self.provenance
+    }
     pub fn proposed_task(&self) -> Option<&super::tasks::LinkedTask> {
         self.task.as_ref()
     }
+    pub fn output_deadline(&self) -> Option<Instant> {
+        self.mailbox_lifetime.as_ref().map(|v| v.deadline)
+    }
     pub fn remaining_ms(&self) -> Result<u64, ErrorCode> {
         self.publication.check()?;
+        if let Some(lifetime) = &self.mailbox_lifetime {
+            if !(lifetime.current)() {
+                return Err(ErrorCode::Stale);
+            }
+            let ms = lifetime
+                .deadline
+                .saturating_duration_since(Instant::now())
+                .as_millis();
+            return if ms == 0 {
+                Err(ErrorCode::Expired)
+            } else {
+                u64::try_from(ms).map_err(|_| ErrorCode::Expired)
+            };
+        }
         remaining(self.started)
     }
     pub fn cancellation(&self) -> PlannerCancellation {
@@ -313,6 +415,10 @@ impl StoredReply {
     }
     pub fn publication_current(&self) -> bool {
         !self.publication.cancelled()
+            && self
+                .mailbox_lifetime
+                .as_ref()
+                .is_none_or(|v| Instant::now() < v.deadline && (v.current)())
     }
 
     pub fn revision(&self) -> Uuid {
@@ -330,6 +436,7 @@ pub struct PlannerSummary {
     pub request: Uuid,
     pub state: String,
     pub reply_revision: Option<Uuid>,
+    pub provenance: Option<Provenance>,
 }
 fn remaining(started: Instant) -> Result<u64, ErrorCode> {
     let remaining = Duration::from_millis(planner::MAX_BUDGET_MS)
@@ -362,6 +469,7 @@ fn matches_source(plan: &Plan, record: &Record) -> bool {
         && plan.request.text == record.text
 }
 fn read_plan(db: &Connection, record: &Record) -> Result<Option<(Plan, String)>, ErrorCode> {
+    deletion::require_source(db, record.id)?;
     let row:Option<(String,String,Vec<u8>,String)>=db.query_row("SELECT substr(request,1,37),substr(actor,1,37),substr(CAST(body AS BLOB),1,65537),substr(state,1,32) FROM conversation_plans WHERE turn=?1",[record.id.to_string()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional().map_err(|_|ErrorCode::Storage)?;
     let Some((request, actor, body, state)) = row else {
         return Ok(None);
@@ -384,6 +492,7 @@ fn read_plan(db: &Connection, record: &Record) -> Result<Option<(Plan, String)>,
     Ok(Some((plan, state)))
 }
 fn read_reply(db: &Connection, plan: &Plan) -> Result<Option<ReplyRecord>, ErrorCode> {
+    deletion::require_source(db, plan.request.context.turn)?;
     let row:Option<(String,String,Vec<u8>)>=db.query_row("SELECT substr(revision,1,37),substr(request,1,37),substr(CAST(body AS BLOB),1,65537) FROM conversation_replies WHERE turn=?1",[plan.request.context.turn.to_string()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional().map_err(|_|ErrorCode::Storage)?;
     let Some((revision, request, body)) = row else {
         return Ok(None);
@@ -392,17 +501,65 @@ fn read_reply(db: &Connection, plan: &Plan) -> Result<Option<ReplyRecord>, Error
         return Err(ErrorCode::Malformed);
     }
     let value: ReplyRecord = serde_json::from_slice(&body).map_err(|_| ErrorCode::Malformed)?;
+    value.provenance.validate()?;
+    if matches!(value.provenance, Provenance::NativeMemory { .. })
+        && (crate::memory::conversation::parse(&plan.request.text).is_none()
+            || !matches!(value.reply.response, planner::Response::Answer { .. }))
+    {
+        return Err(ErrorCode::Malformed);
+    }
+    if let Provenance::NativeClock {
+        clock_kind,
+        reading,
+    } = &value.provenance
+        && (crate::clock::question_kind(&plan.request.text) != Some(*clock_kind)
+            || !matches!(value.reply.response, planner::Response::Answer { .. })
+            || value.reply.response.text() != reading.answer(*clock_kind)?)
+    {
+        return Err(ErrorCode::Malformed);
+    }
+    if let Provenance::NativeEvents { event_kind, .. } = &value.provenance {
+        let expected = match crate::notifications::question_kind(&plan.request.text) {
+            Some(crate::notifications::Kind::Learning) => {
+                avesra_contracts::speech::EventKind::Learning
+            }
+            Some(crate::notifications::Kind::Action) => avesra_contracts::speech::EventKind::Action,
+            None => return Err(ErrorCode::Malformed),
+        };
+        if *event_kind != expected
+            || !matches!(value.reply.response, planner::Response::Answer { .. })
+        {
+            return Err(ErrorCode::Malformed);
+        }
+    }
+    if matches!(value.provenance, Provenance::NativeMailbox { .. })
+        && (crate::workflows::mailbox::requested_count(&plan.request.text).is_none()
+            || !matches!(value.reply.response, planner::Response::Answer { .. }))
+    {
+        return Err(ErrorCode::Malformed);
+    }
+    if matches!(value.provenance, Provenance::NativeObservation { .. })
+        && !matches!(value.reply.response, planner::Response::Answer { .. })
+    {
+        return Err(ErrorCode::Malformed);
+    }
     if value.reply.version != plan.request.version {
         return Err(ErrorCode::Version);
     }
     let mut checked = value.reply.clone();
-    if checked.version == 1 {
-        if matches!(checked.response, planner::Response::Proposal { .. }) {
+    if checked.version == 1 && matches!(checked.response, planner::Response::Proposal { .. }) {
+        return Err(ErrorCode::Malformed);
+    }
+    let mut expected = plan.request.context.clone();
+    if matches!(checked.version, 1..=3) {
+        if checked.context.ordinal != 0 || expected.ordinal != 0 {
             return Err(ErrorCode::Malformed);
         }
+        checked.context.ordinal = 1;
+        expected.ordinal = 1;
         checked.version = planner::VERSION;
     }
-    checked.validate(&plan.request.context)?;
+    checked.validate(&expected)?;
     if value.revision.is_nil()
         || value.revision.to_string() != revision
         || request != plan.request.context.request.to_string()
@@ -410,6 +567,45 @@ fn read_reply(db: &Connection, plan: &Plan) -> Result<Option<ReplyRecord>, Error
         return Err(ErrorCode::Malformed);
     }
     Ok(Some(value))
+}
+pub(super) fn history(
+    db: &Connection,
+    record: &Record,
+) -> Result<Option<super::history::Planner>, ErrorCode> {
+    if let Some(deleted) = deletion::read(db, record.id)? {
+        if deleted.selected {
+            return Err(ErrorCode::Stale);
+        }
+        return Ok(Some(super::history::Planner {
+            request: deleted.context.request,
+            state: "response_deleted".to_owned(),
+            owner_revision: deleted.owner_revision,
+            registration_revision: deleted.context.registration_revision,
+            reply: None,
+            server_fingerprint: None,
+            content_deleted: true,
+        }));
+    }
+    let Some((plan, state)) = read_plan(db, record)? else {
+        return Ok(None);
+    };
+    let reply = read_reply(db, &plan)?;
+    if (state == "replied") != reply.is_some() {
+        return Err(ErrorCode::Malformed);
+    }
+    Ok(Some(super::history::Planner {
+        content_deleted: false,
+        request: plan.request.context.request,
+        state,
+        owner_revision: plan.binding.owner_revision,
+        registration_revision: plan.binding.registration_revision,
+        server_fingerprint: None,
+        reply: reply.map(|v| super::history::Reply {
+            revision: v.revision,
+            response: v.reply.response,
+            provenance: v.provenance,
+        }),
+    }))
 }
 pub(super) fn summary(
     db: &Connection,
@@ -425,6 +621,7 @@ pub(super) fn summary(
     Ok(Some(PlannerSummary {
         request: plan.request.context.request,
         state,
+        provenance: reply.as_ref().map(|r| r.provenance.clone()),
         reply_revision: reply.map(|r| r.revision),
     }))
 }
@@ -439,6 +636,101 @@ pub(super) fn cancel(db: &Connection, record: &Record) -> Result<(), ErrorCode> 
         .map_err(|_| ErrorCode::Storage)?;
     }
     Ok(())
+}
+/// Content-only context selected inside the same actual claim transaction.
+/// No reader can turn these records into a live claim or output capability.
+fn recent_dialogue(
+    db: &Connection,
+    current: &Record,
+    binding: &Binding,
+) -> Result<Vec<planner::DialoguePair>, ErrorCode> {
+    let mut query = db.prepare(
+        "SELECT substr(id,1,37) FROM accepted_conversations WHERE actor=?1 AND device=?2 AND session=?3 AND rowid<(SELECT rowid FROM accepted_conversations WHERE id=?4) ORDER BY rowid DESC LIMIT 16",
+    ).map_err(|_| ErrorCode::Storage)?;
+    let mut rows = query
+        .query(params![
+            current.actor.to_string(),
+            current.source.device.to_string(),
+            current.source.session.to_string(),
+            current.id.to_string()
+        ])
+        .map_err(|_| ErrorCode::Storage)?;
+    let mut pairs = Vec::new();
+    let mut bytes = 0usize;
+    while let Some(row) = rows.next().map_err(|_| ErrorCode::Storage)? {
+        let id: String = row.get(0).map_err(|_| ErrorCode::Malformed)?;
+        let id = Uuid::parse_str(&id).map_err(|_| ErrorCode::Malformed)?;
+        if deletion::read(db, id)?.is_some() {
+            continue;
+        }
+        let (record, state) = super::tasks::read_record(db, id)?;
+        if record.actor != current.actor
+            || record.source.device != current.source.device
+            || record.source.session != current.source.session
+            || record.action_epoch != current.action_epoch
+        {
+            break;
+        }
+        if crate::memory::conversation::parse(&record.text).is_some() {
+            continue;
+        }
+        if !matches!(state.as_str(), "answered" | "waiting_input") {
+            continue;
+        }
+        let Some((plan, plan_state)) = read_plan(db, &record)? else {
+            continue;
+        };
+        if plan.binding != *binding {
+            break;
+        }
+        if plan_state != "replied" {
+            continue;
+        }
+        let reply = read_reply(db, &plan)?.ok_or(ErrorCode::Malformed)?;
+        if matches!(reply.reply.response, planner::Response::Proposal { .. }) {
+            continue;
+        }
+        match &reply.provenance {
+            Provenance::NativeEvents { .. } => {
+                if !crate::notifications::answer_current(
+                    db,
+                    record.actor,
+                    record.source.device,
+                    &reply.provenance,
+                    reply.reply.response.text(),
+                )? {
+                    continue;
+                }
+            }
+            Provenance::Model
+                if crate::notifications::question_kind(&record.text).is_some()
+                    || crate::clock::question_kind(&record.text).is_some() =>
+            {
+                // Legacy local answers have no exact dependency provenance.
+                // Keep their history, but do not retrieve potentially deleted content.
+                continue;
+            }
+            Provenance::Model => {}
+            Provenance::NativeObservation { .. }
+            | Provenance::NativeClock { .. }
+            | Provenance::NativeMemory { .. }
+            | Provenance::NativeMailbox { .. } => continue,
+        }
+        let pair_bytes = record.text.len() + reply.reply.response.text().len();
+        if bytes + pair_bytes > planner::MAX_DIALOGUE_BYTES {
+            break;
+        }
+        bytes += pair_bytes;
+        pairs.push(planner::DialoguePair {
+            user: record.text,
+            assistant: reply.reply.response,
+        });
+        if pairs.len() == planner::MAX_DIALOGUE_PAIRS {
+            break;
+        }
+    }
+    pairs.reverse();
+    Ok(pairs)
 }
 impl Store {
     pub fn claim_planner(
@@ -464,10 +756,13 @@ impl Store {
         {
             return Err(ErrorCode::Stale);
         }
+        let ordinal: i64 = tx.query_row("UPDATE planner_claim_sequence SET value=value+1 WHERE id=1 AND value<9007199254740991 RETURNING value", [], |r| r.get(0)).optional().map_err(|_| ErrorCode::Storage)?.ok_or(ErrorCode::TooLarge)?;
+        let ordinal = u64::try_from(ordinal).map_err(|_| ErrorCode::Malformed)?;
         let plan = Plan {
             request: planner::Request {
                 version: planner::VERSION,
                 context: planner::Context {
+                    ordinal,
                     request: Uuid::new_v4(),
                     turn: record.id,
                     turn_revision: record.revision,
@@ -480,6 +775,7 @@ impl Store {
                     action_epoch: record.action_epoch,
                 },
                 text: record.text.clone(),
+                dialogue: recent_dialogue(&tx, &record, &request.binding)?,
                 remaining_ms: planner::MAX_BUDGET_MS,
             },
             binding: request.binding,
@@ -504,7 +800,10 @@ impl Store {
             .check()
             .and_then(|_| remaining(request.started).map(|_| ()))
         {
-            self.retire_planner(PlannerRetirement { plan })?;
+            self.retire_planner(PlannerRetirement {
+                plan,
+                _lifetime: request.lifetime.clone(),
+            })?;
             return Err(error);
         }
         Ok(PlannerClaim {
@@ -512,6 +811,7 @@ impl Store {
             plan,
             started: request.started,
             cancellation: request.cancellation,
+            lifetime: request.lifetime,
         })
     }
     pub fn retire_planner(&mut self, retirement: PlannerRetirement) -> Result<(), ErrorCode> {
@@ -551,12 +851,41 @@ impl Store {
     }
     pub fn finish_planner(
         &mut self,
-        mut claim: PlannerClaim,
+        claim: PlannerClaim,
         reply: planner::Reply,
         apps: &crate::apps::AppCatalog,
         authorize: &mut dyn FnMut(&PlannerAuthority<'_>) -> Result<(), ErrorCode>,
     ) -> Result<StoredReply, ErrorCode> {
-        let result = self.finish_planner_inner(&claim, reply, apps, authorize);
+        self.finish_reply(claim, ReplyInput::Model(Box::new(reply)), apps, authorize)
+    }
+    /// Derives only the last native announced batch, under the original claim.
+    /// No external response/provenance parameter can enter this constructor.
+    pub fn finish_event_answer(
+        &mut self,
+        claim: PlannerClaim,
+        apps: &crate::apps::AppCatalog,
+        authorize: &mut dyn FnMut(&PlannerAuthority<'_>) -> Result<(), ErrorCode>,
+    ) -> Result<StoredReply, ErrorCode> {
+        self.finish_reply(claim, ReplyInput::Events, apps, authorize)
+    }
+    /// Answers the exact built-in question using an actual native clock reading.
+    pub fn finish_clock_answer(
+        &mut self,
+        claim: PlannerClaim,
+        observation: crate::clock::Observation,
+        apps: &crate::apps::AppCatalog,
+        authorize: &mut dyn FnMut(&PlannerAuthority<'_>) -> Result<(), ErrorCode>,
+    ) -> Result<StoredReply, ErrorCode> {
+        self.finish_reply(claim, ReplyInput::Clock(observation), apps, authorize)
+    }
+    fn finish_reply(
+        &mut self,
+        mut claim: PlannerClaim,
+        input: ReplyInput,
+        apps: &crate::apps::AppCatalog,
+        authorize: &mut dyn FnMut(&PlannerAuthority<'_>) -> Result<(), ErrorCode>,
+    ) -> Result<StoredReply, ErrorCode> {
+        let result = self.finish_planner_inner(&claim, input, apps, authorize);
         if result.is_err() {
             self.retire_planner(claim.retirement())?;
         } else {
@@ -567,15 +896,18 @@ impl Store {
     fn finish_planner_inner(
         &mut self,
         claim: &PlannerClaim,
-        reply: planner::Reply,
+        input: ReplyInput,
         apps: &crate::apps::AppCatalog,
         authorize: &mut dyn FnMut(&PlannerAuthority<'_>) -> Result<(), ErrorCode>,
     ) -> Result<StoredReply, ErrorCode> {
         claim.cancellation.check()?;
         remaining(claim.started)?;
-        reply.validate(&claim.plan.request.context)?;
-        let permissions = if matches!(reply.response, planner::Response::Proposal { .. }) {
-            self.action_permissions(Some(reply.context.actor))?
+        if let ReplyInput::Model(value) = &input {
+            value.validate(&claim.plan.request.context)?;
+        }
+        let permissions = if matches!(&input, ReplyInput::Model(v) if matches!(v.response, planner::Response::Proposal { .. }))
+        {
+            self.action_permissions(Some(claim.context().actor))?
         } else {
             Vec::new()
         };
@@ -593,9 +925,77 @@ impl Store {
         {
             return Err(ErrorCode::Stale);
         }
+        let (reply, provenance) = match &input {
+            ReplyInput::Model(reply) => ((**reply).clone(), Provenance::Model),
+            ReplyInput::Memory(approved) => {
+                let source = crate::memory::AcceptedSource {
+                    turn: record.id,
+                    revision: record.revision,
+                };
+                let result = crate::memory::conversation::finish(
+                    &tx,
+                    record.actor,
+                    &source,
+                    approved.as_ref(),
+                )?;
+                let (memory, revision) = result
+                    .memory
+                    .map_or((None, None), |(id, revision)| (Some(id), Some(revision)));
+                (
+                    planner::Reply {
+                        version: planner::VERSION,
+                        context: claim.context().clone(),
+                        terminal: planner::Terminal::Complete,
+                        response: planner::Response::Answer { text: result.text },
+                    },
+                    Provenance::NativeMemory {
+                        memory,
+                        revision,
+                        value_bearing: result.value_bearing,
+                    },
+                )
+            }
+            ReplyInput::Clock(observation) => {
+                let kind =
+                    crate::clock::question_kind(&record.text).ok_or(ErrorCode::Unsupported)?;
+                let reading = observation.reading()?;
+                let text = reading.answer(kind)?;
+                (
+                    planner::Reply {
+                        version: planner::VERSION,
+                        context: claim.context().clone(),
+                        terminal: planner::Terminal::Complete,
+                        response: planner::Response::Answer { text },
+                    },
+                    Provenance::NativeClock {
+                        clock_kind: kind,
+                        reading,
+                    },
+                )
+            }
+            ReplyInput::Events => {
+                let kind = crate::notifications::question_kind(&record.text)
+                    .ok_or(ErrorCode::Unsupported)?;
+                let (provenance, events) =
+                    crate::notifications::announced(&tx, record.actor, record.source.device, kind)?;
+                let text = crate::notifications::describe_last(kind, &events)?;
+                (
+                    planner::Reply {
+                        version: planner::VERSION,
+                        context: claim.context().clone(),
+                        terminal: planner::Terminal::Complete,
+                        response: planner::Response::Answer { text },
+                    },
+                    provenance,
+                )
+            }
+        };
+        reply.validate(claim.context())?;
+        provenance.validate()?;
         let result = ReplyRecord {
             revision: Uuid::new_v4(),
             reply,
+            provenance,
         };
         tx.execute(
             "INSERT INTO conversation_replies(turn,revision,request,body) VALUES(?1,?2,?3,?4)",
@@ -608,7 +1008,10 @@ impl Store {
         )
         .map_err(|_| ErrorCode::Storage)?;
         let stored = read_reply(&tx, &plan)?.ok_or(ErrorCode::Malformed)?;
-        if stored.revision != result.revision || stored.reply != result.reply {
+        if stored.revision != result.revision
+            || stored.reply != result.reply
+            || stored.provenance != result.provenance
+        {
             return Err(ErrorCode::Malformed);
         }
         tx.execute(
@@ -638,6 +1041,7 @@ impl Store {
             params![next, record.id.to_string()],
         )
         .map_err(|_| ErrorCode::Storage)?;
+        crate::conversations::search::refresh(&tx, record.id)?;
         claim.cancellation.check()?;
         remaining(claim.started)?;
         authorize(&PlannerAuthority {
@@ -646,16 +1050,22 @@ impl Store {
         })?;
         claim.cancellation.check()?;
         remaining(claim.started)?;
+        if let ReplyInput::Clock(observation) = &input {
+            observation.current()?;
+        }
         tx.commit().map_err(|_| ErrorCode::Storage)?;
         claim.cancellation.check()?;
         remaining(claim.started)?;
         Ok(StoredReply {
+            mailbox_lifetime: None,
             binding: claim.plan.binding.clone(),
             publication: claim.cancellation.clone(),
             revision: result.revision,
             reply: result.reply,
             task,
             started: claim.started,
+            provenance: result.provenance,
+            lifetime: claim.lifetime.clone(),
         })
     }
 }

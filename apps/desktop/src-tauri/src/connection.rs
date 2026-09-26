@@ -1,6 +1,8 @@
 use crate::{ModeSnapshot, Runtime};
 #[path = "directedness.rs"]
 pub(crate) mod directedness;
+#[path = "planner_retirement.rs"]
+pub(crate) mod retirement;
 use avesra_contracts::{
     ConnectionStatus, ControlMessage, Envelope, MAX_CONTROL_BYTES, PROTOCOL_VERSION, ServerStatus,
 };
@@ -86,6 +88,69 @@ pub async fn actor_operation(
     reply
         .validate(request, record.device_id)
         .map_err(|_| "Stale actor reply")?;
+    Ok(reply)
+}
+pub async fn trace_query(
+    record: &PairingRecord,
+    request: &avesra_core::trace::Query,
+) -> Result<avesra_core::trace::Remote, String> {
+    request.validate().map_err(|_| "Invalid trace query")?;
+    let mut response = actor_client(record, 7)?
+        .post(
+            endpoint(&record.url)?
+                .join("traces")
+                .map_err(|_| "Trace endpoint unavailable")?,
+        )
+        .bearer_auth(&record.credential)
+        .json(request)
+        .send()
+        .await
+        .map_err(|_| "Controller traces unavailable")?;
+    if !response.status().is_success() {
+        return Err("Controller traces unavailable or registration changed".into());
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| "Trace reply interrupted")?
+    {
+        if bytes.len() + chunk.len() > 16 * 1024 * 1024 {
+            return Err("Trace reply exceeds bound".into());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    let reply: avesra_core::trace::Remote =
+        serde_json::from_slice(&bytes).map_err(|_| "Invalid trace reply")?;
+    reply
+        .binding
+        .validate()
+        .map_err(|_| "Invalid trace binding")?;
+    reply
+        .snapshot
+        .validate(
+            avesra_core::trace::Host::Controller,
+            request.actor,
+            record.device_id,
+            request.turn,
+        )
+        .map_err(|_| "Invalid controller trace metadata")?;
+    if reply.request != request.request
+        || reply.binding.revoked
+        || reply.binding.device != record.device_id
+        || reply.binding.actor != request.actor
+        || reply.binding.owner_revision != request.owner_revision
+        || reply.binding.registered_by != request.registered_by
+        || reply.snapshot.version != avesra_core::trace::QUERY_VERSION
+        || reply.snapshot.records.len() > 2048
+        || reply.snapshot.records.iter().any(|r| {
+            r.link.actor != request.actor
+                || r.link.device != record.device_id
+                || request.turn.is_some_and(|id| r.link.turn != id)
+        })
+    {
+        return Err("Trace reply context changed".into());
+    }
     Ok(reply)
 }
 pub async fn actor_cancel(
@@ -372,7 +437,12 @@ impl SpeakerHealth {
             )
             || self.permission_authority
             || (self.streaming && !matches!(lane, "asr" | "tts" | "activity"))
-            || self.cancellation != "terminate_process"
+            || !matches!(
+                self.cancellation.as_str(),
+                "terminate_process" | "cooperative_reset_or_terminate"
+            )
+            || (self.cancellation == "cooperative_reset_or_terminate"
+                && !matches!(lane, "tts" | "activity"))
             || self
                 .last_inference_ms
                 .is_some_and(|v| !v.is_finite() || !(0.0..=30000.0).contains(&v))
@@ -474,6 +544,66 @@ pub async fn speaker_available(record: &PairingRecord) -> Result<(), String> {
     Ok(())
 }
 pub async fn voice_analysis_available(record: &PairingRecord) -> Result<(), String> {
+    personal_analysis_available(record)
+        .await
+        .map_err(|error| error.to_string())
+}
+pub enum VoicePreparationError {
+    Waiting(&'static str),
+    Blocked(String),
+}
+impl From<String> for VoicePreparationError {
+    fn from(value: String) -> Self {
+        Self::Blocked(value)
+    }
+}
+impl From<&str> for VoicePreparationError {
+    fn from(value: &str) -> Self {
+        Self::Blocked(value.into())
+    }
+}
+impl std::fmt::Display for VoicePreparationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Waiting(value) => f.write_str(value),
+            Self::Blocked(value) => f.write_str(value),
+        }
+    }
+}
+fn preparation_status(status: reqwest::StatusCode) -> Result<(), VoicePreparationError> {
+    if status.is_success() {
+        return Ok(());
+    }
+    if matches!(status.as_u16(), 408 | 429 | 502 | 503 | 504) {
+        return Err(VoicePreparationError::Waiting(
+            "Spark voice service is temporarily unavailable or busy",
+        ));
+    }
+    Err(VoicePreparationError::Blocked(
+        "Spark voice preflight was rejected or unsupported".into(),
+    ))
+}
+async fn preparation_body(
+    mut response: reqwest::Response,
+) -> Result<serde_json::Value, VoicePreparationError> {
+    preparation_status(response.status())?;
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| VoicePreparationError::Waiting("Voice health response was interrupted"))?
+    {
+        if chunk.len() > 16_384usize.saturating_sub(bytes.len()) {
+            return Err("Voice health response exceeded its size limit".into());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&bytes)
+        .map_err(|_| VoicePreparationError::Blocked("Invalid voice health JSON".into()))
+}
+pub async fn personal_analysis_available(
+    record: &PairingRecord,
+) -> Result<(), VoicePreparationError> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Health {
@@ -490,14 +620,8 @@ pub async fn voice_analysis_available(record: &PairingRecord) -> Result<(), Stri
         .bearer_auth(&record.credential)
         .send()
         .await
-        .map_err(|_| "Voice services are unreachable")?;
-    if !response.status().is_success() {
-        return Err(
-            "Spark speech recognition or speaker service is unavailable. No recording started."
-                .into(),
-        );
-    }
-    let value: Health = serde_json::from_value(bounded_response(response).await?)
+        .map_err(|_| VoicePreparationError::Waiting("Voice services are unreachable"))?;
+    let value: Health = serde_json::from_value(preparation_body(response).await?)
         .map_err(|_| "Invalid voice service metadata")?;
     if value.version != 1 {
         return Err("Incompatible voice services".into());
@@ -512,8 +636,8 @@ pub async fn voice_analysis_available(record: &PairingRecord) -> Result<(), Stri
     ] {
         health.validate(lane, revision)?;
         if health.state != "loaded_unqualified" || health.busy {
-            return Err(format!(
-                "Spark {lane} is busy, unloaded or incompatible. No recording started."
+            return Err(VoicePreparationError::Waiting(
+                "Spark ASR or speaker model is busy or not loaded",
             ));
         }
     }
@@ -524,11 +648,20 @@ pub struct VoiceAnalysis {
     pub transcript: String,
     pub embedding: Option<Vec<f32>>,
     pub activity: Option<avesra_contracts::activity::Activity>,
+    pub timing: Option<avesra_contracts::voice_timing::Analysis>,
 }
 pub async fn voice_activity_available(
     record: &PairingRecord,
     streaming: bool,
 ) -> Result<(), String> {
+    personal_activity_available(record, streaming)
+        .await
+        .map_err(|error| error.to_string())
+}
+pub async fn personal_activity_available(
+    record: &PairingRecord,
+    streaming: bool,
+) -> Result<(), VoicePreparationError> {
     let response = speaker_client(record)?
         .get(
             endpoint(&record.url)?
@@ -538,18 +671,19 @@ pub async fn voice_activity_available(
         .bearer_auth(&record.credential)
         .send()
         .await
-        .map_err(|_| "Speech activity service is unreachable")?;
-    let value: SpeakerHealth = serde_json::from_value(bounded_response(response).await?)
+        .map_err(|_| VoicePreparationError::Waiting("Speech activity service is unreachable"))?;
+    let value: SpeakerHealth = serde_json::from_value(preparation_body(response).await?)
         .map_err(|_| "Invalid activity service metadata")?;
     value.validate_metadata("activity")?;
-    if value.state != "loaded_unqualified"
-        || value.busy
-        || (streaming && !value.streaming)
+    if (streaming && !value.streaming)
         || value.model_revision != avesra_contracts::activity::REVISION
     {
-        return Err(
-            "Configured activity service is unavailable or busy. No recording started.".into(),
-        );
+        return Err("Configured activity revision or streaming capability is incompatible".into());
+    }
+    if value.state != "loaded_unqualified" || value.busy {
+        return Err(VoicePreparationError::Waiting(
+            "Spark activity model is busy or not loaded",
+        ));
     }
     Ok(())
 }
@@ -561,6 +695,11 @@ pub async fn analyze_voice(
     activity: bool,
 ) -> Result<VoiceAnalysis, String> {
     use base64::Engine;
+    fn timing<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<avesra_contracts::voice_timing::Analysis>, D::Error> {
+        Option::deserialize(deserializer)
+    }
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Reply {
@@ -575,11 +714,13 @@ pub async fn analyze_voice(
         outcome: String,
         reason: String,
         accepted_turn: bool,
+        #[serde(deserialize_with = "timing")]
+        timing: Option<avesra_contracts::voice_timing::Analysis>,
         #[serde(default)]
         activity: Option<avesra_contracts::activity::Activity>,
     }
     let samples = u32::try_from(pcm.len() / 2).map_err(|_| "Voice sample limit exceeded")?;
-    let mut payload = serde_json::json!({"version":1,"request_id":id,"session_id":session.id,
+    let mut payload = serde_json::json!({"version":avesra_contracts::voice_timing::VERSION,"request_id":id,"session_id":session.id,
         "capture_epoch":session.epoch,"pcm_s16le":base64::engine::general_purpose::STANDARD.encode(pcm)});
     if activity {
         payload["activity"] = true.into();
@@ -600,7 +741,7 @@ pub async fn analyze_voice(
         bounded_response_with_limit(response, if activity { 32768 } else { 16384 }).await?,
     )
     .map_err(|_| "Invalid voice analysis response")?;
-    if value.version != 1
+    if value.version != avesra_contracts::voice_timing::VERSION
         || value.request_id != id
         || value.session_id != session.id
         || value.capture_epoch != session.epoch
@@ -609,6 +750,10 @@ pub async fn analyze_voice(
         || value.transcript.len() > 8192
         || value.outcome != "abstain"
         || value.accepted_turn
+        || value
+            .timing
+            .as_ref()
+            .is_some_and(|v| v.validate(id).is_err())
         || value.activity.is_some() != activity
         || value
             .activity
@@ -629,6 +774,7 @@ pub async fn analyze_voice(
         transcript: value.transcript,
         embedding: value.embedding,
         activity: value.activity,
+        timing: value.timing,
     })
 }
 async fn bounded_response(response: reqwest::Response) -> Result<serde_json::Value, String> {

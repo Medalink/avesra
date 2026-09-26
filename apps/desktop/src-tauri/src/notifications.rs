@@ -70,6 +70,20 @@ impl Drop for Gap {
         }
     }
 }
+/// Only actual current Personal admission may share notification output with
+/// continuous capture. The returned value owns no qualification mutex guard.
+fn capture_compatible(state: &Runtime, local: &avesra_core::state::LocalState) -> bool {
+    !state.media.capture_owned()
+        || (local.capture_allowed()
+            && local.voice_ready
+            && !local.enrollment_capture
+            && !local.microphone_check
+            && state
+                .qualification
+                .admission(state, local)
+                .is_some_and(|value| value.kind == avesra_core::voice::AdmissionKind::Personal))
+}
+
 async fn gap(
     app: &tauri::AppHandle,
     context: &Context,
@@ -78,6 +92,14 @@ async fn gap(
 ) -> Result<Gap, String> {
     let shared = app.state::<State>().arbitration.clone();
     let id = Uuid::new_v4();
+    let compatible = {
+        let runtime = app.state::<Runtime>();
+        let local = runtime
+            .local
+            .lock()
+            .map_err(|_| "Local state unavailable")?;
+        capture_compatible(&runtime, &local)
+    };
     {
         let mut state = shared
             .lock()
@@ -85,7 +107,7 @@ async fn gap(
         if state.pending.is_some() {
             return Err("Notification handoff busy".into());
         }
-        let granted = !state.voice && !app.state::<Runtime>().media.capture_owned();
+        let granted = !state.voice && compatible;
         state.pending = Some((id, granted));
     }
     let owner = Gap { shared, id };
@@ -107,8 +129,14 @@ async fn gap(
             .map_err(|_| "Notification handoff unavailable")?
             .pending
             == Some((id, true));
-        if granted && !state.media.capture_owned() {
-            return Ok(owner);
+        if granted {
+            let compatible = {
+                let local = state.local.lock().map_err(|_| "Local state unavailable")?;
+                capture_compatible(&state, &local)
+            };
+            if compatible {
+                return Ok(owner);
+            }
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
@@ -376,7 +404,10 @@ async fn play(
     let epoch = {
         let state = app.state::<Runtime>();
         let mut local = state.local.lock().map_err(|_| "Local state unavailable")?;
-        if local.action_epoch != context.session.action_epoch || state.media.capture_owned() {
+        if local.action_epoch != context.session.action_epoch
+            || local.active_task
+            || !capture_compatible(&state, &local)
+        {
             return Err("Notification suppressed".into());
         }
         local.playback_epoch = local.playback_epoch.saturating_add(1);
@@ -395,8 +426,11 @@ async fn play(
             .current(app)
             .map_err(|_| "Notification source changed")?;
         let state = app.state::<Runtime>();
-        if state.media.capture_owned() || state.local.lock().map_or(true, |local| local.active_task)
-        {
+        let compatible = {
+            let local = state.local.lock().map_err(|_| "Local state unavailable")?;
+            !local.active_task && capture_compatible(&state, &local)
+        };
+        if !compatible {
             return Err("Foreground voice takes priority".into());
         }
         if settings(app, batch.kind())? != Some(volume)

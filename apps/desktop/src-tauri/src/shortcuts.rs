@@ -157,6 +157,9 @@ pub fn pressed(app: &tauri::AppHandle, action: ShortcutAction) {
             }
             ShortcutAction::Overlay => return,
         };
+        if matches!(control, LocalControl::Unmute) {
+            state.qualification.resume_personal();
+        }
         local.apply(control);
         state.publish(&local);
         let _ = app.emit("runtime-state", local.clone());

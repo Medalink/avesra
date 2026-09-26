@@ -18,6 +18,14 @@ struct Proof {
 }
 pub struct ManagementProof(Proof);
 impl ManagementProof {
+    /// Presentation bound only; native operations must still call current().
+    pub(crate) fn remaining_ms(&self) -> u64 {
+        Duration::from_secs(60)
+            .checked_sub(self.0.verified_at.elapsed())
+            .map(|value| value.as_millis() as u64)
+            .unwrap_or(0)
+    }
+
     pub fn current(&self, state: &Runtime) -> bool {
         let Ok(local) = state.local.lock() else {
             return false;
@@ -259,10 +267,21 @@ pub(crate) fn cancel_native_epoch(app: &tauri::AppHandle, expected: Option<u64>)
         if expected.is_some_and(|epoch| local.capture_epoch != epoch) {
             return;
         }
-        local.enrollment_capture = false;
-        local.capture_epoch = local.capture_epoch.saturating_add(1);
+        // Passive Settings/panel disposal always withdraws management, but is
+        // not a request to tear down the separately owned normal microphone.
+        state.setup.invalidate();
+        let mut changed = false;
+        if local.enrollment_capture {
+            local.enrollment_capture = false;
+            local.capture_epoch = local.capture_epoch.saturating_add(1);
+            changed = true;
+        }
         if state.media.setup_output_owned(local.playback_epoch) {
             local.playback_epoch = local.playback_epoch.saturating_add(1);
+            changed = true;
+        }
+        if !changed {
+            return;
         }
         local.refresh();
         state.publish(&local);

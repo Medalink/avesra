@@ -2,7 +2,7 @@
 use super::{Shared, active, authenticate_headers, session_current};
 use avesra_contracts::{
     ErrorCode,
-    activity::{Acknowledgment, Packet, REVISION, Start, StreamReply},
+    activity::{Acknowledgment, Packet, REVISION, STREAM_VERSION, Start, StreamReply},
 };
 use axum::{
     extract::{
@@ -66,7 +66,7 @@ async fn run(socket: &mut WebSocket, auth: Shared, device: Uuid) -> Result<(), E
         return Err(ErrorCode::Malformed);
     };
     let start: Start = serde_json::from_str(&text).map_err(|_| ErrorCode::Malformed)?;
-    if start.version != 1
+    if start.version != STREAM_VERSION
         || start.request_id.is_nil()
         || start.session_id.is_nil()
         || start.capture_epoch == 0
@@ -105,10 +105,11 @@ async fn run(socket: &mut WebSocket, auth: Shared, device: Uuid) -> Result<(), E
     {
         return Err(ErrorCode::Stale);
     }
+    let acknowledged = Instant::now();
     send(
         socket,
         Acknowledgment {
-            version: 1,
+            version: STREAM_VERSION,
             session_id: start.session_id,
             capture_epoch: start.capture_epoch,
             request_id: start.request_id,
@@ -116,7 +117,9 @@ async fn run(socket: &mut WebSocket, auth: Shared, device: Uuid) -> Result<(), E
         },
     )
     .await?;
-    let opened = Instant::now();
+    let mut capture_origin: Option<Instant> = None;
+    let mut transit_uncertainty: Option<Duration> = None;
+    let mut previous_native_elapsed = 0;
     let mut next = 1;
     let mut total = 0u32;
     loop {
@@ -127,8 +130,14 @@ async fn run(socket: &mut WebSocket, auth: Shared, device: Uuid) -> Result<(), E
         let Message::Text(text) = frame else {
             return Err(ErrorCode::Malformed);
         };
+        let received = Instant::now();
         let packet: Packet = serde_json::from_str(&text).map_err(|_| ErrorCode::Malformed)?;
-        if packet.sequence != next || packet.sample_offset != total || packet.pcm_s16le.len() > 8536
+        if packet.sequence != next
+            || packet.sample_offset != total
+            || packet.pcm_s16le.len() > 8536
+            || packet.captured_age_ms > 500
+            || packet.elapsed_since_ack_ms >= 20_000
+            || packet.elapsed_since_ack_ms < previous_native_elapsed
         {
             return Err(ErrorCode::Malformed);
         }
@@ -150,10 +159,38 @@ async fn run(socket: &mut WebSocket, auth: Shared, device: Uuid) -> Result<(), E
         let capture_end = Duration::from_micros(u64::from(total) * 1_000_000 / 16000);
         let capture_start =
             Duration::from_micros(u64::from(packet.sample_offset) * 1_000_000 / 16000);
-        // The acknowledged stream clock is a conservative estimate; preserve
-        // oldest-sample age rather than renewing it at the chunk's end.
-        if opened.elapsed() > capture_start + Duration::from_millis(500)
-            || capture_end > opened.elapsed() + Duration::from_millis(100)
+        let claimed = received
+            .checked_sub(Duration::from_millis(u64::from(packet.captured_age_ms)))
+            .ok_or(ErrorCode::Expired)?;
+        let origin = *capture_origin.get_or_insert(claimed);
+        let native_elapsed = Duration::from_millis(u64::from(packet.elapsed_since_ack_ms));
+        let transit_bound = received
+            .duration_since(acknowledged)
+            .checked_sub(native_elapsed)
+            .ok_or(ErrorCode::Expired)?;
+        let uncertainty = *transit_uncertainty.get_or_insert(transit_bound);
+        previous_native_elapsed = packet.elapsed_since_ack_ms;
+        let expected = origin
+            .checked_add(capture_start)
+            .ok_or(ErrorCode::Expired)?;
+        let difference = claimed
+            .checked_duration_since(expected)
+            .or_else(|| expected.checked_duration_since(claimed))
+            .ok_or(ErrorCode::Expired)?;
+        // The first packet can contain genuine capture from before this WSS ack.
+        // Thereafter the origin is immutable; age assertions cannot slide it.
+        // Receipt-minus-age excludes transit. Removing only the floored actual
+        // native ack-to-send duration leaves a conservative first round-trip
+        // bound; the fixed origin also preserves later packet transit age.
+        let captured = expected
+            .min(claimed)
+            .checked_sub(uncertainty)
+            .ok_or(ErrorCode::Expired)?;
+        if difference > Duration::from_millis(100)
+            || captured > received
+            || captured.elapsed() > Duration::from_millis(500)
+            || origin.checked_add(capture_end).ok_or(ErrorCode::Expired)?
+                > received + Duration::from_millis(100)
         {
             return Err(ErrorCode::Expired);
         }
@@ -161,7 +198,6 @@ async fn run(socket: &mut WebSocket, auth: Shared, device: Uuid) -> Result<(), E
             .chunks_exact(2)
             .map(|v| i16::from_le_bytes([v[0], v[1]]))
             .collect();
-        let captured = (opened + capture_start).min(Instant::now());
         let observation = tokio::select! { biased; _=permission.changed()=>return Err(ErrorCode::Stale), value=stream.push(&samples,next,captured,packet.r#final)=>value? };
         if !active(auth.clone(), device).await
             || !session_current(&auth, device, start.session_id, start.capture_epoch)
@@ -171,7 +207,7 @@ async fn run(socket: &mut WebSocket, auth: Shared, device: Uuid) -> Result<(), E
         send(
             socket,
             StreamReply {
-                version: 1,
+                version: STREAM_VERSION,
                 session_id: start.session_id,
                 capture_epoch: start.capture_epoch,
                 request_id: start.request_id,

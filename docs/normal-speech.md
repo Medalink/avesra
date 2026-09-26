@@ -1,10 +1,55 @@
 # Accepted reply speech transport
 
+Current speech wire version5 preserves version2 segmentation and carries the
+planner-v4 durable ordinal and explicit model/native-event provenance in every source/context. This is a coordinated
+native/controller change; older peers reject, without downgrade or replay.
+The planner roster retains an output entry while its actual public preparation
+or any private TTS retirement is pending. Definitively unsent private work,
+validated terminal completion or correlated cancellation acknowledgment can
+retire that work. Lost cancellation, task/runtime loss or the bounded cleanup
+timer cannot; the entry remains uncertain until its original control session
+ends, independently of the private model admission/uncertainty owner. See
+[planner ingress](planner-ingress.md) for the permanent session replay boundary.
+
+The existing handshake also accepts a native-derived event answer only from the
+opaque published result defined in [notifications](notifications.md). It consumes
+a fresh claim ordinal and registers/reserves one response digest atomically,
+without claiming inference ran. Model answers retain their completed inference
+requirement. Authentication, original native lifetime, actual actor registration,
+action/output epochs, selected voice, cancellation and retirement are common.
+
+The same native-derived reservation supports the typed built-in local clock answer
+defined in [native-clock.md](native-clock.md), with numeric observation provenance
+and no model-completion claim or additional Settings permission.
+
 Normal answer speech is separate from explicit generated-reference preview and the bounded editable Settings voice test in [generated-voices.md](generated-voices.md). Its native entry point consumes the actual published reply from native-planner.md; it never accepts arbitrary frontend text, a saved row, browser output, an imported response or a mere reply UUID. This source slice must preserve the inactive qualified voice/owner boundary and must not generate, select or play a voice while implementing it.
 
 ## Source ownership and admission
 
 Make the native publication handoff a distinct opaque PublishedReply type so an unpublished StoredReply cannot enter output. Retain its exact accepted-source withdrawal signal on the existing effects owner after planner publication and through output preparation, reservation and playback. Moving between owners must not remove the only registry entry and leave a cancellation gap. The bounded registry retires when the actual reply/output owner finishes or drops; cancellation cannot reconstruct a reply from history.
+
+Native withdrawal and actual retirement are separate. Create an opaque lifetime
+owner before admitting a PlannerRequest or native ObservationRequest to the
+effects registry. Carry that same owner through the queued request, PlannerClaim,
+any PlannerRetirement copies, StoredReply and PublishedReply, including every
+actual Arc holder during output preparation and playback. Declare the owner after
+content-bearing fields so their destructors run before its final release. The
+registry retains only a weak receipt; neither the receipt nor a cancellation
+signal can construct, extend or revive authority. Publication must match the
+admitted lifetime receipt as well as the exact current source.
+
+The combined planner/reply bound remains sixteen actual owners. Cancellation,
+failed delivery, durable retirement bookkeeping and actor/session withdrawal do
+not remove a still-held owner from this bound. Compact dead weak receipts on
+admission; transfer a live planner receipt to the reply roster under the same
+lock. Failed or abandoned unpublished replies therefore release capacity on
+actual drop, while cancelled-but-held replies continue occupying it. This receipt
+covers native content ownership only, not controller/private model retirement,
+physical memory erasure or permission to delete history. It covers the admitted
+request/claim/reply chain and its retirement copies; independently returned
+Settings projections and persisted history are outside this receipt. Temporary
+grammar-routing and approval-display copies in the reply handoff must be dropped
+before transferring their sole actual claim owner.
 
 Exact-source cancellation, actor revocation and action/session invalidation withdraw this pending/output source even when its answered history is already immutable. The durable answered row remains unchanged. Local Stop, deafen, pause, lock, disconnect and output/selected-voice changes additionally revoke the independent native playback lease. Mic mute and current capture epoch changes alone do not revoke it. Current authenticated actor registration, paired certificate/device/session/generation, acknowledged action/output epochs and selected exact voice identity are checked before admission and after every preparatory await.
 
@@ -12,9 +57,9 @@ Native owner/pairing/intent reads and ledger interaction keep their existing act
 
 ## Controller binding
 
-Extend the existing per-control-session retired planner entry with a bounded SHA-256 digest of the exact completed typed Response and its completion Instant. The digest is recorded only at current successful planner reply publication; incomplete/unavailable/cancelled requests have no completed-response authority. It carries no response text, embedding or account data. Retain the existing 64-entry no-eviction bound until session end; do not create a second unbounded replay cache.
+Extend the existing per-control-session retired planner entry with a bounded SHA-256 digest of the exact completed typed Response and its completion Instant. For model replies the digest is recorded only at current successful planner reply publication; incomplete/unavailable/cancelled requests have no completed-response authority. Native event replies instead register the exact typed Source digest at their one-shot authenticated output reservation. Digests contain no response text or embedding. The 64-live-entry bound and permanent per-session ordinal high-water mark follow planner-ingress.md; only actually retired entries compact.
 
-The normal synthesis WSS request carries strict version, original planner Context, native immutable reply revision, exact Response, fresh output request/utterance UUID, current acknowledged playback epoch and exact selected VoiceIdentity (including audio and reference-metadata digests). The trusted paired-native assertion of a committed reply must match the controller's completed response digest and original context. Origin text or a UUID alone cannot authorize synthesis. Reserve at most one normal speech attempt per completed response within ten seconds of controller completion; no replay after cancellation or failed preparation. Native history/status may not recreate that attempt after reconnect or restart.
+The normal synthesis WSS request carries strict version, original planner Context, native immutable reply revision, exact Response, fresh output request/utterance UUID, current acknowledged playback epoch and exact selected VoiceIdentity (including audio and reference-metadata digests). The trusted paired-native assertion of a committed model reply must match the controller's completed response digest and original context; a native event assertion instead registers its exact Source digest under a fresh ordinal in the same reservation lock. Origin text or a UUID alone cannot authorize synthesis. Reserve at most one normal speech attempt per completed response within ten seconds of controller completion; no replay after cancellation or failed preparation. Native history/status may not recreate that attempt after reconnect or restart.
 
 Before private synthesis and throughout its wait, require the actual active device and exact unrevoked actor registration, original action session and independent current output permission. A committed actor revoke must signal output independently of its HTTP response. The current selected private voice identity must match; generated candidate preview must not change selection or act as a shortcut. Private worker request/session/epoch identity remains distinct from the public PC/session/output context.
 
@@ -60,14 +105,14 @@ NativeEffects now returns a distinct opaque PublishedReply after final planner p
 Exact-source cancellation, action invalidation, native effects-owner destruction and explicit exact actor-registration revocation now reach the published source during the handoff/preparation interval. Native planner success returns this new type and disarms only normal cleanup; failure still withdraws. This closes the previously dormant publication-to-output source gap. The normal output route and completed-response digest are implemented in the following source slice; the native media consumer is implemented in the subsequent slice below. No output/device/model operation has been invoked.
 
 
-The segmented normal-speech wire is a strict version2 request with Source{planner context,reply_revision,response}, output request UUID, positive safe-integer playback epoch and exact VoiceIdentity. Encoded handshake is at most the shared planner32768-byte bound; speech text is at most8192 UTF-8 bytes with the bounded partition rules above. Older peers reject the new version; there is no downgrade/replay fallback. Subsequent events echo only bounded immutable stream identity (including original planner/turn/reply/action/voice binding), not the answer text on every packet. Ready advertises24000Hz/480-sample frames/720000 maximum samples rather than an invented final length. Audio is contiguous sequence1..1500 with exact (sequence-1)*480 offsets and480 actual samples. End carries exact chunks/samples and Complete or Truncated. Play/Submitted/Cancel controls bind the owned output request UUID; Submitted remains native-callback submission evidence only. Unknown fields or unsafe/zero epochs reject.
+The segmented normal-speech wire is a strict version5 request with Source{planner context,reply_revision,response,provenance}, output request UUID, positive safe-integer playback epoch and exact VoiceIdentity. Encoded handshake is at most the shared planner32768-byte bound; speech text is at most8192 UTF-8 bytes with the bounded partition rules above. Older peers reject the new version; there is no downgrade/replay fallback. Subsequent events echo only bounded immutable stream identity (including original planner/turn/reply/action/voice binding), not the answer text on every packet. Ready advertises24000Hz/480-sample frames/720000 maximum samples rather than an invented final length. Audio is contiguous sequence1..1500 with exact (sequence-1)*480 offsets and480 actual samples. End carries exact chunks/samples and Complete or Truncated. Play/Submitted/Cancel controls bind the owned output request UUID; Submitted remains native-callback submission evidence only. Unknown fields or unsafe/zero epochs reject.
 
-The controller computes its completed-response digest from the canonical serde serialization of the typed planner::Response; no caller supplies or overrides the digest. Source validation recomputes that representation. A completed entry remains distinct from a live model request and from cancellation: normal request retirement must not erase completion evidence, while explicit withdrawal, action/session/actor revocation and source expiry deny output. Reserving output consumes the one attempt before any private synthesis await. Transient result/reservation metadata contains no reconstructible reply handle.
+For model replies the controller computes its completed-response digest from canonical serde serialization of the typed planner::Response. For native event replies it hashes the entire typed Source, including immutable reply revision and exact event provenance. No caller supplies or overrides a digest; source validation recomputes the corresponding representation. A completed entry remains distinct from a live model request and from cancellation: normal request retirement must not erase completion evidence, while explicit withdrawal, action/session/actor revocation and source expiry deny output. Reserving output consumes the one attempt before any private synthesis await. Transient result/reservation metadata contains no reconstructible reply handle.
 
 
 ## Source checkpoint: controller streaming bridge
 
-The paired `/normal-speech` WSS route reserves the completed source once, checks the active device/exact actor binding and independent action/output permission, and verifies the selected private voice before calling `synthesize`/`TtsStream`. Missing reasoning configuration rejects the route. A configured driver alone supplies no speech authority: only a completed planner response produced after fresh observed reasoning qualification can populate the completed-source digest. No history/frontend text path creates that source. The immutable native reply revision is a trusted paired-native assertion; the controller validates its exact completed Response digest rather than claiming it can inspect the PC ledger.
+The paired `/normal-speech` WSS route reserves the completed source once, checks the active device/exact actor binding and independent action/output permission, and verifies the selected private voice before calling `synthesize`/`TtsStream`. Missing TTS configuration rejects the route. Model sources require an actual completed planner response produced after fresh observed reasoning qualification. Native event sources instead require the separate typed paired-native assertion and consume a new durable claim ordinal. No history/frontend text path creates either source. The immutable native reply revision and event membership are trusted paired-native assertions; the controller verifies current authenticated authority and exact digests without claiming it can inspect the PC ledger.
 
 A single route holds the existing voice operation permit, including actual blocking authorization reads after a waiter times out. Private synthesis and public output run concurrently with a64-codec-chunk queue (at most245760 PCM bytes, plus current chunk/held frame). This is early streaming with bounded backpressure, not whole-wave preview. The producer retains the original30-second budget including queue stalls. Ready follows actual first audio; Play must arrive within3seconds. Output has32seconds from Play, while the entire socket session has70seconds. Slower synthesis can explicitly fail these budgets; no throughput or latency qualification is claimed.
 
@@ -82,7 +127,7 @@ The native Rust-only `speech::speak` entry point consumes PublishedReply and an 
 
 The media worker represents one explicit output purpose: Settings reference preview or accepted reply. Opening accepted output requires enrolled/voice-ready state plus current source signal, action authority, output device and independent output epoch; no boolean bypass promotes readiness. The owned source and caller-withdrawal signal remain visible to the media worker during opening and playback. Normal output uses the existing actual voice-operation slot shared with preview/voice management. Generic voice-ready state alone will not open an unowned playback device.
 
-Settings hide, enrollment cancellation and Audio-panel disposal withdraw only setup preview output; they continue withdrawing setup capture/management through capture epoch. They must not invalidate an accepted answer's output epoch solely because Settings disappeared. Explicit Stop/deafen/lock/disconnect, action/source withdrawal, selected-voice mutation and output-device changes still invalidate accepted output. The media worker checks the actual purpose and source when retaining a lease; a stale setup cleanup cannot close a later accepted output.
+Settings hide, enrollment cancellation and Audio-panel disposal withdraw only setup preview output and actual setup capture. They always invalidate setup management proofs and pending setup operations, even when no setup device is open. Passive disposal must not advance the ordinary listening capture epoch or an accepted answer's output epoch solely because Settings disappeared. An active enrollment/check still closes its exact capture lease; an active setup preview still closes its output lease. Explicit Stop/deafen/lock/disconnect, action/source withdrawal, selected-voice mutation and output-device changes still invalidate accepted output. The media worker checks the actual purpose and source when retaining a lease; a stale setup cleanup cannot close a later accepted output.
 
 The native consumer checks its original source/current context after every preparation await, then advances output epoch once under Runtime.local, publishes it and waits for exact device ownership plus validated control acknowledgment before sending Play. Every normal event must match strict Context, contiguous sequence/offset and the fixed Play-origin timeline; no timestamp is refreshed from receipt. It holds the last received480-sample frame until Complete, applies captured local speech gain, marks only that final frame final, then waits for actual callback submission and bounded scheduled-output drain. Truncated/unknown/error output does not fabricate completion or modify durable answer history. Actual source/caller/control withdrawal remains effective through preparation, socket cleanup and device drain.
 
@@ -99,3 +144,24 @@ The accepted output lease carries an original PlannerCancellation clone plus cal
 Only explicitly owned preview/accepted leases open playback now; a generic voice-ready flag does not open an idle unowned output device. Device failure/expiry remains distinct from expected source/caller withdrawal, and every teardown clears exact output readiness/submission/drain status. Setup close/panel disposal withdraw preview only. Microphone-only settings changes now invalidate capture without advancing accepted action/output authority. Explicit output/profile changes retain their existing revocation behavior.
 
 The native consumer enforces the fixed8-second preparation budget and80-second coordinator limit, with the media attempt's70-second deadline and a fixed32-second Play-origin frame deadline. It projects sample age from that original origin, holds the last packet until Complete, applies the captured assistant gain, waits up to1.5seconds for callback submission and1.2seconds for bounded scheduled drain, and reports only Submitted(sample count). Errors after possible send issue one correlated controller withdrawal without retry, in addition to local output invalidation and bounded WSS cleanup. Answer history is immutable. Arbitrary-duration responses, runtime qualification and actual accepted-producer activation remain separate incomplete boundaries; bounded text segmentation does not establish them.
+
+C7 `NativeObservation` replies also use this normal output path. Their native-only
+continuation comes from the original accepted-task resolution, and the same
+ledger worker derives text from the exact immutable dispatch finalization and
+typed observation. Serialized task history cannot recreate that continuation.
+The original accepted coordinator's monotonic lifetime and withdrawal signal
+survive execution into publication; no new speech budget or arbitrary-text API
+is created. The server reserves non-model output under the current authenticated
+actor/session and monotonic ordinal, hashing full provenance and response.
+
+### Complete mailbox source continuation (wire6)
+
+NativeMailbox is a one-use native source from an actual completed, authenticated,
+settled Inbox read. Its deterministic summary is labeled as email wording and
+retains individual source references; it cannot establish physical package delivery.
+No Settings text, history record or model response creates the opaque source.
+Mailbox speech retains the original read's absolute120-second deadline and current
+browser/account/scope/action-grant successor. The usual8-second preparation and
+80-second output bounds are additionally shortened by that deadline. They never
+restart it. Generic planner admission remains30 seconds. Current Gmail production
+is still incomplete, so this source capability is not a claimed OW2 runtime pass.

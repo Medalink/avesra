@@ -19,9 +19,24 @@ use std::{
 };
 use tauri::{Emitter, Manager};
 use uuid::Uuid;
+#[path = "tasks_download.rs"]
+pub mod download;
+#[path = "tasks_history.rs"]
+pub mod history;
+#[path = "tasks_memory.rs"]
+pub mod memory;
+
+#[path = "tasks_teaching.rs"]
+pub mod teaching;
 
 #[derive(Default)]
 pub struct State {
+    history: history::State,
+    teaching: teaching::State,
+    download_pending: Mutex<Option<download::Pending>>,
+    memory_pending: Mutex<Option<memory::Pending>>,
+    vpn_channel: Mutex<Option<(Uuid, connection::SessionIdentity, Instant, VpnChannel)>>,
+    vpn: Mutex<Option<(Uuid, Instant, avesra_core::vpn::Profile)>>,
     panel: Mutex<Option<Panel>>,
     reader: Arc<tokio::sync::Mutex<()>>,
     management: Arc<tokio::sync::Mutex<()>>,
@@ -29,6 +44,13 @@ pub struct State {
     accepted: Arc<tokio::sync::Mutex<()>>,
     page: Mutex<Option<PageResult>>,
     page_timer: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
+}
+#[derive(Clone, Serialize)]
+pub struct VpnChannel {
+    step: Uuid,
+    dispatch: Uuid,
+    authenticated: bool,
+    checked_ms: u64,
 }
 struct PageResult {
     actor: Uuid,
@@ -48,6 +70,10 @@ pub struct PageView {
     truncated: bool,
     excluded_content: bool,
     remaining_ms: u64,
+    provider: Option<avesra_contracts::browser::provider::Probe>,
+    x_ready: Option<avesra_contracts::browser::provider::XReady>,
+    x_needs_input: Option<avesra_contracts::browser::provider::XNeedsInput>,
+    inbox: Option<crate::browser::mailbox::View>,
 }
 struct Panel {
     id: Uuid,
@@ -58,6 +84,17 @@ struct Panel {
 }
 impl State {
     pub fn invalidate(&self) {
+        self.history.invalidate();
+        self.teaching.invalidate();
+        if let Ok(mut pending) = self.memory_pending.lock() {
+            *pending = None;
+        }
+        if let Ok(mut pending) = self.download_pending.lock() {
+            *pending = None;
+        }
+        if let Ok(mut vpn) = self.vpn.lock() {
+            *vpn = None;
+        }
         if let Ok(mut page) = self.page.lock() {
             *page = None;
         }
@@ -194,6 +231,7 @@ fn publish(
 }
 #[derive(Serialize)]
 pub struct Status {
+    vpn_channel: Option<VpnChannel>,
     snapshot: ActionSnapshot,
     outputs: Vec<avesra_windows::AudioDevice>,
     scopes: Vec<avesra_core::browser_scopes::Grant>,
@@ -284,6 +322,23 @@ pub async fn action_status(
             .take(64)
             .collect();
         Ok(Status {
+            vpn_channel: {
+                let state = app.state::<Runtime>();
+                let local = state.local.lock().map_err(|_| "Local state unavailable")?;
+                state
+                    .tasks
+                    .vpn_channel
+                    .lock()
+                    .map_err(|_| "VPN observation unavailable")?
+                    .as_ref()
+                    .filter(|(owner, session, at, _)| {
+                        *owner == actor
+                            && at.elapsed() < Duration::from_secs(60)
+                            && session.action_epoch == local.action_epoch
+                            && !local.locked
+                    })
+                    .map(|(_, _, _, value)| value.clone())
+            },
             snapshot: publish(&app, panel, actor, snapshot)?,
             outputs,
             scopes,
@@ -406,6 +461,8 @@ pub async fn grant_browser_read_action(
     app: tauri::AppHandle,
     panel: Uuid,
     reference: avesra_contracts::browser::ScopeRef,
+    x_account: Option<String>,
+    gmail_account: Option<String>,
 ) -> Result<ActionSnapshot, String> {
     visible(&window)?;
     current(&app, panel)?;
@@ -442,8 +499,28 @@ pub async fn grant_browser_read_action(
                 .effects
                 .actions(ActionManagement::Grant {
                     actor,
-                    selection: Selection::BrowserRead {
-                        scope: Box::new(scope),
+                    selection: if let Some(account) = gmail_account {
+                        if x_account.is_some()
+                            || !avesra_contracts::browser::mailbox::account(&account)
+                        {
+                            return Err("Enter one exact Gmail account".into());
+                        }
+                        Selection::GmailInbox {
+                            scope: Box::new(scope),
+                            account,
+                        }
+                    } else if let Some(account) = x_account {
+                        if !avesra_contracts::browser::provider::x_account(&account) {
+                            return Err("Enter the exact X handle without @".into());
+                        }
+                        Selection::XReady {
+                            scope: Box::new(scope),
+                            account,
+                        }
+                    } else {
+                        Selection::BrowserRead {
+                            scope: Box::new(scope),
+                        }
                     },
                     authorize: Box::new(move || {
                         authorization()?;
@@ -482,6 +559,71 @@ pub async fn grant_diagnostic_action(
     visible(&window)?;
     current(&app, panel)?;
     grant(app, panel, Selection::Diagnostic { catalog }).await
+}
+#[tauri::command]
+pub async fn inspect_vpn_profile(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    panel: Uuid,
+) -> Result<avesra_core::vpn::Profile, String> {
+    visible(&window)?;
+    current(&app, panel)?;
+    let guard = app
+        .state::<Runtime>()
+        .tasks
+        .reader
+        .clone()
+        .try_lock_owned()
+        .map_err(|_| "Action reader is busy")?;
+    tauri::async_runtime::spawn(async move{
+        let _guard=guard;
+        let actor=crate::owner::current_actor(&app).await?;
+        current(&app,panel)?;
+        let profile=tokio::task::spawn_blocking(move||avesra_windows::vpn::discover(actor)).await.map_err(|_|"VPN reader stopped")?.map_err(|_|"Supported saved Cisco default unavailable; select an existing numeric peer using Cisco first")?;
+        current(&app,panel)?;
+        *app.state::<Runtime>().tasks.vpn.lock().map_err(|_|"VPN selection unavailable")?=Some((panel,Instant::now(),profile.clone()));
+        Ok(profile)
+    }).await.map_err(|_|"VPN inspection coordinator stopped")?
+}
+#[tauri::command]
+pub async fn grant_vpn_action(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    panel: Uuid,
+    id: Uuid,
+    revision: Uuid,
+) -> Result<ActionSnapshot, String> {
+    visible(&window)?;
+    current(&app, panel)?;
+    let profile = {
+        let state = app.state::<Runtime>();
+        let mut saved = state
+            .tasks
+            .vpn
+            .lock()
+            .map_err(|_| "VPN selection unavailable")?;
+        let (observed, started, profile) = saved
+            .as_ref()
+            .ok_or("Inspect the current saved Cisco target first")?;
+        if *observed != panel
+            || started.elapsed() >= Duration::from_secs(30)
+            || profile.id != id
+            || profile.revision != revision
+        {
+            return Err("VPN selection expired; inspect it again".into());
+        }
+        let profile = profile.clone();
+        *saved = None;
+        profile
+    };
+    grant(
+        app,
+        panel,
+        Selection::Vpn {
+            profile: Box::new(profile),
+        },
+    )
+    .await
 }
 #[tauri::command]
 pub async fn bind_prompt_project(
@@ -693,6 +835,12 @@ pub async fn cancel_action_task(
                 .map(|(_, target)| *target)
                 .ok_or("Refresh the exact task before cancelling")?
         };
+        if let Ok(pending) = app.state::<Runtime>().tasks.download_pending.lock()
+            && let Some(context) = pending.as_ref().and_then(|p| p.context.upgrade())
+            && context.target == target
+        {
+            context.withdrawn.store(true, Ordering::SeqCst);
+        }
         let authorization = authorize(app.clone(), panel, actor, None)?;
         let receiver = app
             .state::<Runtime>()
@@ -795,10 +943,26 @@ async fn execute_accepted(
     step: Uuid,
     target: avesra_core::action_permissions::TaskTarget,
     proposal: Option<PublishedReply>,
+    approved: Option<avesra_contracts::Action>,
+    observation: Option<avesra_core::conversations::ObservationRequest>,
 ) -> Result<AcceptedResult, String> {
     let check = || {
         if let Some(reply) = &proposal {
             reply.remaining_ms()?;
+            context.current_owner(app)
+        } else if let Some(action) = &approved {
+            if context.started.elapsed() >= Duration::from_secs(30) {
+                return Err(ErrorCode::Expired);
+            }
+            action.validate(
+                u64::try_from(
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_err(|_| ErrorCode::Expired)?
+                        .as_millis(),
+                )
+                .map_err(|_| ErrorCode::Expired)?,
+            )?;
             context.current_owner(app)
         } else {
             context.prepare(app)
@@ -808,8 +972,17 @@ async fn execute_accepted(
     let _ = project(app, context.target.actor).await;
     check().map_err(|_| "Task queued but context changed; inspect task status")?;
     let state = app.state::<Runtime>();
+    let vpn = matches!(
+        &target,
+        avesra_core::action_permissions::TaskTarget::Vpn { .. }
+    );
+    let mailbox_result = Arc::new(Mutex::new(None));
+    let mailbox_publication = mailbox_result.clone();
     let consumer =
-        if let avesra_core::action_permissions::TaskTarget::BrowserRead { scope } = target {
+        if let avesra_core::action_permissions::TaskTarget::BrowserRead { scope }
+        | avesra_core::action_permissions::TaskTarget::XReady { scope, .. }
+        | avesra_core::action_permissions::TaskTarget::GmailInbox { scope, .. } = target
+        {
             let expected = context.clone();
             let owned_app = app.clone();
             let origin = scope.origin.as_str().to_owned();
@@ -817,9 +990,27 @@ async fn execute_accepted(
                 scope: *scope,
                 consume: Box::new(move |borrowed| {
                     expected.current_owner(&owned_app)?;
-                    let reply = borrowed.consume()?;
-                    retain_page(&owned_app, &expected, step, origin, reply)
-                        .map_err(|_| ErrorCode::Stale)
+                    let (reply, mailbox) = borrowed.consume_inbox()?;
+                    let inbox = crate::browser::mailbox::consume(&reply, mailbox.as_ref())?;
+                    let successor = mailbox
+                        .as_ref()
+                        .map(|e| crate::browser::mailbox::Successor::new(&owned_app, e))
+                        .transpose()?;
+                    retain_page(&owned_app, &expected, step, origin, reply, inbox)
+                        .map_err(|_| ErrorCode::Stale)?;
+                    if let (Some(evidence), Some(successor)) = (mailbox, successor) {
+                        if !successor.current() {
+                            return Err(ErrorCode::Stale);
+                        }
+                        let mut slot = mailbox_publication
+                            .lock()
+                            .map_err(|_| ErrorCode::Unavailable)?;
+                        if slot.is_some() {
+                            return Err(ErrorCode::Stale);
+                        }
+                        *slot = Some((evidence, successor));
+                    }
+                    Ok(())
                 }),
             })
         } else {
@@ -860,6 +1051,42 @@ async fn execute_accepted(
                 let receipt=value.map_err(|_| "Effect reader stopped")?
                     .map_err(|_| "Effect owner stopped")?
                     .map_err(|e| format!("Effect unresolved ({e:?}); inspect task status"))?;
+                if vpn {
+                    let directory=app.path().app_data_dir().map_err(|_|"Owner directory unavailable")?;
+                    let paired=crate::planner::paired_owner(&directory,&context.binding,context.session);
+                    let authenticated=if let Ok(pairing)=paired {
+                        let request=actors::Request{version:actors::VERSION,request:Uuid::new_v4(),attempt:Uuid::new_v4(),session:context.session.id,action_epoch:context.session.action_epoch,command:actors::Command::Status};
+                        matches!(tokio::time::timeout(Duration::from_secs(3),connection::actor_operation(&pairing,&request)).await,Ok(Ok(status)) if status.binding.as_ref()==Some(&context.binding))
+                    }else{false};
+                    let checked_ms=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|_|"Clock unavailable")?.as_millis() as u64;
+                    let view=VpnChannel{step,dispatch:receipt.dispatch_id,authenticated,checked_ms};
+                    let state=app.state::<Runtime>();
+                    let local=state.local.lock().map_err(|_|"Local state unavailable")?;
+                    if !local.locked && local.action_epoch==context.session.action_epoch {
+                        *state.tasks.vpn_channel.lock().map_err(|_|"VPN observation unavailable")?=Some((context.target.actor,context.session,Instant::now(),view.clone()));
+                        let _=app.emit("vpn-channel-observation",view);
+                        if !authenticated {let _=app.emit("runtime-error","VPN observation finished, but the paired Spark could not be authenticated within 3 seconds. The connection is not retried; inspect Cisco and network routing without changing corporate policy.");}
+                    }
+                }
+                if let Some(mut request)=observation {
+                    if request.requires_mailbox(){
+                        let evidence=mailbox_result.lock().map_err(|_|"Mailbox source unavailable")?.take();
+                        let Some((evidence,successor))=evidence else{return Ok(AcceptedResult::Action(receipt));};
+                        request=request.attach_mailbox(evidence,Box::new(move||successor.current())).map_err(|_|"Original mailbox source expired or changed")?;
+                    }
+                    context.current_owner(app).map_err(|_|"Diagnostic output context changed")?;
+                    let expected=context.clone();let owner_app=app.clone();
+                    let receiver=state.effects.observation_answer(request,receipt.dispatch_id,Box::new(move|authority|{
+                        if authority.context.turn!=expected.target.id || authority.context.turn_revision!=expected.target.revision || authority.binding!=&expected.binding {return Err(ErrorCode::Stale);}
+                        expected.current_owner(&owner_app)
+                    })).map_err(|_|"Diagnostic reply owner unavailable; inspect task status")?;
+                    let stored=receive(receiver).await?;
+                    context.current_owner(app).map_err(|_|"Diagnostic output withdrawn")?;
+                    let local=state.local.lock().map_err(|_|"Local state unavailable")?;
+                    if local.action_epoch!=context.session.action_epoch || local.locked || !local.connected {return Err("Diagnostic output context changed".into());}
+                    let reply=state.effects.publish_planner(stored).map_err(|_|"Diagnostic publication withdrawn")?;
+                    return Ok(AcceptedResult::Reply(Box::new(reply)));
+                }
                 return Ok(AcceptedResult::Action(receipt));
             }
             _ = tokio::time::sleep(Duration::from_millis(25)) => {
@@ -876,6 +1103,7 @@ fn retain_page(
     step: Uuid,
     origin: String,
     reply: avesra_contracts::browser::reading::Reply,
+    inbox: Option<crate::browser::mailbox::View>,
 ) -> Result<(), String> {
     use avesra_contracts::browser::reading::Outcome;
     let source = &reply.context;
@@ -888,11 +1116,26 @@ fn retain_page(
     {
         return Err("Page result source changed".into());
     }
-    let (blocks, truncated, excluded_content) = match reply.outcome {
-        Outcome::Excerpt { excerpt } => {
-            (excerpt.blocks, excerpt.truncated, excerpt.excluded_content)
+    let x_ready = match &reply.outcome {
+        Outcome::XReady { ready } => Some(ready.clone()),
+        _ => None,
+    };
+    let x_needs_input = match &reply.outcome {
+        Outcome::XNeedsInput { evidence } => Some(evidence.clone()),
+        _ => None,
+    };
+    let (blocks, truncated, excluded_content, provider) = match reply.outcome {
+        Outcome::Inbox { .. } | Outcome::XReady { .. } | Outcome::XNeedsInput { .. } => {
+            (Vec::new(), false, false, None)
         }
-        Outcome::Empty => (Vec::new(), false, false),
+        Outcome::Excerpt { excerpt } => (
+            excerpt.blocks,
+            excerpt.truncated,
+            excerpt.excluded_content,
+            None,
+        ),
+        Outcome::Empty => (Vec::new(), false, false, None),
+        Outcome::ProviderInspection { probe } => (Vec::new(), !probe.complete, false, Some(probe)),
         _ => return Err("Page observation incomplete".into()),
     };
     // Only the synchronous actual borrowed consumer calls this function. Its
@@ -932,6 +1175,10 @@ fn retain_page(
             truncated,
             excluded_content,
             remaining_ms: 60_000,
+            provider,
+            x_ready,
+            x_needs_input,
+            inbox,
         },
     });
     drop(page);
@@ -1010,6 +1257,13 @@ pub async fn accepted(
     binding: actors::Binding,
 ) -> Result<AcceptedResult, String> {
     let started = Instant::now();
+    let trace_link = avesra_core::trace::Link {
+        turn: turn.id(),
+        actor: turn.actor(),
+        device: turn.source().device,
+        operation: turn.id(),
+        parent: None,
+    };
     let withdrawn = Arc::new(AtomicBool::new(false));
     let delivery = Arc::new(AtomicU8::new(0));
     let delivered = PageDelivery {
@@ -1025,6 +1279,9 @@ pub async fn accepted(
         .try_lock_owned()
         .map_err(|_| "Accepted action coordinator is busy")?;
     let result = tauri::async_runtime::spawn(async move {
+        let mut span=avesra_core::trace::begin(trace_link,avesra_core::trace::Stage::Accepted);
+        span.queued(started);
+        let result=async {
         let _guard=guard;
         let state=app.state::<Runtime>();
         let session=state.acknowledged_session.lock().map_err(|_|"Session unavailable")?.ok_or("Session unavailable")?;
@@ -1048,7 +1305,12 @@ pub async fn accepted(
         let resolution=receive(receiver).await?;
         context.prepare(&app).map_err(|_|"Accepted action context changed; inspect durable task status")?;
         match resolution {
-            TaskResolution::Linked(task) => execute_accepted(&app, context, task.step, task.target, None).await,
+            TaskResolution::Linked(task) => {
+                let task=*task;
+                if let Some(action)=&task.pending_approval {download::wait(&app,&context,action).await?;}
+                let observation=task.observation_reply.map(|claim|claim.bind(context.binding.clone(),context.started,context.withdrawn.clone())).transpose().map_err(|_|"Diagnostic source expired")?;
+                execute_accepted(&app, context, task.step, task.target, None, task.pending_approval,observation).await
+            },
             TaskResolution::NeedsInput(turn) => {
                 let expected=context.clone(); let owner_app=app.clone();
                 let request=PlannerRequest::new(turn,context.dispatch(),context.binding.clone()).map_err(|_|"Planner request unavailable")?.with_withdrawal(context.withdrawn.clone());
@@ -1057,17 +1319,27 @@ pub async fn accepted(
                     expected.prepare(&owner_app)
                 })).map_err(|_|"Planner owner busy")?;
                 let claim=receive(receiver).await?;
-                if avesra_core::notifications::question_kind(&claim.transport().map_err(|_|"Accepted event question expired")?.text).is_some() {
+                let (memory_question,clock,event_question)={
+                    let request=claim.transport().map_err(|_|"Accepted native question expired")?;
+                    (avesra_core::memory::conversation::parse(&request.text).is_some(),
+                     avesra_core::clock::question_kind(&request.text).is_some(),
+                     avesra_core::notifications::question_kind(&request.text).is_some())
+                };
+                if memory_question{
+                    return memory::answer(&app,context.clone(),claim).await;
+                }
+                if clock || event_question {
                     let expected=context.clone();let owner_app=app.clone();
-                    let receiver=state.effects.event_answer(claim,Box::new(move |authority|{
+                    let authorize: avesra_windows::effects::PlannerAuthorization=Box::new(move |authority|{
                         if authority.context.turn!=expected.target.id||authority.context.turn_revision!=expected.target.revision||authority.binding!=&expected.binding{return Err(ErrorCode::Stale);}
                         expected.prepare(&owner_app)
-                    })).map_err(|_|"Event answer writer busy")?;
+                    });
+                    let receiver=if clock {state.effects.clock_answer(claim,authorize)}else{state.effects.event_answer(claim,authorize)}.map_err(|_|"Native answer writer busy")?;
                     let stored=receive(receiver).await?;
-                    context.check(&app).map_err(|_|"Event answer withdrawn")?;
+                    context.check(&app).map_err(|_|"Native answer withdrawn")?;
                     let local=state.local.lock().map_err(|_|"Local state unavailable")?;
-                    if local.action_epoch!=context.session.action_epoch||local.locked||!local.connected{return Err("Event answer context changed".into());}
-                    let reply=state.effects.publish_planner(stored).map_err(|_|"Event answer publication withdrawn")?;
+                    if local.action_epoch!=context.session.action_epoch||local.locked||!local.connected{return Err("Native answer context changed".into());}
+                    let reply=state.effects.publish_planner(stored).map_err(|_|"Native answer publication withdrawn")?;
                     return Ok(AcceptedResult::Reply(Box::new(reply)));
                 }
                 let future=crate::planner::answer(app.clone(),claim);
@@ -1082,7 +1354,7 @@ pub async fn accepted(
                                 };
                                 let step=task.step;
                                 let target=task.target.clone();
-                                return execute_accepted(&app, context, step, target, Some(reply)).await;
+                                return execute_accepted(&app, context, step, target, Some(reply),None,None).await;
                             }
                             return Ok(AcceptedResult::Reply(Box::new(reply)));
                         },
@@ -1091,6 +1363,9 @@ pub async fn accepted(
                 }
             }
         }
+        }.await;
+        match &result {Ok(AcceptedResult::Action(receipt))=>span.effect(receipt.outcome),Ok(AcceptedResult::NeedsInput{..})=>span.finish(avesra_core::trace::Outcome::NeedsInput,None),Ok(AcceptedResult::Reply(_))=>span.finish(avesra_core::trace::Outcome::Complete,None),Err(_)=>span.finish(avesra_core::trace::Outcome::Failed,None)}
+        result
     }).await.map_err(|_|"Accepted task coordinator stopped; inspect durable status")?;
     // A successful normal reply transfers its source owner to the caller. All
     // failure/action/clarification paths keep ordinary withdrawal on return.
@@ -1098,7 +1373,10 @@ pub async fn accepted(
         caller.0.take();
     }
     if let Ok(AcceptedResult::Action(receipt)) = &result
-        && receipt.outcome == avesra_contracts::Outcome::Success
+        && matches!(
+            receipt.outcome,
+            avesra_contracts::Outcome::Success | avesra_contracts::Outcome::NeedsInput
+        )
     {
         let state = delivered.app.state::<Runtime>();
         let local = state.local.lock().map_err(|_| "Local state unavailable")?;

@@ -1,17 +1,24 @@
 pub mod action_permissions;
 pub mod actor_intents;
+pub mod clock;
+pub mod comparison;
 pub mod conversations;
 pub mod diagnostics;
+pub mod download;
+pub mod engine_observer;
 pub mod enrollment;
 pub mod execution;
 pub mod ledger;
 pub mod memory;
 pub mod notifications;
 pub mod policy;
+pub mod resource_observer;
 pub mod sound;
 pub mod state;
 pub mod store;
+pub mod trace;
 pub mod voice;
+pub mod vpn;
 pub mod workflows;
 
 pub mod apps;
@@ -22,3 +29,7 @@ pub mod browser_scopes;
 mod observation_schema;
 pub mod owner;
 pub mod shortcuts;
+
+mod diagnostic_reply;
+
+pub mod demonstration;

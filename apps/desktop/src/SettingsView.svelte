@@ -1,9 +1,10 @@
 <script lang="ts">
   import Performance from "./Performance.svelte";
   import Notifications from "./Notifications.svelte";
-  import { tick } from "svelte";
+  import { onMount, tick } from "svelte";
   import Icon from "./Icon.svelte";
   import SetupOverview from "./SetupOverview.svelte";
+  import { personalVoiceView } from "./owner-setup";
   import { sparkConnection } from "./runtime";
   import Pairing from "./Pairing.svelte";
   import VoiceDesigner from "./VoiceDesigner.svelte";
@@ -15,6 +16,7 @@
   import AppCatalog from "./AppCatalog.svelte";
   import ActionTasks from "./ActionTasks.svelte";
   import PrivateMemory from "./PrivateMemory.svelte";
+  import HistoryPanel from "./HistoryPanel.svelte";
   import BrowserSetup from "./BrowserSetup.svelte";
   import type { SignalFrame } from "./Signal.svelte";
   import type { Runtime, Settings, AudioDevice } from "./runtime";
@@ -48,6 +50,7 @@
     hide: () => Promise<void>;
     drag: (event: PointerEvent) => Promise<void>;
   } = $props();
+  const voice = $derived(personalVoiceView(runtime));
   const spark = $derived(sparkConnection(runtime));
   function restoredSection() {
     try {
@@ -88,37 +91,67 @@
     return value.health.state === "loaded_unqualified" ? "Loaded · unqualified" : value.health.state === "loading" ? "Loading" : value.health.state === "termination_pending" ? "Stopping" : "Unavailable";
   }
   const speakerStatus = $derived(laneStatus(audioHealth?.speaker));
+  const healthContext = $derived(JSON.stringify({
+    active: healthActive,
+    connected: runtime?.connected ?? false,
+    locked: runtime?.locked ?? true,
+    epoch: runtime?.capture_epoch ?? 0,
+    action: runtime?.action_epoch ?? 0,
+    microphone: runtime?.settings.microphone ?? null,
+  }));
+  // Actual command ownership survives reactive context replacement. Native
+  // commands may still be finishing after their publication context changes.
+  let healthMounted = false;
+  let healthPending = false;
+  let healthQueued = false;
+  let healthGeneration = 0;
+  let healthEligible = false;
+  function clearHealth() {
+    audioHealth = null; reasoningHealth = null;
+    healthError = ""; reasoningError = "";
+  }
+  async function probeHealth() {
+    if (!healthMounted || !healthEligible || !native || document.visibilityState !== "visible") return;
+    if (healthPending) { healthQueued = true; return; }
+    healthPending = true; healthQueued = false; probing = true;
+    clearHealth();
+    const generation = healthGeneration;
+    try {
+      const [audio, reasoning] = await Promise.allSettled([command<AudioLaneHealth>("audio_lane_health"), command<ReasoningHealth>("reasoning_health")]);
+      if (healthMounted && generation === healthGeneration && healthEligible && document.visibilityState === "visible") {
+        if (audio.status === "fulfilled") audioHealth = audio.value; else healthError = String(audio.reason);
+        if (reasoning.status === "fulfilled") reasoningHealth = reasoning.value; else reasoningError = String(reasoning.reason);
+      }
+    } finally {
+      healthPending = false;
+      if (healthMounted) probing = false;
+      const queued = healthQueued;
+      healthQueued = false;
+      if (queued) void probeHealth();
+    }
+  }
   $effect(() => {
-    const active = healthActive;
-    const connected = runtime?.connected;
-    const epoch = runtime?.capture_epoch;
-    const locked = runtime?.locked;
-    let disposed = false;
-    let pending = false;
-    let visibilityGeneration = 0;
-    audioHealth = null;
-    reasoningHealth = null; reasoningError = "";
-    healthError = "";
-    probing = false;
-    const probe = async () => {
-      if (disposed || pending || !active || !connected || locked || !epoch || !native || document.visibilityState !== "visible") return;
-      pending = true; probing = true; audioHealth = null; healthError = ""; reasoningHealth = null; reasoningError = "";
-      const generation = visibilityGeneration;
-      try {
-        const [audio, reasoning] = await Promise.allSettled([command<AudioLaneHealth>("audio_lane_health"), command<ReasoningHealth>("reasoning_health")]);
-        if (!disposed && generation === visibilityGeneration) {
-          if (audio.status === "fulfilled") audioHealth = audio.value; else healthError = String(audio.reason);
-          if (reasoning.status === "fulfilled") reasoningHealth = reasoning.value; else reasoningError = String(reasoning.reason);
-        }
-      } catch (error) { if (!disposed && generation === visibilityGeneration) healthError = String(error); }
-      finally { pending = false; if (!disposed) probing = false; }
+    const context = JSON.parse(healthContext) as {active:boolean;connected:boolean;locked:boolean;epoch:number};
+    healthGeneration += 1;
+    healthEligible = context.active && context.connected && !context.locked && context.epoch > 0;
+    healthQueued = false;
+    clearHealth();
+    void probeHealth();
+  });
+  onMount(() => {
+    healthMounted = true;
+    refreshHealth = () => { void probeHealth(); };
+    void probeHealth();
+    const interval = setInterval(() => { void probeHealth(); }, 15000);
+    const visibility = () => {
+      healthGeneration += 1; healthQueued = false; clearHealth();
+      void probeHealth();
     };
-    refreshHealth = () => { void probe(); };
-    void probe();
-    const interval = setInterval(() => { void probe(); }, 15000);
-    const visibility = () => { visibilityGeneration += 1; audioHealth = null; reasoningHealth = null; reasoningError = ""; if (!disposed) void probe(); };
     document.addEventListener("visibilitychange", visibility);
-    return () => { disposed = true; clearInterval(interval); document.removeEventListener("visibilitychange", visibility); };
+    return () => {
+      healthMounted = false; healthGeneration += 1; healthQueued = false;
+      clearInterval(interval); document.removeEventListener("visibilitychange", visibility);
+    };
   });
   const sections = [
     [
@@ -336,26 +369,17 @@
                         : ""}</option
                     >{/each}</select
                 ><span class="av-hint"
-                  >Automatic responses require voice setup. Voice previews are available with a selected output.</span
+                  >Replies and voice previews use this output. Your selected Avesra voice is kept.</span
                 >
               </div>
             </div>
           </section>
           <section class="section">
             <span class="av-kicker">How Avesra listens</span>
-            <div class="grid grid-cols-3 gap-2">
-              {#each [["Continuous", "No wake word after enrollment"], ["Wake phrase", "Optional listening mode"], ["Push to talk", "Hold a keyboard shortcut"]] as mode, i}<div
-                  class="flex flex-col gap-1 p-3 ring-1 ring-inset {i === 0
-                    ? 'bg-white/[0.06] ring-av-500 shadow-[inset_0_-2px_0_var(--color-av-500)]'
-                    : 'bg-white/[0.02] ring-white/10'}"
-                >
-                  <span class="text-[12.5px] font-medium">{mode[0]}</span><span
-                    class="av-hint">{mode[1]}</span
-                  >
-                </div>{/each}
-            </div>
-            <div class="warning">
-              {runtime?.enrollment_capture ? "Recording an explicit enrollment phrase. Mute or cancel enrollment to stop." : runtime?.enrolled && runtime.voice_ready ? runtime.reason : "Listening is off. Pair Spark, prepare the speech services and enroll your voice to begin."}
+            <div class="av-card flex flex-col gap-2 p-3" role="status">
+              <span class="text-[13px] font-medium">{voice.label}</span>
+              <p class="av-hint">{runtime?.enrollment_capture ? "Recording an optional voice sample. Mute or cancel recording to stop." : voice.reason}</p>
+              <p class="av-hint">Talk naturally. No wake word or calibration session is required. Mute or pause whenever you want quiet.</p>
             </div>
             <div class="row">
               <div>
@@ -437,7 +461,7 @@
           <Notifications {runtime} />
         {:else if section === "models"}
           <div class="warning">
-            {runtime?.voice_ready ? "Automatic listening is enabled. This development build has not completed release validation." : runtime?.connected ? "Complete owner setup and the short live voice check in People & Voice ID to enable development listening." : "Connect Spark to inspect configured services. Model downloads alone do not establish readiness."}
+            {voice.label}: {voice.reason}
           </div>
           <div class="flex items-center gap-3">
             <p class="av-hint flex-1" role="status">{probing ? "Inspecting configured audio and reasoning services…" : healthError || "Audio and controlled reasoning metadata comes from the paired Spark. Probe reads status without running inference."}</p>
@@ -477,7 +501,7 @@
           <section class="section">
             <span class="av-kicker">Profiles</span>
             <div class="grid grid-cols-3 gap-2">
-              {#each [["single-spark", "Single Spark", "All inference on Spark."], ["accelerated", "Accelerated", "Qualified client lanes."], ["gaming", "Gaming", "No client inference."]] as profile}<button
+              {#each [["single-spark", "Single Spark", "All inference on Spark."], ["accelerated", "Accelerated", "Qualified client lanes."], ["gaming", "Gaming", "Spark inference; passive app learning deferred."]] as profile}<button
                   class="flex flex-col gap-2 p-3 text-left ring-1 ring-inset disabled:opacity-45 {s?.profile ===
                   profile[0]
                     ? 'bg-white/[0.06] ring-av-500 shadow-[inset_0_-2px_0_var(--color-av-500)]'
@@ -492,6 +516,8 @@
                 >{/each}
             </div>
             <p class="av-hint">
+              Single Spark and Gaming preserve your current conversation. Gaming
+              stops optional passive app observation; explicit teaching remains available.
               Accelerated is unavailable until client capability and performance
               are verified.
             </p>
@@ -622,13 +648,7 @@
                 onclick={() => (tab = t)}>{t}</button
               >{/each}
           </div>
-          {#if tab === "Memory"}<PrivateMemory {runtime} />{:else if tab === "History"}<div class="empty">
-              <h2>No accepted requests</h2>
-              <p class="av-hint">
-                History begins after owner setup. Unknown voices are not saved
-                as conversations.
-              </p>
-            </div>{:else if tab === "Performance"}<Performance {runtime} />{:else}<div class="av-card p-4">
+          {#if tab === "Memory"}<PrivateMemory {runtime} />{:else if tab === "History"}<HistoryPanel {runtime} />{:else if tab === "Performance"}<Performance {runtime} />{:else}<div class="av-card p-4">
               <div class="row">
                 <h2>Local companion</h2>
                 <span class="av-chip text-zinc-300 ring-white/15"

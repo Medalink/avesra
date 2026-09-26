@@ -2,13 +2,58 @@
 
 ## Status and intent
 
-- Status: PROPOSED (owner request, 2026-09-26). Nothing is implemented yet.
+- Status: IN PROGRESS (implementation explicitly authorized by the owner, 2026-09-26). Draft PR14 includes the protected native foundation and mock-aligned Your voice renderer (5b43c37). Source/static review and combined production builds passed. Installed People card geometry and its honest unavailable state were observed at b7815d4 and1eab298. No current owner/microphone-bound Personal observations exist in the inspected store, so a genuine rendered avatar, repeatability, portrait capture and full acceptance remain outstanding. This is not a completion claim. See [the real-app parity ledger](003-ui-parity-status-2026-09-26.md).
 - Priority: P2 product identity. Effort: M, staged. Risk: low to medium; it touches protected speaker storage and enrollment capture, not action authority.
 - Depends on: Plan 001's protected owner and enrollment flow (`docs/owner-identity.md`, `docs/enrollment.md`) and the People & Voice ID screen in the design mockups.
 - Owner request: generate a unique-to-the-user "avatar" graph and animation of their voice, built from their real voice. The same user must get the same avatar every time. Suggested starting point: have them say about 20 words.
 
 The avatar is a portrait, not a password. It makes the owner's voice identity visible and personal. It never authenticates anyone, grants anything or replaces the speaker check.
 
+## Owner delivery requirements (2026-09-26)
+
+The owner requires complete functional implementation, exact matching to the authoritative design mockups in the real app, actual evidence, and PRs as work proceeds. Compare matching states at the same scale. Simulated mock data must be replaced with actual native state, never copied as success evidence. Preserve the simple Personal conversation startup: optional portrait creation must not become a new prerequisite to talking. Instrument portrait capture/extraction/render preparation with bounded content-free timings, including failures/cancellation; biometric inputs and render parameters are excluded from metrics. Live capture and repeatability evidence remain unrun.
+
+
+### Current foundation and precision of guarantees
+
+Draft [PR14](https://github.com/Medalink/avesra/pull/14) implements the native
+foundation and the mock-aligned People card. Its governing implementation contract is `docs/voice-avatar.md`
+on `codex/voice-avatar`. Actual owner-bound PersonalVoice is required to derive a
+portrait; an unbound candidate alone is insufficient. Candidate2 and Personal1
+remain unchanged; a separate protected avatar vault supports either real source.
+All v1 petals and tempo are absent, not estimated or completed.
+
+The original design language below overstates several mathematical and rendering
+guarantees. Stable stored integer parameters on this installation are the precise
+reproducibility contract; a versioned renderer must produce stable geometry, but
+cross-machine raster pixels cannot be guaranteed across graphics stacks. Registry
+checks guarantee distinct retained ring values, not global or perceptual uniqueness.
+Lossy keyed projection is not a proved biometric inversion or unlinkability defence.
+These limits must remain explicit in product and evidence claims; they cannot be
+converted into passing acceptance results by relabeling the foundation as complete.
+Personal learning must not redraw an existing portrait. Source changes require an
+explicit future redraw; changed owner revision fails closed.
+
+### Current mock authority and remaining portrait work
+
+The owner's latest instruction makes the checked-in mock appearance authoritative.
+The current renderer uses 192 display points interpolated from 24 lossy native
+shape values, matching the mock's guide circles and spokes. These are not 192
+independently retained biometric features. It does not add a visible twenty-petal
+layer or signature ring absent from the mock. The native ring remains stored;
+the original visual-layer proposal below is not authority to alter the mock.
+Personal sources and exact candidate-bound phrase summaries remain distinct.
+Unavailable live scores, check results and dates must not be fabricated.
+
+Optional two-batch capture work is parked, unfinished and excluded from the
+current integration build. Its intended next native slice uses actual received-sample prompt
+progress, original management lifetime, selected-device ownership and retained
+worker retirement. Current ASR supplies no word timestamps. Energy islands in
+800ms prompt slots may provide bounded acoustic features, not lexical verification;
+ambiguous slots remain missing. Version2 typed petals will carry actual edge and
+energy geometry while retaining the v1 reader and stable ring. Prompt pace is not
+measured syllable rate. No portrait or verification requirement may be added to
+ordinary Personal conversation.
 ## The core problem: unique and reproducible pull in opposite directions
 
 - **Live audio is never the same twice.** Microphone, room, distance, mood and illness all change the waveform. Hashing a new recording gives a different avatar every time. Drawing straight from live features gives an avatar that drifts from day to day.

@@ -211,8 +211,13 @@ pub(crate) fn validate_context(db: &Connection, context: &Context) -> Result<(),
     }
     let action: Action = serde_json::from_slice(&body).map_err(|_| ErrorCode::Malformed)?;
     action.validate(action.issued_at_ms)?;
-    if !matches!(action.payload, ActionPayload::ReadPage { .. })
-        || action.revision != action_revision
+    if !matches!(
+        action.payload,
+        ActionPayload::ReadPage { .. }
+            | ActionPayload::InspectBrowserProvider { .. }
+            | avesra_contracts::ActionPayload::OpenX { .. }
+            | avesra_contracts::ActionPayload::ReadInbox { .. }
+    ) || action.revision != action_revision
         || action.step_id != context.step.uuid()
         || action.task_id != context.task.uuid()
         || action.actor_id != context.actor.uuid()

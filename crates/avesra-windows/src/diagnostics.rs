@@ -1,4 +1,6 @@
 //! Synchronous fixed catalog. The actual effect worker retains this work.
+#[path = "diagnostics_disk.rs"]
+mod disk_activity;
 use avesra_contracts::ErrorCode;
 use avesra_core::diagnostics::{Catalog, DiskSpace, Network, Reading, Report, Unavailable};
 use std::{
@@ -177,6 +179,107 @@ fn rate(before: u64, after: u64, interval: Duration) -> Reading<u64> {
     };
     Reading::Available { value }
 }
+fn default_routes() -> Reading<Vec<avesra_core::diagnostics::DefaultRoute>> {
+    use windows::Win32::{
+        NetworkManagement::IpHelper::{GetIpForwardTable2, MIB_IPFORWARD_TABLE2},
+        Networking::WinSock::{AF_INET, AF_INET6, AF_UNSPEC},
+    };
+    let mut pointer = std::ptr::null_mut();
+    if unsafe { GetIpForwardTable2(AF_UNSPEC, &mut pointer) }.is_err() || pointer.is_null() {
+        return unavailable(Unavailable::CounterUnavailable);
+    }
+    struct Table(*mut MIB_IPFORWARD_TABLE2);
+    impl Drop for Table {
+        fn drop(&mut self) {
+            unsafe { FreeMibTable(self.0.cast()) };
+        }
+    }
+    let table = Table(pointer);
+    let count = unsafe { (*table.0).NumEntries as usize };
+    if count > 4096 {
+        return unavailable(Unavailable::OutputLimit);
+    }
+    let rows = unsafe { std::slice::from_raw_parts((*table.0).Table.as_ptr(), count) };
+    let mut values = Vec::new();
+    for row in rows
+        .iter()
+        .filter(|r| r.DestinationPrefix.PrefixLength == 0 && !r.Loopback)
+    {
+        if values.len() >= 64 {
+            return unavailable(Unavailable::OutputLimit);
+        }
+        let family = unsafe { row.DestinationPrefix.Prefix.si_family };
+        let ipv6 = if family == AF_INET6 {
+            true
+        } else if family == AF_INET {
+            false
+        } else {
+            return unavailable(Unavailable::UnrecognizedOutput);
+        };
+        if row.InterfaceIndex == 0 {
+            return unavailable(Unavailable::UnrecognizedOutput);
+        }
+        values.push(avesra_core::diagnostics::DefaultRoute {
+            interface_index: row.InterfaceIndex,
+            ipv6,
+            route_metric: row.Metric,
+        });
+    }
+    Reading::Available { value: values }
+}
+fn ipv4_dns_servers() -> Reading<u16> {
+    use windows::Win32::NetworkManagement::IpHelper::{
+        FIXED_INFO_W2KSP1, GetNetworkParams, IP_ADDR_STRING,
+    };
+    let mut bytes = 0;
+    let _ = unsafe { GetNetworkParams(None, &mut bytes) };
+    if bytes < std::mem::size_of::<FIXED_INFO_W2KSP1>() as u32 || bytes > 65536 {
+        return unavailable(Unavailable::OutputLimit);
+    }
+    // Aligned bounded API buffer. Host/domain/scope names are never projected.
+    let mut buffer = zeroize::Zeroizing::new(vec![0u64; (bytes as usize).div_ceil(8)]);
+    let base = buffer.as_mut_ptr().cast::<FIXED_INFO_W2KSP1>();
+    if unsafe { GetNetworkParams(Some(base), &mut bytes) }.is_err() {
+        return unavailable(Unavailable::CounterUnavailable);
+    }
+    let low = base as usize;
+    let high = low + buffer.len() * 8;
+    let mut pointer = unsafe { &raw mut (*base).DnsServerList };
+    let mut seen = Vec::new();
+    let mut count = 0;
+    while !pointer.is_null() {
+        let address = pointer as usize;
+        if seen.len() >= 64
+            || seen.contains(&address)
+            || address < low
+            || address
+                .checked_add(std::mem::size_of::<IP_ADDR_STRING>())
+                .is_none_or(|end| end > high)
+            || !address.is_multiple_of(std::mem::align_of::<IP_ADDR_STRING>())
+        {
+            return unavailable(Unavailable::UnrecognizedOutput);
+        }
+        seen.push(address);
+        let row = unsafe { &*pointer };
+        let value = row.IpAddress.String;
+        let Some(length) = value.iter().position(|v| *v == 0) else {
+            return unavailable(Unavailable::UnrecognizedOutput);
+        };
+        let text: Vec<u8> = value[..length].iter().map(|v| *v as u8).collect();
+        if !text.is_empty() {
+            let ip = std::str::from_utf8(&text)
+                .ok()
+                .and_then(|s| s.parse::<std::net::Ipv4Addr>().ok());
+            match ip {
+                Some(ip) if !ip.is_unspecified() => count += 1,
+                Some(_) => {}
+                None => return unavailable(Unavailable::UnrecognizedOutput),
+            }
+        }
+        pointer = row.Next;
+    }
+    Reading::Available { value: count }
+}
 pub fn run(
     catalog: Catalog,
     authorize: &mut dyn FnMut() -> Result<(), ErrorCode>,
@@ -186,6 +289,16 @@ pub fn run(
     if catalog == Catalog::CiscoVpnStatus {
         return crate::vpn::observe(deadline, authorize);
     }
+    host_resources(None, deadline, authorize)
+}
+/// The selected destination changes only this observation's logical-volume scope.
+pub(crate) fn host_resources(
+    destination: Option<char>,
+    deadline: Instant,
+    authorize: &mut dyn FnMut() -> Result<(), ErrorCode>,
+) -> Result<Report, ErrorCode> {
+    check(deadline, authorize)?;
+    let pending_disk = disk_activity::begin(destination, deadline, authorize)?;
     let first_cpu = cpu();
     let first_network = network();
     let origin = Instant::now();
@@ -197,6 +310,7 @@ pub fn run(
     let last_cpu = cpu();
     let last_network = network();
     let interval = origin.elapsed();
+    let disk_activity = pending_disk.finish(deadline, authorize)?;
     let cpu_busy_basis_points = match first_cpu.zip(last_cpu).and_then(|(a, b)| {
         let total = b
             .kernel
@@ -249,6 +363,9 @@ pub fn run(
         network,
         system_drive_space: disk(),
         disk_pressure: unavailable(Unavailable::Unsupported),
+        disk_activity,
+        default_routes: default_routes(),
+        ipv4_dns_servers: ipv4_dns_servers(),
     };
     check(deadline, authorize)?;
     report.validate()?;
