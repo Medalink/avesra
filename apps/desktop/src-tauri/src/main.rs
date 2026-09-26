@@ -84,7 +84,7 @@ struct Runtime {
     local: Mutex<LocalState>,
     writes: SyncSender<WriteSettings>,
     modes: tokio::sync::watch::Sender<ModeSnapshot>,
-    connection: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
+    connection: Mutex<ConnectionSlot>,
     connection_generation: AtomicU64,
     startup_connection_attempted: std::sync::atomic::AtomicBool,
     pairing: tokio::sync::Mutex<()>,
@@ -98,6 +98,28 @@ struct Runtime {
     owner_setup: std::sync::Arc<tokio::sync::Mutex<()>>,
     shortcut_recording: Mutex<Option<shortcuts::Recording>>,
     shortcut_focus_generation: std::sync::atomic::AtomicU64,
+}
+#[derive(Default)]
+struct ConnectionSlot {
+    task: Option<tauri::async_runtime::JoinHandle<()>>,
+    resume_after_lock: bool,
+    scheduled: Option<u64>,
+}
+impl ConnectionSlot {
+    fn interrupted(&mut self, local: &LocalState) {
+        if !local.locked
+            && (local.connected
+                || matches!(local.connection_phase, ConnectionPhase::Connecting)
+                || self.scheduled.is_some())
+        {
+            self.resume_after_lock = true;
+        }
+        self.scheduled = None;
+    }
+    fn withdraw(&mut self) {
+        self.resume_after_lock = false;
+        self.scheduled = None;
+    }
 }
 impl Runtime {
     fn publish(&self, local: &LocalState) {
@@ -258,8 +280,16 @@ async fn local_control(
         };
         let mut local = state.local.lock().map_err(|_| "Local state unavailable")?;
         if let Some(slot) = connection.as_mut() {
+            if matches!(control, LocalControl::Lock) {
+                slot.interrupted(&local);
+            } else {
+                slot.withdraw();
+                state
+                    .startup_connection_attempted
+                    .store(true, Ordering::SeqCst);
+            }
             state.connection_generation.fetch_add(1, Ordering::SeqCst);
-            if let Some(task) = slot.take() {
+            if let Some(task) = slot.task.take() {
                 task.abort();
             }
         }
@@ -382,12 +412,13 @@ fn start_connection(
         let _ = app.emit("runtime-state", local.clone());
         generation
     };
-    if let Some(previous) = slot.take() {
+    slot.withdraw();
+    if let Some(previous) = slot.task.take() {
         previous.abort();
     }
     let app_handle = app.clone();
     let modes = state.modes.subscribe();
-    *slot = Some(tauri::async_runtime::spawn(async move {
+    slot.task = Some(tauri::async_runtime::spawn(async move {
         let outcome = connection::run(app_handle.clone(), record, modes, generation).await;
         let state = app_handle.state::<Runtime>();
         if let Ok(mut local) = state.local.lock()
@@ -437,10 +468,28 @@ async fn connect_saved(
     startup: bool,
 ) -> Result<(), String> {
     let state = app.state::<Runtime>();
-    let _guard = state
-        .pairing
-        .try_lock()
-        .map_err(|_| "Pairing management already in progress")?;
+    let _guard = if startup {
+        let admission = state.pairing.lock();
+        tokio::pin!(admission);
+        loop {
+            {
+                let local = state.local.lock().map_err(|_| "Local state unavailable")?;
+                if local.locked || state.connection_generation.load(Ordering::SeqCst) != generation
+                {
+                    return Err("Connection request cancelled or superseded".into());
+                }
+            }
+            tokio::select! {
+                guard = &mut admission => break guard,
+                _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {}
+            }
+        }
+    } else {
+        state
+            .pairing
+            .try_lock()
+            .map_err(|_| "Pairing management already in progress")?
+    };
     {
         let mut local = state.local.lock().map_err(|_| "Local state unavailable")?;
         if local.locked || state.connection_generation.load(Ordering::SeqCst) != generation {
@@ -540,12 +589,16 @@ fn disconnect_spark(app: tauri::AppHandle, state: tauri::State<'_, Runtime>) -> 
         .lock()
         .map_err(|_| "Connection manager unavailable")?;
     let mut local = state.local.lock().map_err(|_| "Local state unavailable")?;
+    slot.withdraw();
+    state
+        .startup_connection_attempted
+        .store(true, Ordering::SeqCst);
     state.connection_generation.fetch_add(1, Ordering::SeqCst);
     local.apply(LocalControl::Disconnect);
     state.publish(&local);
     let snapshot = local.clone();
     drop(local);
-    if let Some(task) = slot.take() {
+    if let Some(task) = slot.task.take() {
         task.abort();
     }
     app.emit("runtime-state", snapshot)
@@ -561,11 +614,13 @@ fn session_changed(app: &tauri::AppHandle, locked: bool) {
     let Ok(mut local) = state.local.lock() else {
         return;
     };
+    let was_locked = local.locked;
     if locked {
+        slot.interrupted(&local);
         state.connection_generation.fetch_add(1, Ordering::SeqCst);
         local.apply(LocalControl::Lock);
         local.voice_ready = false;
-        if let Some(task) = slot.take() {
+        if let Some(task) = slot.task.take() {
             task.abort();
         }
     } else {
@@ -574,22 +629,35 @@ fn session_changed(app: &tauri::AppHandle, locked: bool) {
     }
     state.publish(&local);
     let snapshot = local.clone();
+    let automatic = if !locked && was_locked {
+        let initial = !state
+            .startup_connection_attempted
+            .swap(true, Ordering::SeqCst);
+        if initial || slot.resume_after_lock {
+            let generation = state.connection_generation.load(Ordering::SeqCst);
+            slot.resume_after_lock = false;
+            slot.scheduled = Some(generation);
+            Some((generation, local.playback_epoch, initial))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
     drop(local);
     drop(slot);
     let _ = app.emit("signal-clear", ());
     let _ = app.emit("runtime-state", snapshot);
-    if !locked
-        && !state
-            .startup_connection_attempted
-            .swap(true, Ordering::SeqCst)
-    {
-        let generation = state.connection_generation.load(Ordering::SeqCst);
-        let Ok(epoch) = state.local.lock().map(|local| local.playback_epoch) else {
-            return;
-        };
+    if let Some((generation, epoch, initial)) = automatic {
         let app = app.clone();
         tauri::async_runtime::spawn(async move {
-            if connect_saved(app.clone(), generation, true).await.is_ok() {
+            let result = connect_saved(app.clone(), generation, true).await;
+            if let Ok(mut slot) = app.state::<Runtime>().connection.lock()
+                && slot.scheduled == Some(generation)
+            {
+                slot.scheduled = None;
+            }
+            if initial && result.is_ok() {
                 // Saved connection start advances both once. Any intervening
                 // Stop/output change or replacement connection suppresses hello.
                 startup_greeting::run(app, generation.saturating_add(1), epoch.saturating_add(1))
@@ -762,7 +830,7 @@ fn main() {
                 local: Mutex::new(local),
                 writes,
                 modes,
-                connection: Mutex::new(None),
+                connection: Mutex::new(ConnectionSlot::default()),
                 connection_generation: AtomicU64::new(0),
                 startup_connection_attempted: std::sync::atomic::AtomicBool::new(false),
                 pairing: tokio::sync::Mutex::new(()),

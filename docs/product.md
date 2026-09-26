@@ -36,6 +36,27 @@ The header is the single live Spark connection indicator. Its disconnected, conn
 
 On the first verified Windows unlock during each app launch, the native connection coordinator attempts the saved pairing once, using the same credential loader, certificate pinning, bounded handshake and generation checks as Reconnect. No saved pairing is quiet; unreadable credentials or failed connections produce actionable header detail. Explicit disconnect or a newer pairing request supersedes a pending startup attempt. Opening pages never starts another connection. Later Windows unlocks do not undo a manual disconnect. Reconnect grants no voice readiness, restores no setup proof, and replays no task.
 
+If Windows lock interrupts a connected, connecting or already scheduled native
+connection, retain only its reconnect intent. On actual unlock, schedule one fresh
+saved-pairing attempt under the new native generation. Repeated lock notifications
+preserve that intent; a second lock before the scheduled attempt starts must also
+preserve it. Duplicate unlock notifications do not create more attempts. An
+automatic attempt waits for an earlier pairing operation to actually return,
+abandoning its wait when its generation or unlocked context changes. It does not
+retry failed connection or inference work. Explicit Disconnect, Forget or Quit
+clears pending resume intent. Existing mute, deafen and pause choices remain
+unchanged, and normal Personal admission revalidates its current dependencies.
+Unlock resume does not repeat the startup greeting or restore any prior task,
+reply, microphone lease, management proof or output authority.
+
+Future direct verification (not claimed by source/static review): check a first
+launch with saved pairing, then an actual Windows lock/unlock while connected.
+Observe any repeated real Windows notifications without manufacturing them;
+confirm one resume attempt and no repeated greeting or replayed task. Explicitly
+Disconnect before another lock/unlock and confirm it remains disconnected.
+Repeat with saved mute, deafen and pause individually, confirming each choice
+survives reconnection and still controls listening/output.
+
 The owner-requested startup greeting follows that one saved-connection attempt.
 With a selected active voice and permitted speaker output, say `Hello.` or
 `Hello, <remembered owner name>.` once. This fixed greeting is a narrow product
