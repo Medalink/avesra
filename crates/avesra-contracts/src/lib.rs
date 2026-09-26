@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 pub mod activity;
 pub mod actors;
+pub mod clock;
 pub mod directedness;
 pub mod discovery;
 pub mod media;
@@ -10,6 +11,7 @@ pub mod planner;
 pub mod preview;
 pub mod speech;
 pub mod voice;
+pub mod voice_timing;
 pub mod voices;
 
 pub const PROTOCOL_VERSION: u16 = 2;
@@ -181,6 +183,10 @@ pub enum ActionPayload {
     OpenX {
         account: String,
     },
+    ReadInbox {
+        account: String,
+        count: u16,
+    },
     FillPrompt {
         app_id: Uuid,
         project_id: Uuid,
@@ -216,6 +222,13 @@ pub enum ActionPayload {
     },
 }
 impl ActionPayload {
+    pub fn maximum_age_ms(&self) -> u64 {
+        if matches!(self, Self::ReadInbox { .. }) {
+            browser::mailbox::LIFETIME_MS
+        } else {
+            MAX_ACTION_AGE_MS
+        }
+    }
     pub fn operation(&self) -> Operation {
         match self {
             Self::LaunchApp { .. } => Operation::LaunchApp,
@@ -224,6 +237,7 @@ impl ActionPayload {
             Self::ReadPage { .. } => Operation::ReadPage,
             Self::InspectBrowserProvider { .. } => Operation::ReadPage,
             Self::OpenX { .. } => Operation::Navigate,
+            Self::ReadInbox { .. } => Operation::ReadPage,
             Self::FillPrompt { .. } => Operation::FillPrompt,
             Self::SubmitPrompt { .. } => Operation::SubmitPrompt,
             Self::Diagnostic { .. } => Operation::Diagnostic,
@@ -244,6 +258,9 @@ impl ActionPayload {
             } => canonical_https(origin, true) && (1..=100).contains(message_limit),
             Self::InspectBrowserProvider { .. } => true,
             Self::OpenX { account } => browser::provider::x_account(account),
+            Self::ReadInbox { account, count } => {
+                browser::mailbox::account(account) && (1..=100).contains(count)
+            }
             Self::FillPrompt {
                 app_id,
                 project_id,
@@ -346,7 +363,7 @@ impl Action {
         }
         if self.issued_at_ms > now_ms
             || now_ms >= self.expires_at_ms
-            || self.expires_at_ms.saturating_sub(self.issued_at_ms) > MAX_ACTION_AGE_MS
+            || self.expires_at_ms.saturating_sub(self.issued_at_ms) > self.payload.maximum_age_ms()
         {
             return Err(ErrorCode::Expired);
         }

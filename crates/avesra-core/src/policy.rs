@@ -48,7 +48,7 @@ impl PolicyContext<'_> {
         if self.now_ms >= action.expires_at_ms
             || action.issued_at_ms > self.now_ms
             || action.expires_at_ms.saturating_sub(action.issued_at_ms)
-                > avesra_contracts::MAX_ACTION_AGE_MS
+                > action.payload.maximum_age_ms()
         {
             return Err(ErrorCode::Expired);
         }

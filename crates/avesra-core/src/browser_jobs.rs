@@ -216,6 +216,7 @@ pub(crate) fn validate_context(db: &Connection, context: &Context) -> Result<(),
         ActionPayload::ReadPage { .. }
             | ActionPayload::InspectBrowserProvider { .. }
             | avesra_contracts::ActionPayload::OpenX { .. }
+            | avesra_contracts::ActionPayload::ReadInbox { .. }
     ) || action.revision != action_revision
         || action.step_id != context.step.uuid()
         || action.task_id != context.task.uuid()

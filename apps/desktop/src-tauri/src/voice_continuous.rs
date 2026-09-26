@@ -69,6 +69,7 @@ impl Playback {
     }
 }
 pub(super) struct Evidence {
+    pub activity: (Instant, Instant),
     pub known: bool,
     pub output: bool,
     pub near_end: bool,
@@ -85,8 +86,20 @@ struct CapturedOwner {
     owner: Owner,
     marks: VecDeque<Mark>,
 }
+struct Queued {
+    value: Option<(Completed, Evidence)>,
+    performance: std::sync::Arc<crate::performance::State>,
+}
+impl Drop for Queued {
+    fn drop(&mut self) {
+        if self.value.is_some() {
+            self.performance
+                .gate(crate::performance::GateReason::Abandoned);
+        }
+    }
+}
 impl CapturedOwner {
-    fn evidence(&self, segment: &Completed) -> Evidence {
+    fn evidence(&self, segment: &Completed, activity: (Instant, Instant)) -> Evidence {
         let marks: Vec<_> = self
             .marks
             .iter()
@@ -94,6 +107,7 @@ impl CapturedOwner {
             .collect();
         let expected = (segment.samples() as usize).div_ceil(320);
         Evidence {
+            activity,
             known: marks.len() >= expected && marks.iter().all(|v| v.known),
             output: marks.iter().any(|v| v.output),
             near_end: marks.iter().filter(|v| v.near_end).count() >= 4,
@@ -134,8 +148,7 @@ pub(super) async fn run(
         marks: VecDeque::new(),
     });
     let (audio_send, mut audio_receive) = tokio::sync::mpsc::channel::<Captured>(2);
-    let (utterance_send, mut utterance_receive) =
-        tokio::sync::mpsc::channel::<(Completed, Evidence)>(1);
+    let (utterance_send, mut utterance_receive) = tokio::sync::mpsc::channel::<Queued>(1);
     let producer = async {
         let mut sequence = 0u64;
         let mut pcm = Vec::with_capacity(6400);
@@ -203,9 +216,11 @@ pub(super) async fn run(
                 .await
                 .map_err(|_| "Continuous activity input stalled")?
                 .ok_or("Continuous input stopped")?;
+            let activity_started = Instant::now();
             let observation = stream
                 .exchange(app, lease, frame, || current(app, session, admission))
                 .await?;
+            let activity_ended = Instant::now();
             let completed = {
                 let mut held = owner.lock().map_err(|_| "Utterance owner unavailable")?;
                 let segments = held
@@ -220,13 +235,20 @@ pub(super) async fn run(
                 segments
                     .into_iter()
                     .map(|segment| {
-                        let evidence = held.evidence(&segment);
+                        let evidence = held.evidence(&segment, (activity_started, activity_ended));
                         (segment, evidence)
                     })
                     .collect::<Vec<_>>()
             };
             for segment in completed {
-                if utterance_send.try_send(segment).is_err() {
+                if let Err(error) = utterance_send.try_send(Queued {
+                    value: Some(segment),
+                    performance: state.performance.clone(),
+                }) {
+                    let _ = error.into_inner().value.take();
+                    state
+                        .performance
+                        .gate(crate::performance::GateReason::QueueOverflow);
                     let _=app.emit("runtime-error","Avesra is still finishing the previous request; an additional utterance could not be queued.");
                 }
             }
@@ -250,9 +272,15 @@ pub(super) async fn run(
         }
     };
     let consumer = async {
-        while let Some((segment, evidence)) = utterance_receive.recv().await {
+        while let Some(mut queued) = utterance_receive.recv().await {
             current(app, session, admission)?;
+            let Some((segment, evidence)) = queued.value.take() else {
+                continue;
+            };
             if segment.completed().elapsed() > Duration::from_secs(2) {
+                state
+                    .performance
+                    .gate(crate::performance::GateReason::QueueExpired);
                 let _ = app.emit(
                     "runtime-error",
                     "The pending utterance expired while Avesra was busy; please say it again.",
@@ -260,6 +288,9 @@ pub(super) async fn run(
                 continue;
             }
             if !evidence.known {
+                state
+                    .performance
+                    .gate(crate::performance::GateReason::ReferenceUnknown);
                 continue;
             }
             process(

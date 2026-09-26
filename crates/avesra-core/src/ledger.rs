@@ -83,6 +83,7 @@ impl Store {
             ActionPayload::ReadPage { .. }
                 | ActionPayload::InspectBrowserProvider { .. }
                 | avesra_contracts::ActionPayload::OpenX { .. }
+                | avesra_contracts::ActionPayload::ReadInbox { .. }
         ))
     }
     /// Historical evidence only. Never authorizes a new effect or claims that a

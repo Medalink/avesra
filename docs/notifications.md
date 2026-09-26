@@ -81,7 +81,7 @@ and no IDs when nothing was announced. IDs are nonnil, unique and bounded to32.
 Deleted event bodies remain described as deleted. No caller supplies the answer
 text or event list, and history cannot reconstruct the opaque published handle.
 
-Speech wire4 carries this provenance through the existing normal-speech handshake
+Speech wire5 carries this provenance through the existing normal-speech handshake
 and echoed stream context. Native-derived output is not a model completion. The
 controller authenticates the paired current actor/session/action/output context,
 consumes the genuine claim's ordinal above its session high-water mark, records

@@ -17,6 +17,7 @@ pub struct View {
     local: trace::Snapshot,
     controller: Option<trace::Snapshot>,
     controller_error: Option<&'static str>,
+    process_gate_totals: Option<std::collections::BTreeMap<crate::performance::GateReason, u64>>,
 }
 struct Caller(Arc<AtomicBool>);
 impl Drop for Caller {
@@ -152,6 +153,7 @@ async fn collect(
         .map_err(|_| "Owner verification stopped")??;
         current(&window, &app, challenge, started, &present)?;
         let view = View {
+            process_gate_totals: app.state::<Runtime>().performance.gate_counts(),
             local,
             controller,
             controller_error,

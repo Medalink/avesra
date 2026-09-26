@@ -10,8 +10,9 @@ mod planner;
 #[path = "conversation_tasks.rs"]
 mod tasks;
 pub use planner::{
-    ObservationClaim, ObservationRequest, PlannerAuthority, PlannerCancellation, PlannerClaim,
-    PlannerRequest, PlannerRetirement, PlannerSummary, StoredReply,
+    MemoryAnswer, ObservationClaim, ObservationRequest, PendingMemory, PlannerAuthority,
+    PlannerCancellation, PlannerClaim, PlannerRequest, PlannerRetirement, PlannerSummary,
+    StoredReply,
 };
 pub(crate) use planner::{PLAN_SCHEMA, REPLY_SCHEMA, SEQUENCE_SCHEMA};
 pub(crate) use tasks::verified_task_source;
@@ -215,6 +216,7 @@ impl Store {
         if !conversation.precommit_current() {
             return Err(ErrorCode::Expired);
         }
+        crate::memory::conversation::before_accept(conversation.text())?;
         let context = conversation.context();
         let record = Record {
             id: Uuid::new_v4(),
@@ -346,4 +348,16 @@ impl Store {
         tx.commit().map_err(|_| ErrorCode::Storage)?;
         Ok(dispatches)
     }
+}
+
+pub(crate) fn memory_source_text(
+    db: &Connection,
+    actor: Uuid,
+    source: &crate::memory::AcceptedSource,
+) -> Result<String, ErrorCode> {
+    let (record, _) = tasks::read_record(db, source.turn)?;
+    if record.actor != actor || record.revision != source.revision {
+        return Err(ErrorCode::Stale);
+    }
+    Ok(record.text)
 }

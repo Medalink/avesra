@@ -19,6 +19,7 @@ use std::{
 use tauri::Manager;
 use uuid::Uuid;
 pub mod documents;
+pub(crate) mod mailbox;
 mod reading;
 pub mod scopes;
 
@@ -1180,6 +1181,11 @@ async fn run(
                             version: browser::VERSION,
                             read: read.clone(),
                             read_ack: read_ack.clone(),
+                            mailbox_ack: if read.is_some() {
+                                state.browser.reading.mailbox_ack()?
+                            } else {
+                                None
+                            },
                             session: challenge.session,
                             generation,
                             sequence,

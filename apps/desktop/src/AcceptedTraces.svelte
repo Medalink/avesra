@@ -1,7 +1,7 @@
 <script lang="ts">
   import { command, native, type Runtime } from "./runtime";
   let { runtime }: { runtime: Runtime | null } = $props();
-  type Span = { id:string; link:{turn:string;operation:string;parent:string|null}; host:string; process:string; stage:string; outcome:string; error:string|null; duration_us:number; queue_us:number|null; retries:number; deployment:{model:string|null;image:string|null;config:string|null} };
+  type Span = { id:string; link:{turn:string;operation:string;parent:string|null}; host:string; process:string; stage:string; outcome:string; error:string|null; duration_us:number; queue_us:number|null; retries:number; deployment:{model:string|null;image:string|null;config:string|null}; analysis?:{request:string;receipts:{worker:string;host:string;process:string;lane:string;model_revision:string;duration_us:number}[]}|null };
   type Snapshot = { records:Span[]; trace_days:number; observer_loss:number; evicted:number; collector_starts:number; truncated:boolean };
   type View = { local:Snapshot; controller:Snapshot|null; controller_error:string|null };
   let view = $state<View|null>(null);
@@ -54,9 +54,10 @@
         <p class="av-hint">{(row.duration_us/1000).toFixed(2)} ms host-local duration · queue {row.queue_us===null?"unavailable":`${(row.queue_us/1000).toFixed(2)} ms`} · {row.retries} retries</p>
         <p class="av-hint break-all">Operation {row.link.operation} · parent {row.link.parent??"none"} · process {row.process}</p>
         <p class="av-hint break-all">Model {row.deployment.model??"unavailable"} · image {row.deployment.image??"unavailable"} · config {row.deployment.config??"unavailable"}</p>
+        {#if row.analysis}{#each row.analysis.receipts as receipt}<p class="av-hint break-all">{receipt.host} {receipt.lane} driver round trip: {(receipt.duration_us/1000).toFixed(2)} ms · worker {receipt.worker} · process {receipt.process} · model {receipt.model_revision}. Includes IPC and validation; not GPU kernel time.</p>{/each}{:else if row.stage==="voice_analysis"}<p class="av-hint">Controller stage receipts unavailable.</p>{/if}
       </div>
     {/each}
   {/if}
   {#if message}<p class="av-hint break-all" role="status">{message}</p>{/if}
-  <p class="av-hint">Different hosts have unsynchronized clocks; durations are never subtracted across hosts. Submission proves native output delivery to the callback, not audible speech. Preacceptance ASR/speaker metrics, hardware headroom and complete release benchmarks remain separate evidence.</p>
+  <p class="av-hint">Different hosts have unsynchronized clocks; durations are never subtracted across hosts. Submission proves native output delivery to the callback, not audible speech. Successful controller ASR/speaker receipts are separate from native failure totals. Hardware headroom and complete release benchmarks remain separate evidence.</p>
 </section>

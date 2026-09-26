@@ -298,6 +298,7 @@ impl EffectAuthority<'_> {
             avesra_contracts::ActionPayload::ReadPage { .. }
                 | avesra_contracts::ActionPayload::InspectBrowserProvider { .. }
                 | avesra_contracts::ActionPayload::OpenX { .. }
+                | avesra_contracts::ActionPayload::ReadInbox { .. }
         ) {
             return Err(ErrorCode::Unsupported);
         }

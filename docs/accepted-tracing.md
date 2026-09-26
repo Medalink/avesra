@@ -1,5 +1,8 @@
 # Accepted-turn traces
 
+Preacceptance voice measurements are promoted only by genuine durable acceptance;
+see [voice-timing.md](voice-timing.md) for receipts, aggregate abstentions and limits.
+
 Plan001 section16 governs this observer. Only genuine accepted turn IDs start
 retained traces. Existing turn, request, private job, task and output IDs are
 correlation, never admission. Native and controller independently retain host-

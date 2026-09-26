@@ -5,6 +5,7 @@ import { ObservationAuthority } from "./authority.js";
 import { beginPageExcerpt, finishPageExcerpt, type Extracted } from "./page-excerpt.js";
 import { probe } from "./provider.js";
 import { observeXReady, type XObservation, type XInputObservation } from "./x-ready.js";
+import {MailboxStream,observeGmail,type Observation as GmailObservation,type Ack as MailboxAck} from "./gmail-job.js";
 import { XDocument } from "./x-document.js";
 import type { Candidate } from "./documents.js";
 
@@ -25,7 +26,8 @@ export function pendingSettlement(pairing: p.Pairing): r.Settlement | null {
 type Job = {
   request: r.Request; document:Candidate|null; creation:XDocument|null; owner: ReturnType<ObservationAuthority["snapshot"]>;
   deadline: number; withdrawn: boolean; sent: boolean;
-  extracted: Extracted | XObservation | XInputObservation | null; reply: r.Reply | null;
+  mailbox:MailboxStream|null;
+  extracted: Extracted | XObservation | XInputObservation | GmailObservation | null; reply: r.Reply | null;
   focusTab:boolean; focusWindow:boolean; focusVacancy:boolean; focused:boolean; focusUncertain:boolean;
 };
 
@@ -35,8 +37,8 @@ function text(value: unknown, maximum: number): value is string {
 }
 function extracted(value: unknown, request: r.Request, document:Candidate): value is Extracted {
   if (p.object(value,["started","state","dom_revision","provider","complete","choices"])) {
-    return value.started === true && value.state === "provider_inspection" && (request.mode.kind === "provider_inspection" || request.mode.kind === "x_ready")
-      && value.provider === (request.mode.kind === "x_ready" ? "x" : request.mode.provider) && probe({provider:value.provider,scope:"provider_header",document,
+    return value.started === true && value.state === "provider_inspection" && (request.mode.kind === "provider_inspection" || request.mode.kind === "x_ready" || request.mode.kind === "inbox")
+      && value.provider === (request.mode.kind === "x_ready" ? "x" : request.mode.kind === "inbox" ? "gmail" : request.mode.provider) && probe({provider:value.provider,scope:"provider_header",document,
         dom_revision:value.dom_revision,complete:value.complete,choices:value.choices});
   }
   if (p.object(value, ["started", "state", "request", "url", "guard_absent"])) {
@@ -89,7 +91,7 @@ export class ReadJob {
   }
   invalidate() {
     clearTimeout(this.expiry); this.expiry = undefined;
-    if (this.job) { this.job.withdrawn = true; this.job.extracted = null; this.job.reply = null; }
+    if (this.job) { this.job.mailbox?.withdraw(); this.job.withdrawn = true; this.job.extracted = null; this.job.reply = null; }
   }
   dispose() { this.disposed = true; this.invalidate(); }
   // Only the two exact expected focus notifications may belong to this job.
@@ -143,8 +145,9 @@ export class ReadJob {
     this.seen.add(value.context.request);
     if (this.running || outbox) throw new Error("Read owner occupied");
     const job: Job = { request: value, document:value.document, creation:null, owner: this.authority.snapshot(), deadline: performance.now() + value.remaining_ms,
-      withdrawn: false, sent: false, extracted: null, reply: null,focusTab:false,focusWindow:false,focusVacancy:false,focused:false,focusUncertain:false };
+      withdrawn: false, sent: false, mailbox:null, extracted: null, reply: null,focusTab:false,focusWindow:false,focusVacancy:false,focused:false,focusUncertain:false };
     this.job = job;
+    if(value.mode.kind==="inbox")job.mailbox=new MailboxStream(value.context,()=>this.current(job));
     this.check(job);
     this.arm(job);
     const actual = acquireBrowserJob();
@@ -200,7 +203,8 @@ export class ReadJob {
         world: "ISOLATED", func: beginPageExcerpt,
         args: [{ request: job.request.context.request, url: job.document!.url,
           maxBlocks: Math.min(16, job.request.message_limit), budgetMs: Math.max(1, Math.floor(job.deadline - performance.now())),
-          provider: job.request.mode.kind === "provider_inspection" ? job.request.mode.provider : job.request.mode.kind === "x_ready" ? "x" : null,
+          provider: job.request.mode.kind === "provider_inspection" ? job.request.mode.provider : job.request.mode.kind === "x_ready" ? "x" : job.request.mode.kind === "inbox" ? "gmail" : null,
+          inbox:job.request.mode.kind==="inbox",
           xReady:job.request.mode.kind==="x_ready" }],
       });
       const value = result(values, job);
@@ -209,6 +213,12 @@ export class ReadJob {
       if (this.current(job)) job.extracted = value;
       this.check(job);
       await this.verify(job); this.check(job);
+      if(job.request.mode.kind==="inbox"){
+        const observed=await chrome.scripting.executeScript({target:{tabId:job.document!.tab,documentIds:[job.document!.document]},world:"ISOLATED",func:observeGmail,args:[job.request.context.request,job.document!.url,job.request.mode.account]});
+        this.check(job);const value=result(observed,job);
+        if(!p.object(value,["started","state","dom_revision","account","incomplete"]) || value.started!==true || value.state!=="inbox" || !p.counter(value.dom_revision) || value.account!==job.request.mode.account || !["account_unverified","inbox_membership_unverified","provider_unsupported"].includes(String(value.incomplete)))throw new Error("Gmail semantics unavailable");
+        job.extracted=value as GmailObservation;
+      }
       if(job.request.mode.kind==="x_ready"){
         const observed=await chrome.scripting.executeScript({target:{tabId:job.document!.tab,documentIds:[job.document!.document]},world:"ISOLATED",func:observeXReady,
           args:[job.request.context.request,job.document!.url,job.request.mode.account]});
@@ -271,6 +281,8 @@ export class ReadJob {
           outcome = { state: "excerpt", excerpt: { coverage: "partial", document: job.document!,
             dom_revision: value.dom_revision, title: value.title, blocks: value.blocks,
             truncated: value.truncated, excluded_content: value.excluded_content } };
+        } else if (value.state === "inbox" && value.dom_revision===finish.dom_revision && job.mailbox) {
+          outcome={state:"inbox",terminal:{document:job.document!,dom_revision:value.dom_revision,account:value.account,...job.mailbox.terminal(),incomplete:value.incomplete}};
         } else if (value.state === "x_ready" && value.dom_revision === finish.dom_revision && job.focused) {
           outcome={state:"x_ready",ready:{document:job.document!,dom_revision:value.dom_revision,account:value.account,focused:true,created:job.request.document===null}};
         } else if (value.state === "x_needs_input" && value.dom_revision === finish.dom_revision) {
@@ -292,6 +304,9 @@ export class ReadJob {
     if (outbox) throw new Error("Settlement owner occupied");
     outbox = { settlement: { context: job.request.context, kind: "actual_job_settled" }, actual };
   }
+  takeMailboxChunk() {return this.job?.mailbox?.take()??null;}
+  mailboxWaiting():boolean {return this.job?.mailbox?.waiting()??false;}
+  acknowledgeMailbox(ack:MailboxAck|null) {this.job?.mailbox?.acknowledge(ack);}
   takeReply(): r.Reply | null {
     const job = this.job;
     if (!job || !this.current(job) || job.sent || !job.reply) { if (job && !this.current(job)) this.invalidate(); return null; }

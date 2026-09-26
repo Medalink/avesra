@@ -71,6 +71,12 @@ impl Management {
     }
 }
 enum Command {
+    MemoryAnswer {
+        claim: Box<PlannerClaim>,
+        approved: Option<Box<avesra_core::memory::conversation::Deletion>>,
+        authorize: PlannerAuthorization,
+        reply: SyncSender<Result<avesra_core::conversations::MemoryAnswer, ErrorCode>>,
+    },
     ObservationAnswer {
         request: Box<ObservationRequest>,
         dispatch: Uuid,
@@ -78,6 +84,11 @@ enum Command {
         reply: SyncSender<Result<StoredReply, ErrorCode>>,
     },
     EventAnswer {
+        claim: Box<PlannerClaim>,
+        authorize: PlannerAuthorization,
+        reply: SyncSender<Result<StoredReply, ErrorCode>>,
+    },
+    ClockAnswer {
         claim: Box<PlannerClaim>,
         authorize: PlannerAuthorization,
         reply: SyncSender<Result<StoredReply, ErrorCode>>,
@@ -572,6 +583,7 @@ impl PublishedReply {
     }
 }
 struct PublishedSource {
+    memory: Option<(Uuid, Uuid)>,
     target: CancellationTarget,
     registration: Uuid,
     signal: PlannerCancellation,
@@ -749,6 +761,7 @@ fn execute_read(
             || (matches!(
                 request.mode,
                 avesra_contracts::browser::reading::Mode::XReady { .. }
+                    | avesra_contracts::browser::reading::Mode::Inbox { .. }
             ) && !expected
                 .operations
                 .contains(&avesra_contracts::browser::ScopeOperation::Navigate))
@@ -806,6 +819,10 @@ fn execute_read(
             }
             if content.is_none() {
                 match preparation.try_content() {
+                    Ok(Some(value)) if value.is_chunk() => {
+                        let ack = value.accept_chunk(&mut execution, &mut current)?;
+                        preparation.acknowledge_chunk(ack)?;
+                    }
                     Ok(value) => content = value,
                     Err(error) => break Err(error),
                 }
@@ -859,6 +876,25 @@ pub struct NativeEffects {
     state: Arc<Mutex<State>>,
 }
 impl NativeEffects {
+    pub fn memory_answer(
+        &self,
+        claim: PlannerClaim,
+        approved: Option<avesra_core::memory::conversation::Deletion>,
+        authorize: PlannerAuthorization,
+    ) -> Result<Receiver<Result<avesra_core::conversations::MemoryAnswer, ErrorCode>>, ErrorCode>
+    {
+        planner_current(&self.state, claim.target(), claim.context().action_epoch)?;
+        let (reply, receive) = mpsc::sync_channel(1);
+        self.send
+            .try_send(Command::MemoryAnswer {
+                claim: Box::new(claim),
+                approved: approved.map(Box::new),
+                authorize,
+                reply,
+            })
+            .map_err(|_| ErrorCode::Unavailable)?;
+        Ok(receive)
+    }
     pub fn observation_answer(
         &self,
         request: ObservationRequest,
@@ -907,6 +943,21 @@ impl NativeEffects {
         let (reply, receive) = mpsc::sync_channel(1);
         self.send
             .try_send(Command::EventAnswer {
+                claim: Box::new(claim),
+                authorize,
+                reply,
+            })
+            .map_err(|_| ErrorCode::Unavailable)?;
+        Ok(receive)
+    }
+    pub fn clock_answer(
+        &self,
+        claim: PlannerClaim,
+        authorize: PlannerAuthorization,
+    ) -> Result<Receiver<Result<StoredReply, ErrorCode>>, ErrorCode> {
+        let (reply, receive) = mpsc::sync_channel(1);
+        self.send
+            .try_send(Command::ClockAnswer {
                 claim: Box::new(claim),
                 authorize,
                 reply,
@@ -1080,10 +1131,34 @@ impl NativeEffects {
                         let _ = completion.reply.try_send(result);
                     }
                     let mut job = match command {
+                        Command::MemoryAnswer{claim,approved,mut authorize,reply}=>{
+                            let target=claim.target();let epoch=claim.context().action_epoch;let cancellation=claim.cancellation();
+                            let result=(||{
+                                planner_current(&owned,target,epoch)?;
+                                if approved.is_some() || matches!(avesra_core::memory::conversation::parse(&claim.transport()?.text),Some(avesra_core::memory::conversation::Command::Update{..})) {
+                                    let state=owned.lock().map_err(|_|ErrorCode::Unavailable)?;
+                                    for (other,signal) in &state.planners {if other.actor==target.actor && *other!=target {signal.cancel();}}
+                                    for source in &state.replies {if source.target.actor==target.actor && source.memory.is_some(){source.signal.cancel();}}
+                                }
+                                controller.management().finish_memory_answer(*claim,approved.map(|v|*v),&adapter.apps,&mut|authority|{planner_current(&owned,target,epoch)?;authorize(authority)?;planner_current(&owned,target,epoch)})
+                            })();
+                            if result.is_err(){cancellation.cancel();if let Ok(mut state)=owned.lock(){state.planners.retain(|(t,_)|*t!=target);}}
+                            let _=reply.try_send(result);continue;
+                        }
                         Command::ObservationAnswer{request,dispatch,mut authorize,reply}=>{
                             let target=request.target();let epoch=request.action_epoch();let cancellation=request.cancellation();
                             let result=(||{planner_current(&owned,target,epoch)?;controller.management().finish_observation_answer(*request,dispatch,&mut|authority|{planner_current(&owned,target,epoch)?;authorize(authority)?;planner_current(&owned,target,epoch)})})();
                             if result.is_err(){cancellation.cancel();if let Ok(mut state)=owned.lock(){state.planners.retain(|(t,_)|*t!=target);}}
+                            let _=reply.try_send(result);continue;
+                        }
+                        Command::ClockAnswer { claim, mut authorize, reply }=>{
+                            let target=claim.target();let epoch=claim.context().action_epoch;
+                            let result=(||{
+                                planner_current(&owned,target,epoch)?;
+                                let observation=crate::clock::observe()?;
+                                controller.management().finish_clock_answer(*claim,observation,&adapter.apps,&mut |authority|{planner_current(&owned,target,epoch)?;authorize(authority)?;planner_current(&owned,target,epoch)})
+                            })();
+                            if result.is_err()&&let Ok(mut state)=owned.lock(){state.planners.retain(|(t,_)|*t!=target);}
                             let _=reply.try_send(result);continue;
                         }
                         Command::EventAnswer { claim, mut authorize, reply }=>{
@@ -1628,6 +1703,14 @@ impl NativeEffects {
             .clone();
         // Transfer under one state lock; exact-source cancellation has no gap.
         state.replies.push(PublishedSource {
+            memory: match reply.provenance() {
+                avesra_contracts::speech::Provenance::NativeMemory {
+                    memory: Some(memory),
+                    revision: Some(revision),
+                    value_bearing: true,
+                } => Some((*memory, *revision)),
+                _ => None,
+            },
             target,
             registration: c.registration_revision,
             signal,

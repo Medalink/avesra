@@ -43,11 +43,15 @@ and directedness keeps its independent transcript-only request and policy.
 Checks for this change are source review/formatting/compilation under the user's
 no-automated-tests constraint; a real two-turn spoken exchange remains runtime proof.
 
-The current controller retains at most 64 planner attempts per control session,
-including failed or cancelled attempts, to preserve replay rejection. Further
-attempts require a new control session; this source does not claim indefinite
-conversation or implement automatic session rotation. Rotation would discard
-the old session's dialogue context and cannot replay pending work.
+The current controller bounds its retained planner roster at 64 entries per
+control session. Retired entries compact only after their actual preparation,
+output and private synthesis ownership has settled; live or uncertain owners
+continue to consume capacity. This is not a lifetime attempt limit. The native
+ledger allocates durable monotonically increasing claim ordinals, while each
+control session retains its admitted high-water mark after compaction, rejecting
+replay without rotating the session or dropping its dialogue context. See
+[planner ingress](planner-ingress.md) for the precise retirement conditions.
+Source and build checks do not establish a long-conversation or indefinite soak.
 
 ## Typed action proposal continuation
 

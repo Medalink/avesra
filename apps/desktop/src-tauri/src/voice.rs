@@ -19,6 +19,8 @@ use tauri::{Emitter, Manager};
 use uuid::Uuid;
 #[path = "voice_continuous.rs"]
 mod continuous;
+#[path = "voice_observer.rs"]
+mod observer;
 
 pub struct Worker(tauri::async_runtime::JoinHandle<()>);
 struct RestoreAttempt {
@@ -450,7 +452,21 @@ async fn process(
     segment: Completed,
     playback: &mut continuous::Playback,
 ) -> Result<(), String> {
-    current(app, session, admission)?;
+    use crate::performance::{GateReason, Operation, Outcome, Stage};
+    let performance = app.state::<Runtime>().performance.clone();
+    let activity = match &proof {
+        InputProof::Personal(value) => Some(value.activity),
+        InputProof::Quiet(_) => None,
+    };
+    let mut observer = observer::Observer::new(
+        performance.clone(),
+        segment.started(),
+        segment.completed(),
+        activity,
+    );
+    current(app, session, admission).inspect_err(|_| {
+        observer.finish(GateReason::ContextChanged);
+    })?;
     let id = segment.id();
     let context = segment.context().clone();
     let started = segment.started();
@@ -465,21 +481,38 @@ async fn process(
     // Existing analysis backend has a one-second minimum; shorter segments
     // abstain rather than pad audio or weaken signal operating points.
     if samples < 16000 {
+        observer.finish(GateReason::ShortSpan);
         return Ok(());
     }
-    let analysis =
-        crate::connection::analyze_voice(pairing, session, id, segment.into_pcm(), false).await?;
+    let analysis_started = Instant::now();
+    let span = performance.begin(Operation::Voice, Stage::VoiceAnalysis, id);
+    let result =
+        crate::connection::analyze_voice(pairing, session, id, segment.into_pcm(), false).await;
+    span.finish(if result.is_ok() {
+        Outcome::Complete
+    } else {
+        Outcome::Failed
+    });
+    let mut analysis = result.inspect_err(|_| {
+        observer.finish(GateReason::AnalysisFailed);
+    })?;
+    observer.analysis(analysis_started, Instant::now(), analysis.timing.take());
     app.state::<Runtime>().performance.record(
         crate::performance::Operation::Voice,
         crate::performance::Stage::EndpointToAnalysis,
         endpoint.elapsed(),
         crate::performance::Outcome::Complete,
     );
-    current(app, session, admission)?;
+    current(app, session, admission).inspect_err(|_| {
+        observer.finish(GateReason::ContextChanged);
+    })?;
     if analysis.transcript.trim().is_empty() {
+        observer.finish(GateReason::EmptyTranscript);
         return Ok(());
     }
     let learned_embedding = analysis.embedding.clone();
+    let intent_started = Instant::now();
+    let mut intent_span = Some(performance.begin(Operation::Voice, Stage::VoiceIntent, id));
     let directed = if admission.kind == voice::AdmissionKind::Personal {
         voice::DirectedIntent::Personal {
             utterance: id,
@@ -494,7 +527,13 @@ async fn process(
             &analysis.transcript,
             || current(app, session, admission),
         )
-        .await?;
+        .await
+        .inspect_err(|_| {
+            observer.finish(GateReason::DirectednessUnknown);
+            if let Some(span) = intent_span.take() {
+                span.finish(Outcome::Failed);
+            }
+        })?;
         app.state::<Runtime>().performance.record(
             crate::performance::Operation::Voice,
             crate::performance::Stage::EndpointToDirectedness,
@@ -503,7 +542,13 @@ async fn process(
         );
         app.state::<Runtime>()
             .qualification
-            .directed_current(admission.session, &directed.binding)?;
+            .directed_current(admission.session, &directed.binding)
+            .inspect_err(|_| {
+                observer.finish(GateReason::ContextChanged);
+                if let Some(span) = intent_span.take() {
+                    span.finish(Outcome::Failed);
+                }
+            })?;
         use avesra_contracts::directedness::Category;
         match directed.category {
             Category::Request | Category::FollowUp => voice::DirectedIntent::Directed {
@@ -524,6 +569,14 @@ async fn process(
             Category::Unknown => voice::DirectedIntent::Unknown,
         }
     };
+    if let Some(span) = intent_span.take() {
+        span.finish(Outcome::Complete);
+    }
+    observer.measured(
+        avesra_core::trace::Stage::VoiceIntent,
+        intent_started,
+        Instant::now(),
+    );
     let observation = voice::Observation {
         utterance: id,
         context: context.clone(),
@@ -567,12 +620,15 @@ async fn process(
         directed,
     };
     let state = app.state::<Runtime>();
-    let accepted = {
+    let gate_started = Instant::now();
+    let gate_span = performance.begin(Operation::Voice, Stage::VoiceGate, id);
+    let gate_result = (|| -> Result<_, String> {
         let local = state.local.lock().map_err(|_| "Local state unavailable")?;
         if !proof.current(&state, &local) {
+            observer.finish(GateReason::ReferenceUnknown);
             return Err("Assistant output changed before gate admission".into());
         }
-        state
+        let value = state
             .qualification
             .with_profile(&state, &local, &context, |profile| {
                 let decision = state
@@ -585,10 +641,25 @@ async fn process(
                         .consume(&context, profile)
                         .map(Some)
                         .map_err(|_| "Conversation provenance changed"),
-                    voice::Decision::Abstain(_) => Ok(None),
+                    voice::Decision::Abstain(reason) => {
+                        observer.finish(reason.into());
+                        Ok(None)
+                    }
                 }
-            })??
-    };
+            })??;
+        Ok(value)
+    })();
+    gate_span.finish(if gate_result.is_ok() {
+        Outcome::Complete
+    } else {
+        Outcome::Failed
+    });
+    let accepted = gate_result.inspect_err(|_| observer.finish(GateReason::AdmissionFailed))?;
+    observer.measured(
+        avesra_core::trace::Stage::VoiceGate,
+        gate_started,
+        Instant::now(),
+    );
     let Some(accepted) = accepted else {
         return Ok(());
     };
@@ -632,12 +703,25 @@ async fn process(
                     })
             }),
         )
-        .map_err(|_| "Conversation admission is busy")?;
+        .map_err(|_| {
+            observer.finish(GateReason::AdmissionFailed);
+            "Conversation admission is busy"
+        })?;
     let turn = tokio::task::spawn_blocking(move || receiver.recv())
         .await
-        .map_err(|_| "Conversation worker stopped")?
-        .map_err(|_| "Conversation worker stopped")?
-        .map_err(|_| "Conversation was not durably accepted")?;
+        .map_err(|_| {
+            observer.finish(GateReason::AdmissionFailed);
+            "Conversation worker stopped"
+        })?
+        .map_err(|_| {
+            observer.finish(GateReason::AdmissionFailed);
+            "Conversation worker stopped"
+        })?
+        .map_err(|_| {
+            observer.finish(GateReason::AdmissionFailed);
+            "Conversation was not durably accepted"
+        })?;
+    observer.promote(&turn);
     let dispatch = avesra_core::ledger::DispatchSession {
         actor_id: context.actor.ok_or("Actor missing")?,
         device_id: context.device,

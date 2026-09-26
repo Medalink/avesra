@@ -17,6 +17,15 @@ mod observation;
 pub use observation::{ObservationClaim, ObservationRequest};
 
 const MAX_BODY: usize = 65_536;
+#[path = "conversation_memory.rs"]
+mod memory;
+pub use memory::{MemoryAnswer, PendingMemory};
+enum ReplyInput {
+    Memory(Option<crate::memory::conversation::Deletion>),
+    Model(Box<planner::Reply>),
+    Events,
+    Clock(crate::clock::Observation),
+}
 pub(crate) const PLAN_SCHEMA: &str = "CREATE TABLE conversation_plans(turn TEXT PRIMARY KEY NOT NULL REFERENCES accepted_conversations(id),request TEXT UNIQUE NOT NULL,actor TEXT NOT NULL,body TEXT NOT NULL CHECK(length(CAST(body AS BLOB))<=65536),state TEXT NOT NULL CHECK(state IN ('pending','replied','cancelled','suspended')))";
 pub(crate) const REPLY_SCHEMA: &str = "CREATE TABLE conversation_replies(turn TEXT PRIMARY KEY NOT NULL REFERENCES conversation_plans(turn),revision TEXT UNIQUE NOT NULL,request TEXT UNIQUE NOT NULL REFERENCES conversation_plans(request),body TEXT NOT NULL CHECK(length(CAST(body AS BLOB))<=65536))";
 pub(crate) const SEQUENCE_SCHEMA: &str = "CREATE TABLE planner_claim_sequence(id INTEGER PRIMARY KEY CHECK(id=1),value INTEGER NOT NULL CHECK(value>=0 AND value<=9007199254740991))";
@@ -439,6 +448,22 @@ fn read_reply(db: &Connection, plan: &Plan) -> Result<Option<ReplyRecord>, Error
     }
     let value: ReplyRecord = serde_json::from_slice(&body).map_err(|_| ErrorCode::Malformed)?;
     value.provenance.validate()?;
+    if matches!(value.provenance, Provenance::NativeMemory { .. })
+        && (crate::memory::conversation::parse(&plan.request.text).is_none()
+            || !matches!(value.reply.response, planner::Response::Answer { .. }))
+    {
+        return Err(ErrorCode::Malformed);
+    }
+    if let Provenance::NativeClock {
+        clock_kind,
+        reading,
+    } = &value.provenance
+        && (crate::clock::question_kind(&plan.request.text) != Some(*clock_kind)
+            || !matches!(value.reply.response, planner::Response::Answer { .. })
+            || value.reply.response.text() != reading.answer(*clock_kind)?)
+    {
+        return Err(ErrorCode::Malformed);
+    }
     if let Provenance::NativeEvents { event_kind, .. } = &value.provenance {
         let expected = match crate::notifications::question_kind(&plan.request.text) {
             Some(crate::notifications::Kind::Learning) => {
@@ -544,6 +569,9 @@ fn recent_dialogue(
         {
             break;
         }
+        if crate::memory::conversation::parse(&record.text).is_some() {
+            continue;
+        }
         if !matches!(state.as_str(), "answered" | "waiting_input") {
             continue;
         }
@@ -572,13 +600,18 @@ fn recent_dialogue(
                     continue;
                 }
             }
-            Provenance::Model if crate::notifications::question_kind(&record.text).is_some() => {
+            Provenance::Model
+                if crate::notifications::question_kind(&record.text).is_some()
+                    || crate::clock::question_kind(&record.text).is_some() =>
+            {
                 // Legacy local answers have no exact dependency provenance.
                 // Keep their history, but do not retrieve potentially deleted content.
                 continue;
             }
             Provenance::Model => {}
-            Provenance::NativeObservation { .. } => continue,
+            Provenance::NativeObservation { .. }
+            | Provenance::NativeClock { .. }
+            | Provenance::NativeMemory { .. } => continue,
         }
         let pair_bytes = record.text.len() + reply.reply.response.text().len();
         if bytes + pair_bytes > planner::MAX_DIALOGUE_BYTES {
@@ -716,7 +749,7 @@ impl Store {
         apps: &crate::apps::AppCatalog,
         authorize: &mut dyn FnMut(&PlannerAuthority<'_>) -> Result<(), ErrorCode>,
     ) -> Result<StoredReply, ErrorCode> {
-        self.finish_reply(claim, Some(reply), apps, authorize)
+        self.finish_reply(claim, ReplyInput::Model(Box::new(reply)), apps, authorize)
     }
     /// Derives only the last native announced batch, under the original claim.
     /// No external response/provenance parameter can enter this constructor.
@@ -726,16 +759,26 @@ impl Store {
         apps: &crate::apps::AppCatalog,
         authorize: &mut dyn FnMut(&PlannerAuthority<'_>) -> Result<(), ErrorCode>,
     ) -> Result<StoredReply, ErrorCode> {
-        self.finish_reply(claim, None, apps, authorize)
+        self.finish_reply(claim, ReplyInput::Events, apps, authorize)
+    }
+    /// Answers the exact built-in question using an actual native clock reading.
+    pub fn finish_clock_answer(
+        &mut self,
+        claim: PlannerClaim,
+        observation: crate::clock::Observation,
+        apps: &crate::apps::AppCatalog,
+        authorize: &mut dyn FnMut(&PlannerAuthority<'_>) -> Result<(), ErrorCode>,
+    ) -> Result<StoredReply, ErrorCode> {
+        self.finish_reply(claim, ReplyInput::Clock(observation), apps, authorize)
     }
     fn finish_reply(
         &mut self,
         mut claim: PlannerClaim,
-        reply: Option<planner::Reply>,
+        input: ReplyInput,
         apps: &crate::apps::AppCatalog,
         authorize: &mut dyn FnMut(&PlannerAuthority<'_>) -> Result<(), ErrorCode>,
     ) -> Result<StoredReply, ErrorCode> {
-        let result = self.finish_planner_inner(&claim, reply, apps, authorize);
+        let result = self.finish_planner_inner(&claim, input, apps, authorize);
         if result.is_err() {
             self.retire_planner(claim.retirement())?;
         } else {
@@ -746,18 +789,16 @@ impl Store {
     fn finish_planner_inner(
         &mut self,
         claim: &PlannerClaim,
-        reply: Option<planner::Reply>,
+        input: ReplyInput,
         apps: &crate::apps::AppCatalog,
         authorize: &mut dyn FnMut(&PlannerAuthority<'_>) -> Result<(), ErrorCode>,
     ) -> Result<StoredReply, ErrorCode> {
         claim.cancellation.check()?;
         remaining(claim.started)?;
-        if let Some(value) = &reply {
+        if let ReplyInput::Model(value) = &input {
             value.validate(&claim.plan.request.context)?;
         }
-        let permissions = if reply
-            .as_ref()
-            .is_some_and(|v| matches!(v.response, planner::Response::Proposal { .. }))
+        let permissions = if matches!(&input, ReplyInput::Model(v) if matches!(v.response, planner::Response::Proposal { .. }))
         {
             self.action_permissions(Some(claim.context().actor))?
         } else {
@@ -777,9 +818,55 @@ impl Store {
         {
             return Err(ErrorCode::Stale);
         }
-        let (reply, provenance) = match reply {
-            Some(reply) => (reply, Provenance::Model),
-            None => {
+        let (reply, provenance) = match &input {
+            ReplyInput::Model(reply) => ((**reply).clone(), Provenance::Model),
+            ReplyInput::Memory(approved) => {
+                let source = crate::memory::AcceptedSource {
+                    turn: record.id,
+                    revision: record.revision,
+                };
+                let result = crate::memory::conversation::finish(
+                    &tx,
+                    record.actor,
+                    &source,
+                    approved.as_ref(),
+                )?;
+                let (memory, revision) = result
+                    .memory
+                    .map_or((None, None), |(id, revision)| (Some(id), Some(revision)));
+                (
+                    planner::Reply {
+                        version: planner::VERSION,
+                        context: claim.context().clone(),
+                        terminal: planner::Terminal::Complete,
+                        response: planner::Response::Answer { text: result.text },
+                    },
+                    Provenance::NativeMemory {
+                        memory,
+                        revision,
+                        value_bearing: result.value_bearing,
+                    },
+                )
+            }
+            ReplyInput::Clock(observation) => {
+                let kind =
+                    crate::clock::question_kind(&record.text).ok_or(ErrorCode::Unsupported)?;
+                let reading = observation.reading()?;
+                let text = reading.answer(kind)?;
+                (
+                    planner::Reply {
+                        version: planner::VERSION,
+                        context: claim.context().clone(),
+                        terminal: planner::Terminal::Complete,
+                        response: planner::Response::Answer { text },
+                    },
+                    Provenance::NativeClock {
+                        clock_kind: kind,
+                        reading,
+                    },
+                )
+            }
+            ReplyInput::Events => {
                 let kind = crate::notifications::question_kind(&record.text)
                     .ok_or(ErrorCode::Unsupported)?;
                 let (provenance, events) =
@@ -855,6 +942,9 @@ impl Store {
         })?;
         claim.cancellation.check()?;
         remaining(claim.started)?;
+        if let ReplyInput::Clock(observation) = &input {
+            observation.current()?;
+        }
         tx.commit().map_err(|_| ErrorCode::Storage)?;
         claim.cancellation.check()?;
         remaining(claim.started)?;

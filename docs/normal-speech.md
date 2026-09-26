@@ -1,6 +1,6 @@
 # Accepted reply speech transport
 
-Current speech wire version4 preserves version2 segmentation and carries the
+Current speech wire version5 preserves version2 segmentation and carries the
 planner-v4 durable ordinal and explicit model/native-event provenance in every source/context. This is a coordinated
 native/controller change; older peers reject, without downgrade or replay.
 The planner roster retains an output entry while its actual public preparation
@@ -17,6 +17,10 @@ a fresh claim ordinal and registers/reserves one response digest atomically,
 without claiming inference ran. Model answers retain their completed inference
 requirement. Authentication, original native lifetime, actual actor registration,
 action/output epochs, selected voice, cancellation and retirement are common.
+
+The same native-derived reservation supports the typed built-in local clock answer
+defined in [native-clock.md](native-clock.md), with numeric observation provenance
+and no model-completion claim or additional Settings permission.
 
 Normal answer speech is separate from explicit generated-reference preview and the bounded editable Settings voice test in [generated-voices.md](generated-voices.md). Its native entry point consumes the actual published reply from native-planner.md; it never accepts arbitrary frontend text, a saved row, browser output, an imported response or a mere reply UUID. This source slice must preserve the inactive qualified voice/owner boundary and must not generate, select or play a voice while implementing it.
 
@@ -78,7 +82,7 @@ NativeEffects now returns a distinct opaque PublishedReply after final planner p
 Exact-source cancellation, action invalidation, native effects-owner destruction and explicit exact actor-registration revocation now reach the published source during the handoff/preparation interval. Native planner success returns this new type and disarms only normal cleanup; failure still withdraws. This closes the previously dormant publication-to-output source gap. The normal output route and completed-response digest are implemented in the following source slice; the native media consumer is implemented in the subsequent slice below. No output/device/model operation has been invoked.
 
 
-The segmented normal-speech wire is a strict version4 request with Source{planner context,reply_revision,response,provenance}, output request UUID, positive safe-integer playback epoch and exact VoiceIdentity. Encoded handshake is at most the shared planner32768-byte bound; speech text is at most8192 UTF-8 bytes with the bounded partition rules above. Older peers reject the new version; there is no downgrade/replay fallback. Subsequent events echo only bounded immutable stream identity (including original planner/turn/reply/action/voice binding), not the answer text on every packet. Ready advertises24000Hz/480-sample frames/720000 maximum samples rather than an invented final length. Audio is contiguous sequence1..1500 with exact (sequence-1)*480 offsets and480 actual samples. End carries exact chunks/samples and Complete or Truncated. Play/Submitted/Cancel controls bind the owned output request UUID; Submitted remains native-callback submission evidence only. Unknown fields or unsafe/zero epochs reject.
+The segmented normal-speech wire is a strict version5 request with Source{planner context,reply_revision,response,provenance}, output request UUID, positive safe-integer playback epoch and exact VoiceIdentity. Encoded handshake is at most the shared planner32768-byte bound; speech text is at most8192 UTF-8 bytes with the bounded partition rules above. Older peers reject the new version; there is no downgrade/replay fallback. Subsequent events echo only bounded immutable stream identity (including original planner/turn/reply/action/voice binding), not the answer text on every packet. Ready advertises24000Hz/480-sample frames/720000 maximum samples rather than an invented final length. Audio is contiguous sequence1..1500 with exact (sequence-1)*480 offsets and480 actual samples. End carries exact chunks/samples and Complete or Truncated. Play/Submitted/Cancel controls bind the owned output request UUID; Submitted remains native-callback submission evidence only. Unknown fields or unsafe/zero epochs reject.
 
 For model replies the controller computes its completed-response digest from canonical serde serialization of the typed planner::Response. For native event replies it hashes the entire typed Source, including immutable reply revision and exact event provenance. No caller supplies or overrides a digest; source validation recomputes the corresponding representation. A completed entry remains distinct from a live model request and from cancellation: normal request retirement must not erase completion evidence, while explicit withdrawal, action/session/actor revocation and source expiry deny output. Reserving output consumes the one attempt before any private synthesis await. Transient result/reservation metadata contains no reconstructible reply handle.
 

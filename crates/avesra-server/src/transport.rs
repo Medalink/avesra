@@ -675,7 +675,12 @@ async fn analyze(
         .map_err(|_| StatusCode::PAYLOAD_TOO_LARGE)?;
         let input: Input = serde_json::from_slice(&bytes).map_err(|_| StatusCode::BAD_REQUEST)?;
         drop(bytes);
-        if input.version != 1
+        if input.version
+            != if transcribe {
+                avesra_contracts::voice_timing::VERSION
+            } else {
+                1
+            }
             || input.request_id.is_nil()
             || input.session_id.is_nil()
             || input.capture_epoch == 0
@@ -768,28 +773,51 @@ async fn analyze(
             id: activity_worker,
             complete: false,
         });
-        let inference = client.infer_with_budget(
-            worker_id,
-            1,
-            input.request_id,
-            AudioInput::Pcm {
-                pcm_s16le: input.pcm_s16le,
-            },
-            Duration::from_secs(15),
-        );
+        let inference = async {
+            let timer = avesra_core::trace::AudioTimer::start();
+            let result = client
+                .infer_with_budget(
+                    worker_id,
+                    1,
+                    input.request_id,
+                    AudioInput::Pcm {
+                        pcm_s16le: input.pcm_s16le,
+                    },
+                    Duration::from_secs(15),
+                )
+                .await?;
+            Ok::<_, avesra_contracts::ErrorCode>((
+                result,
+                timer.finish(
+                    worker_id,
+                    avesra_contracts::voice_timing::Lane::Speaker,
+                    client.configured_revision().unwrap_or(""),
+                ),
+            ))
+        };
         let transcription = async {
             match (asr.as_ref(), asr_pcm) {
-                (Some(client), Some(pcm_s16le)) => client
-                    .infer_with_budget(
-                        asr_worker_id,
-                        1,
-                        input.request_id,
-                        AudioInput::Pcm { pcm_s16le },
-                        Duration::from_secs(15),
-                    )
-                    .await
-                    .map(Some),
-                _ => Ok(None),
+                (Some(client), Some(pcm_s16le)) => {
+                    let timer = avesra_core::trace::AudioTimer::start();
+                    let result = client
+                        .infer_with_budget(
+                            asr_worker_id,
+                            1,
+                            input.request_id,
+                            AudioInput::Pcm { pcm_s16le },
+                            Duration::from_secs(15),
+                        )
+                        .await?;
+                    Ok::<_, avesra_contracts::ErrorCode>((
+                        Some(result),
+                        timer.finish(
+                            asr_worker_id,
+                            avesra_contracts::voice_timing::Lane::Asr,
+                            client.configured_revision().unwrap_or(""),
+                        ),
+                    ))
+                }
+                _ => Ok((None, None)),
             }
         };
         let measure_activity = async {
@@ -807,7 +835,7 @@ async fn analyze(
                 _ => Ok(None),
             }
         };
-        let (result, transcript, activity_result) = tokio::select! {
+        let ((result, speaker_timing), (transcript, asr_timing), activity_result) = tokio::select! {
             biased;
             _=permission.changed()=>return Err(StatusCode::UNAUTHORIZED),
             result=async {tokio::try_join!(inference, transcription, measure_activity)}=>result.map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?,
@@ -846,7 +874,21 @@ async fn analyze(
                 AudioOutput::Insufficient { .. } => (None, "insufficient_speech"),
                 _ => return Err(StatusCode::UNPROCESSABLE_ENTITY),
             };
-            let mut reply = serde_json::json!({"version":1,"request_id":input.request_id,"session_id":input.session_id,
+            let timing = match (speaker_timing, asr_timing) {
+                (Some(speaker), Some(asr)) => {
+                    let receipt = avesra_contracts::voice_timing::Analysis {
+                        version: 1,
+                        request: input.request_id,
+                        receipts: vec![speaker, asr],
+                    };
+                    receipt
+                        .validate(input.request_id)
+                        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+                    Some(receipt)
+                }
+                _ => None,
+            };
+            let mut reply = serde_json::json!({"version":avesra_contracts::voice_timing::VERSION,"timing":timing,"request_id":input.request_id,"session_id":input.session_id,
                 "capture_epoch":input.capture_epoch,"speaker_revision":client.configured_revision(),
                 "asr_revision":asr.as_ref().and_then(|client| client.configured_revision()),
                 "transcript":text,"embedding":embedding,"outcome":"abstain","reason":reason,

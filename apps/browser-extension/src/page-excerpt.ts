@@ -6,7 +6,7 @@ type Guard = {
   current(): boolean; finish(): boolean;
 };
 type Realm = typeof globalThis & { __avesraReadGuard1?: Guard };
-export type ReadParameters = { request: string; url: string; maxBlocks: number; budgetMs: number; provider: Provider | null; xReady: boolean };
+export type ReadParameters = { request: string; url: string; maxBlocks: number; budgetMs: number; provider: Provider | null; xReady: boolean; inbox:boolean };
 export type Extracted = { started: true; state: "excerpt"; dom_revision: number; title: string; blocks: string[]; truncated: boolean; excluded_content: boolean }
   | { started: true; state: "provider_inspection"; dom_revision: number; provider: Provider; complete: boolean; choices: Choice[] }
   | { started: true; state: "empty"; dom_revision: number }
@@ -24,7 +24,7 @@ export function beginPageExcerpt(input: ReadParameters): Extracted {
     typeof input.url !== "string" || input.url.length > 2048 || location.href !== input.url ||
     location.protocol !== "https:" || self !== top || document.contentType !== "text/html" || document.readyState !== "complete" ||
     !Number.isSafeInteger(input.maxBlocks) || input.maxBlocks < 1 || input.maxBlocks > 16 ||
-    !Number.isSafeInteger(input.budgetMs) || input.budgetMs < 1 || input.budgetMs > 10_000 ||
+    !Number.isSafeInteger(input.budgetMs) || input.budgetMs < 1 || input.budgetMs > (input.inbox && input.provider==="gmail" ? 120_000 : 10_000) ||
     !document.body) return { started: false, state: "unavailable", request: input.request, url: input.url, guard_absent: true };
   if (input.provider !== null && ((input.provider !== "gmail" && input.provider !== "x")
     || location.origin !== (input.provider === "gmail" ? "https://mail.google.com" : "https://x.com")))

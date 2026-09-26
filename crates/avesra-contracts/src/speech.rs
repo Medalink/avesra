@@ -2,7 +2,7 @@
 use crate::{ErrorCode, browser::MAX_SAFE_COUNTER, planner, voice::VoiceIdentity};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-pub const VERSION: u16 = 4;
+pub const VERSION: u16 = 5;
 pub const MAX_TEXT_BYTES: usize = 8192;
 pub const MAX_SEGMENT_BYTES: usize = 512;
 pub const MAX_SEGMENTS: usize = 64;
@@ -66,6 +66,15 @@ pub enum EventKind {
 pub enum Provenance {
     #[default]
     Model,
+    NativeMemory {
+        memory: Option<Uuid>,
+        revision: Option<Uuid>,
+        value_bearing: bool,
+    },
+    NativeClock {
+        clock_kind: crate::clock::Kind,
+        reading: crate::clock::LocalReading,
+    },
     NativeObservation {
         dispatch: Uuid,
         action_revision: Uuid,
@@ -78,6 +87,21 @@ pub enum Provenance {
 }
 impl Provenance {
     pub fn validate(&self) -> Result<(), ErrorCode> {
+        if let Self::NativeMemory {
+            memory,
+            revision,
+            value_bearing,
+        } = self
+            && ((*value_bearing && memory.is_none())
+                || memory.is_none() != revision.is_none()
+                || memory.is_some_and(|v| v.is_nil())
+                || revision.is_some_and(|v| v.is_nil()))
+        {
+            return Err(ErrorCode::Malformed);
+        }
+        if let Self::NativeClock { reading, .. } = self {
+            reading.validate()?;
+        }
         if let Self::NativeObservation {
             dispatch,
             action_revision,
@@ -112,6 +136,14 @@ impl Source {
     pub fn validate(&self) -> Result<(), ErrorCode> {
         self.planner.validate()?;
         self.provenance.validate()?;
+        if let Provenance::NativeClock {
+            clock_kind,
+            reading,
+        } = &self.provenance
+            && self.response.text() != reading.answer(*clock_kind)?
+        {
+            return Err(ErrorCode::Malformed);
+        }
         if self.reply_revision.is_nil()
             || matches!(self.response, planner::Response::Proposal { .. })
             || !planner::valid_text(self.response.text())

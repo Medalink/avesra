@@ -3,10 +3,11 @@ use crate::ErrorCode;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error};
 use uuid::Uuid;
 pub mod documents;
+pub mod mailbox;
 pub mod provider;
 pub mod reading;
 
-pub const VERSION: u16 = 8;
+pub const VERSION: u16 = 9;
 pub const MAX_MESSAGE: usize = 65536;
 pub const HANDSHAKE_SECONDS: u64 = 45;
 
@@ -285,6 +286,8 @@ pub struct StatusReply {
     pub read: Option<reading::Request>,
     #[serde(deserialize_with = "required_nullable")]
     pub read_ack: Option<reading::Context>,
+    #[serde(deserialize_with = "required_nullable")]
+    pub mailbox_ack: Option<mailbox::Ack>,
 }
 fn required_nullable<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
@@ -335,6 +338,16 @@ impl StatusReply {
                 return Err(ErrorCode::Stale);
             }
         }
+        if let Some(ack) = &self.mailbox_ack {
+            ack.validate()?;
+            if self.state != Phase::AuthenticatedNoScopes
+                || self.read.as_ref().is_none_or(|read| {
+                    read.context != ack.context || !matches!(read.mode, reading::Mode::Inbox { .. })
+                })
+            {
+                return Err(ErrorCode::Stale);
+            }
+        }
         if let Some(ack) = &self.read_ack {
             if self.state != Phase::AuthenticatedNoScopes {
                 return Err(ErrorCode::Unauthenticated);
@@ -379,6 +392,12 @@ pub enum Client {
         sequence: u64,
         reply: documents::Reply,
     },
+    MailboxChunk {
+        session: Id,
+        sequence: u64,
+        observation_revision: u64,
+        chunk: mailbox::Chunk,
+    },
     ReadResult {
         session: Id,
         sequence: u64,
@@ -403,7 +422,7 @@ pub fn comparison_transcript(challenge: &Challenge) -> Result<Vec<u8>, ErrorCode
         return Err(ErrorCode::Unsupported);
     }
     Ok(format!(
-        "AVESRA-BROWSER-COMPARE-8\n{}\n{}\n{}\n{}\n{}\n",
+        "AVESRA-BROWSER-COMPARE-9\n{}\n{}\n{}\n{}\n{}\n",
         challenge.installation.uuid(),
         challenge.connection.uuid(),
         challenge.session.uuid(),
@@ -430,7 +449,7 @@ pub fn transcript(
         return Err(ErrorCode::Stale);
     }
     Ok(format!(
-        "AVESRA-BROWSER-AUTH-8\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n",
+        "AVESRA-BROWSER-AUTH-9\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n",
         pairing.id.uuid(),
         pairing.revision.uuid(),
         hello.installation.uuid(),

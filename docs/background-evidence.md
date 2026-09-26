@@ -50,8 +50,12 @@ and room speakers**, noting which endpoint and sound preset were actually used:
    uses the recent dialogue correctly. The actual current-session native claim
    must select that context; replaying a preview or an old stored reply is not
    a second accepted turn. Context presently contains at most three completed
-   pairs, and the controller has a 64-attempt session limit; do not report an
-   indefinite conversation soak from this brief observation.
+   pairs. The controller bounds its retained planner roster at 64 entries,
+   compacting only retired actual owners; this is no longer a lifetime attempt
+   limit. Durable native claim ordinals survive restart, and the control session
+   keeps its admitted high-water mark so compaction cannot permit replay. Live
+   or uncertain owners still consume bounded capacity. Do not report a long
+   conversation or indefinite soak from this brief observation.
 3. While Avesra is still speaking, interrupt naturally with a new question, then
    separately with one owner-chosen action that already has its explicit native
    grant. Do not grant or invoke an unrelated action merely to manufacture proof.

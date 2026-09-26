@@ -158,6 +158,8 @@ pub struct ReadExecution<'a> {
     finished: bool,
     finalization_attempted: bool,
     observation: Option<EffectObservation>,
+    mailbox_stream: Option<crate::workflows::mailbox::Stream>,
+    mailbox: Option<crate::workflows::mailbox::Mailbox>,
 }
 impl<'a> ReadExecution<'a> {
     pub(crate) fn begin(
@@ -177,15 +179,18 @@ impl<'a> ReadExecution<'a> {
             ActionPayload::ReadPage { .. }
                 | ActionPayload::InspectBrowserProvider { .. }
                 | avesra_contracts::ActionPayload::OpenX { .. }
+                | avesra_contracts::ActionPayload::ReadInbox { .. }
         ) {
             store.finish_action(permit.dispatch_id, session, Outcome::Unsupported, now_ms()?)?;
             return Err(ErrorCode::Unsupported);
         }
-        let lifetime = permit
-            .action
-            .expires_at_ms
-            .saturating_sub(admitted_ms)
-            .min(LIFETIME_MS);
+        let lifetime = permit.action.expires_at_ms.saturating_sub(admitted_ms).min(
+            if matches!(permit.action.payload, ActionPayload::ReadInbox { .. }) {
+                avesra_contracts::browser::mailbox::LIFETIME_MS
+            } else {
+                LIFETIME_MS
+            },
+        );
         Ok(Self {
             store,
             permit,
@@ -209,6 +214,8 @@ impl<'a> ReadExecution<'a> {
             finished: false,
             finalization_attempted: false,
             observation: None,
+            mailbox_stream: None,
+            mailbox: None,
         })
     }
     pub fn permit(&self) -> &DispatchPermit {
@@ -231,7 +238,11 @@ impl<'a> ReadExecution<'a> {
             action_revision: self.permit.action.revision,
             outcome: match self.observation.as_ref() {
                 Some(EffectObservation::BrowserRead { observation })
-                    if observation.x_needs_input.is_some() =>
+                    if observation.x_needs_input.is_some()
+                        || observation
+                            .inbox
+                            .as_ref()
+                            .is_some_and(|v| v.incomplete.is_some()) =>
                 {
                     Outcome::NeedsInput
                 }
@@ -360,6 +371,14 @@ impl<'a> ReadExecution<'a> {
         self.current()?;
         native_current()?;
         request.remaining_ms = request.remaining_ms.min(self.remaining_ms()?);
+        if let avesra_contracts::browser::reading::Mode::Inbox { account } = &request.mode {
+            self.mailbox_stream = Some(crate::workflows::mailbox::Stream::new(
+                request.context.clone(),
+                account.clone(),
+                request.message_limit,
+                self.deadline,
+            ));
+        }
         self.authorized = Some(request.clone());
         self.phase.store(HELD, Ordering::SeqCst);
         Ok((
@@ -408,6 +427,37 @@ impl<'a> ReadExecution<'a> {
         }
         Ok(())
     }
+    pub fn append_mailbox(
+        &mut self,
+        chunk: avesra_contracts::browser::mailbox::Chunk,
+        native_current: &mut dyn FnMut() -> Result<(), ErrorCode>,
+    ) -> Result<avesra_contracts::browser::mailbox::Ack, ErrorCode> {
+        self.current()?;
+        if self.phase.load(Ordering::SeqCst) != POSSIBLY_PUBLISHED || self.finished {
+            return Err(ErrorCode::Stale);
+        }
+        self.store
+            .validate_dispatch(&self.permit, &self.session, now_ms()?)?;
+        native_current()?;
+        self.current()?;
+        let ack = self
+            .mailbox_stream
+            .as_mut()
+            .ok_or(ErrorCode::Denied)?
+            .append(chunk)?;
+        native_current()?;
+        self.current()?;
+        Ok(ack)
+    }
+    pub fn take_mailbox(
+        &mut self,
+    ) -> Result<Option<crate::workflows::mailbox::Mailbox>, ErrorCode> {
+        self.content_current()?;
+        if !self.finished {
+            return Err(ErrorCode::InvalidTransition);
+        }
+        Ok(self.mailbox.take())
+    }
     pub fn withdraw_content(&self) {
         self.cancellation.cancel();
     }
@@ -422,6 +472,13 @@ impl<'a> ReadExecution<'a> {
         self.content_current()?;
         let request = self.authorized.as_ref().ok_or(ErrorCode::Stale)?;
         crate::browser_reading::validate_reply(request, reply, &self.permit)?;
+        if let avesra_contracts::browser::reading::Outcome::Inbox { terminal } = &reply.outcome {
+            self.mailbox = self
+                .mailbox_stream
+                .as_mut()
+                .ok_or(ErrorCode::Denied)?
+                .finish(terminal)?;
+        }
         let observation = EffectObservation::BrowserRead {
             observation: Box::new(crate::browser_reading::Observation::from_reply(
                 request, reply,
@@ -430,7 +487,8 @@ impl<'a> ReadExecution<'a> {
         let outcome = if matches!(
             reply.outcome,
             avesra_contracts::browser::reading::Outcome::XNeedsInput { .. }
-        ) {
+        ) || matches!(&reply.outcome, avesra_contracts::browser::reading::Outcome::Inbox { terminal } if terminal.incomplete.is_some())
+        {
             Outcome::NeedsInput
         } else {
             Outcome::Success

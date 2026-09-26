@@ -32,9 +32,20 @@ pub struct Observation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<ProviderObservation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inbox: Option<MailboxObservation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub x_account_sha256: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub x_needs_input: Option<avesra_contracts::browser::provider::XInputReason>,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MailboxObservation {
+    pub account_sha256: String,
+    pub chunks: u16,
+    pub bytes: u32,
+    pub digest: String,
+    pub incomplete: Option<avesra_contracts::browser::mailbox::Incomplete>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -66,6 +77,9 @@ impl Observation {
                 avesra_contracts::browser::reading::Outcome::XNeedsInput { evidence } => {
                     (Some(evidence.dom_revision), 0, 0, 0, false, false)
                 }
+                avesra_contracts::browser::reading::Outcome::Inbox { terminal } => {
+                    (Some(terminal.dom_revision), 0, 0, 0, false, false)
+                }
                 _ => return Err(ErrorCode::Denied),
             };
         let body = serde_json::to_vec(reply).map_err(|_| ErrorCode::Malformed)?;
@@ -94,6 +108,21 @@ impl Observation {
             truncated,
             excluded_content,
             coverage: avesra_contracts::browser::reading::Coverage::Partial,
+            inbox: match &reply.outcome {
+                avesra_contracts::browser::reading::Outcome::Inbox { terminal } => {
+                    Some(MailboxObservation {
+                        account_sha256: format!(
+                            "{:x}",
+                            Sha256::digest(terminal.account.as_bytes())
+                        ),
+                        chunks: terminal.chunks,
+                        bytes: terminal.bytes,
+                        digest: terminal.digest.clone(),
+                        incomplete: terminal.incomplete,
+                    })
+                }
+                _ => None,
+            },
             x_account_sha256: match &reply.outcome {
                 avesra_contracts::browser::reading::Outcome::XReady { ready } => {
                     Some(format!("{:x}", Sha256::digest(ready.account.as_bytes())))
@@ -124,6 +153,27 @@ impl Observation {
     pub fn validate(&self, action: &Action, outcome: Outcome) -> Result<(), ErrorCode> {
         self.context.validate()?;
         let (origin, message_limit) = match (&action.payload, &self.provider) {
+            (ActionPayload::ReadInbox { account, count }, None) => {
+                let m = self.inbox.as_ref().ok_or(ErrorCode::Malformed)?;
+                if m.account_sha256 != format!("{:x}", Sha256::digest(account.as_bytes()))
+                    || self.dom_revision.is_none()
+                    || self.blocks != 0
+                    || self.text_bytes != 0
+                    || self.title_bytes != 0
+                    || self.truncated
+                    || self.excluded_content
+                    || m.chunks > avesra_contracts::browser::mailbox::MAX_CHUNKS
+                    || m.bytes as usize > avesra_contracts::browser::mailbox::STREAM_BYTES
+                    || !avesra_contracts::browser::mailbox::digest(&m.digest)
+                    || (m.chunks == 0) != (m.bytes == 0)
+                    || (m.chunks == 0
+                        && (m.incomplete.is_none()
+                            || m.digest != avesra_contracts::browser::mailbox::EMPTY_DIGEST))
+                {
+                    return Err(ErrorCode::Malformed);
+                }
+                ("https://mail.google.com", *count)
+            }
             (ActionPayload::OpenX { account }, None)
                 if self.x_account_sha256.as_ref()
                     == Some(&format!("{:x}", Sha256::digest(account.as_bytes()))) =>
@@ -165,7 +215,9 @@ impl Observation {
         };
         let context = &self.context;
         if outcome
-            != if self.x_needs_input.is_some() {
+            != if self.x_needs_input.is_some()
+                || self.inbox.as_ref().is_some_and(|v| v.incomplete.is_some())
+            {
                 Outcome::NeedsInput
             } else {
                 Outcome::Success
@@ -191,7 +243,9 @@ impl Observation {
             || (self.x_account_sha256.is_some()
                 && !matches!(action.payload, ActionPayload::OpenX { .. }))
             || (self.x_needs_input.is_some() && self.x_account_sha256.is_none())
+            || (self.inbox.is_some() && !matches!(action.payload, ActionPayload::ReadInbox { .. }))
             || (self.provider.is_none()
+                && self.inbox.is_none()
                 && self.x_account_sha256.is_none()
                 && self.blocks == 0
                 && (self.dom_revision.is_some()

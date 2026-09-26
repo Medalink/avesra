@@ -4,6 +4,8 @@ use serde::Serialize;
 pub mod audio;
 #[cfg(windows)]
 pub mod authentication;
+#[cfg(windows)]
+mod clock;
 pub mod credentials;
 #[cfg(windows)]
 pub mod diagnostics;

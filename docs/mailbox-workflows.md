@@ -26,7 +26,7 @@ matching and non-increasing message timestamps. Identical overlapping messages
 are deduplicated by immutable ID; a reused ID with changed content, date, source
 or thread invalidates the observation. Continuations may not cycle. The original
 deadline is checked before and after each bounded consumption. At most 100 unique
-messages, 32 batches, 16 KiB per body and 256 KiB total transient body bytes are
+messages, 32 batches, 64 KiB per body and 1 MiB total transient body bytes are
 accepted. A batch may contain at most the original requested count. More data is
 not silently truncated into a successful count.
 
@@ -44,6 +44,14 @@ Several candidate messages are not assumed to be the same package. Results must
 identify sender/date/subject/message reference, quote only the bounded supporting
 phrase and disclose that these are email claims. No tracking link, attachment,
 send, archive, delete or posting operation is part of this consumer.
+
+The owned stream and ReadInbox-specific original 120-second deadline are defined
+in `gmail-owned-read.md`. Transport acknowledgment never accepts mailbox semantics.
+Individual message evidence must repeat its own immutable ID as observed Inbox
+membership; conversation labels are insufficient. Each nonterminal batch must
+supply an observed strict upper timestamp bound for all unseen eligible messages.
+Equal-date ambiguity cannot prove the newest-N boundary. These fields are
+untrusted provider observations, not self-authenticating claims.
 
 ## Provider binding and operation boundary
 

@@ -65,6 +65,10 @@ pub enum TaskTarget {
     BrowserRead {
         scope: Box<crate::browser_scopes::Grant>,
     },
+    GmailInbox {
+        scope: Box<crate::browser_scopes::Grant>,
+        account: String,
+    },
     XReady {
         scope: Box<crate::browser_scopes::Grant>,
         account: String,
@@ -92,7 +96,7 @@ impl TaskTarget {
             Self::Download { context, .. } => context.id,
             Self::Vpn { profile } => profile.id,
             Self::BrowserRead { scope } => scope.id.uuid(),
-            Self::XReady { scope, .. } => scope.id.uuid(),
+            Self::XReady { scope, .. } | Self::GmailInbox { scope, .. } => scope.id.uuid(),
             Self::Prompt { binding } => binding.id,
             Self::Diagnostic { catalog } => catalog.id(),
             Self::Application { app, .. } => *app,
@@ -109,7 +113,7 @@ impl TaskTarget {
                 }
             }
             Self::Vpn { .. } => Operation::ConnectVpn,
-            Self::BrowserRead { .. } => Operation::ReadPage,
+            Self::BrowserRead { .. } | Self::GmailInbox { .. } => Operation::ReadPage,
             Self::XReady { .. } => Operation::Navigate,
             Self::Prompt { .. } => Operation::FillPrompt,
             Self::Diagnostic { .. } => Operation::Diagnostic,
@@ -121,6 +125,16 @@ impl TaskTarget {
         let valid = match self {
             Self::Download { context, .. } => context.validate().is_ok(),
             Self::Vpn { profile } => profile.validate().is_ok(),
+            Self::GmailInbox { scope, account } => {
+                scope.validate().is_ok()
+                    && scope.origin.as_str() == "https://mail.google.com"
+                    && scope.operations
+                        == [
+                            avesra_contracts::browser::ScopeOperation::Read,
+                            avesra_contracts::browser::ScopeOperation::Navigate,
+                        ]
+                    && avesra_contracts::browser::mailbox::account(account)
+            }
             Self::XReady { scope, account } => {
                 scope.validate().is_ok()
                     && scope.origin.as_str()
@@ -184,6 +198,7 @@ impl Permission {
             || matches!(&self.target,TaskTarget::Vpn{profile} if profile.actor!=self.actor || self.name!="work vpn")
             || crate::apps::alias_phrase(&self.name).ok().as_ref() != Some(&self.name)
             || matches!(&self.target, TaskTarget::BrowserRead { scope } if scope.actor.uuid()!=self.actor || self.name!="browser page")
+            || matches!(&self.target, TaskTarget::GmailInbox { scope,.. } if scope.actor.uuid()!=self.actor || self.name!="gmail inbox")
             || matches!(&self.target, TaskTarget::XReady { scope, .. } if scope.actor.uuid()!=self.actor || self.name!="x")
             || matches!(self.target, TaskTarget::Volume { .. }) && self.name != "speakers"
             || matches!(self.target, TaskTarget::Diagnostic { catalog } if self.name != catalog.name())
@@ -195,6 +210,10 @@ impl Permission {
     }
 }
 pub enum Selection {
+    GmailInbox {
+        scope: Box<crate::browser_scopes::Grant>,
+        account: String,
+    },
     XReady {
         scope: Box<crate::browser_scopes::Grant>,
         account: String,
@@ -292,6 +311,21 @@ impl Store {
             return Err(ErrorCode::TooLarge);
         }
         let (name, target) = match selection {
+            Selection::GmailInbox { scope, account } => {
+                let app = apps.get(scope.browser_app.uuid())?;
+                let target = TaskTarget::GmailInbox {
+                    scope: scope.clone(),
+                    account,
+                };
+                target.validate()?;
+                if scope.actor.uuid() != actor
+                    || app.selected_by != actor
+                    || app.revision != scope.browser_revision.uuid()
+                {
+                    return Err(ErrorCode::Stale);
+                }
+                ("gmail inbox".to_owned(), target)
+            }
             Selection::XReady { scope, account } => {
                 let app = apps.get(scope.browser_app.uuid())?;
                 let target = TaskTarget::XReady {
@@ -399,6 +433,7 @@ impl Store {
             !v.revoked
                 && v.permission.actor == actor
                 && (v.permission.target == target
+                    || matches!((&v.permission.target,&target),(TaskTarget::GmailInbox { .. },TaskTarget::GmailInbox { .. }))
                     || matches!((&v.permission.target, &target), (TaskTarget::XReady { .. }, TaskTarget::XReady { .. }))
                     || matches!((&v.permission.target,&target),(TaskTarget::Prompt{binding:a},TaskTarget::Prompt{binding:b}) if a.app==b.app && a.project==b.project)
                     || matches!((&v.permission.target,&target),(TaskTarget::Download{configuration:a,..},TaskTarget::Download{configuration:b,..}) if a==b)

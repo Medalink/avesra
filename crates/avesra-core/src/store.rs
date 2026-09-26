@@ -19,7 +19,7 @@ impl Store {
                     |r| Ok((r.get(0)?, r.get(1)?)),
                 )
                 .map_err(|_| ErrorCode::Storage)?;
-            if count != 1 || !matches!(version, Some(1..=22)) {
+            if count != 1 || !matches!(version, Some(1..=24)) {
                 return Err(ErrorCode::Unsupported);
             }
             version.ok_or(ErrorCode::Unsupported)? as u64
@@ -46,9 +46,10 @@ impl Store {
             crate::browser_jobs::current(&connection)?;
         }
         connection
-            .execute_batch(
-                "PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;",
-            )
+            .pragma_update(None, "foreign_keys", version >= 23)
+            .map_err(|_| ErrorCode::Storage)?;
+        connection
+            .execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")
             .map_err(|_| ErrorCode::Storage)?;
         let tx = connection.transaction().map_err(|_| ErrorCode::Storage)?;
         tx.execute_batch("
@@ -70,7 +71,7 @@ impl Store {
           CREATE TABLE IF NOT EXISTS native_finalizations(dispatch_id TEXT PRIMARY KEY REFERENCES dispatch_bindings(dispatch_id), target_id TEXT NOT NULL, action_revision TEXT NOT NULL REFERENCES action_revisions(revision), actor_id TEXT NOT NULL, outcome TEXT NOT NULL, at_ms INTEGER NOT NULL);
           CREATE INDEX IF NOT EXISTS native_finalization_lookup ON native_finalizations(target_id,actor_id,outcome);
           DELETE FROM schema_version;
-          INSERT INTO schema_version VALUES(22);
+          INSERT INTO schema_version VALUES(24);
         ").map_err(|_|ErrorCode::Storage)?;
         if version < 5 {
             tx.execute_batch(crate::conversations::SCHEMA)
@@ -117,8 +118,9 @@ impl Store {
             )
             .map_err(|_| ErrorCode::Storage)?;
         }
+        crate::memory::migrate(&tx, version)?;
         crate::notifications::check_schema(&tx, 15)?;
-        crate::memory::check_schema(&tx, 13)?;
+        crate::memory::check_schema(&tx, 23)?;
         crate::action_permissions::check_schema(&tx, 12)?;
         crate::conversations::check_schema(&tx, 22)?;
         crate::browser_jobs::check_schema(&tx, 12)?;
@@ -148,7 +150,20 @@ impl Store {
         .map_err(|_| ErrorCode::Storage)?;
         tx.execute("UPDATE tasks SET state='\"suspended\"' WHERE state IN ('\"queued\"','\"waiting_for_user\"')",[]).map_err(|_|ErrorCode::Storage)?;
         tx.execute("UPDATE steps SET state='\"suspended\"' WHERE state IN ('\"queued\"','\"waiting_for_user\"')",[]).map_err(|_|ErrorCode::Storage)?;
+        let invalid: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_foreign_key_check)",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(|_| ErrorCode::Storage)?;
+        if invalid {
+            return Err(ErrorCode::Malformed);
+        }
         tx.commit().map_err(|_| ErrorCode::Storage)?;
+        connection
+            .pragma_update(None, "foreign_keys", true)
+            .map_err(|_| ErrorCode::Storage)?;
         Ok(Self { connection })
     }
     pub fn settings(&self) -> Result<Settings, ErrorCode> {

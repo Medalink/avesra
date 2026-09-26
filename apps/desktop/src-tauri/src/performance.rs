@@ -20,6 +20,9 @@ pub enum Operation {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Stage {
+    VoiceAnalysis,
+    VoiceIntent,
+    VoiceGate,
     OutputSession,
     Preparation,
     RemoteReady,
@@ -57,6 +60,7 @@ struct Inner {
     outputs: Vec<Pending>,
     evicted: u64,
     observer_loss: u64,
+    gates: BTreeMap<GateReason, u64>,
 }
 pub struct State {
     started: Instant,
@@ -71,6 +75,7 @@ impl Default for State {
                 outputs: Vec::with_capacity(8),
                 evicted: 0,
                 observer_loss: 0,
+                gates: BTreeMap::new(),
             }),
         }
     }
@@ -85,6 +90,15 @@ impl Inner {
     }
 }
 impl State {
+    pub fn gate_counts(&self) -> Option<BTreeMap<GateReason, u64>> {
+        self.inner.lock().ok().map(|inner| inner.gates.clone())
+    }
+    pub fn gate(&self, reason: GateReason) {
+        if let Ok(mut inner) = self.inner.lock() {
+            let count = inner.gates.entry(reason).or_default();
+            *count = count.saturating_add(1);
+        }
+    }
     pub fn begin(self: &Arc<Self>, operation: Operation, stage: Stage, id: Uuid) -> Span {
         let started = Instant::now();
         if stage == Stage::OutputSession
@@ -237,6 +251,7 @@ pub struct Snapshot {
     active_outputs: usize,
     silent_diagnostic: bool,
     summaries: Vec<Summary>,
+    gates: BTreeMap<GateReason, u64>,
 }
 #[tauri::command]
 pub fn performance_snapshot(
@@ -253,7 +268,7 @@ pub fn performance_snapshot(
     {
         return Err("Use visible unlocked Settings for performance".into());
     }
-    let (observations, evicted, observer_loss, active_outputs) = {
+    let (observations, evicted, observer_loss, active_outputs, gates) = {
         let inner = state
             .performance
             .inner
@@ -264,6 +279,7 @@ pub fn performance_snapshot(
             inner.evicted,
             inner.observer_loss,
             inner.outputs.len(),
+            inner.gates.clone(),
         )
     };
     let mut groups = BTreeMap::<(Operation, Stage), (Counts, Vec<f64>)>::new();
@@ -316,5 +332,56 @@ pub fn performance_snapshot(
         active_outputs,
         silent_diagnostic: avesra_windows::output_recording::enabled(),
         summaries,
+        gates,
     })
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GateReason {
+    Accepted,
+    Abandoned,
+    AnalysisFailed,
+    EmptyTranscript,
+    ShortSpan,
+    ReferenceUnknown,
+    QueueExpired,
+    QueueOverflow,
+    ContextChanged,
+    AdmissionFailed,
+    Stale,
+    Malformed,
+    Replay,
+    Capacity,
+    Unqualified,
+    UnknownSpeaker,
+    OverlapUnknown,
+    Overlap,
+    EchoUnknown,
+    Echo,
+    NotAddressed,
+    SignalUnknown,
+    InsufficientSignal,
+    DirectednessUnknown,
+}
+impl From<avesra_core::voice::Abstention> for GateReason {
+    fn from(value: avesra_core::voice::Abstention) -> Self {
+        use avesra_core::voice::Abstention as A;
+        match value {
+            A::Stale => Self::Stale,
+            A::Malformed => Self::Malformed,
+            A::Replay => Self::Replay,
+            A::Capacity => Self::Capacity,
+            A::Unqualified => Self::Unqualified,
+            A::UnknownSpeaker => Self::UnknownSpeaker,
+            A::OverlapUnknown => Self::OverlapUnknown,
+            A::Overlap => Self::Overlap,
+            A::EchoUnknown => Self::EchoUnknown,
+            A::Echo => Self::Echo,
+            A::NotAddressed => Self::NotAddressed,
+            A::SignalUnknown => Self::SignalUnknown,
+            A::InsufficientSignal => Self::InsufficientSignal,
+            A::DirectednessUnknown => Self::DirectednessUnknown,
+        }
+    }
 }

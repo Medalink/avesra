@@ -45,6 +45,7 @@ struct Publication {
     published: Option<PublishedRequest>,
     terminal: bool,
     attempted: bool,
+    mailbox_ack: Option<avesra_contracts::browser::mailbox::Ack>,
 }
 impl Shared {
     fn current(&self) -> Result<u64, ErrorCode> {
@@ -74,7 +75,33 @@ pub struct NativeEndpoint {
     shared: Arc<Shared>,
     content: Option<SyncSender<crate::browser_receive::Content>>,
 }
+fn slot_context_invalid(
+    shared: &Shared,
+    context: &avesra_contracts::browser::reading::Context,
+) -> Result<bool, ErrorCode> {
+    shared.current()?;
+    let slot = shared
+        .publication
+        .lock()
+        .map_err(|_| ErrorCode::Unavailable)?;
+    Ok(slot.terminal || slot.context.as_ref() != Some(context))
+}
 impl NativeEndpoint {
+    pub fn mailbox_ack(
+        &self,
+    ) -> Result<Option<avesra_contracts::browser::mailbox::Ack>, ErrorCode> {
+        self.shared.current()?;
+        let slot = self
+            .shared
+            .publication
+            .lock()
+            .map_err(|_| ErrorCode::Unavailable)?;
+        Ok(if slot.terminal {
+            None
+        } else {
+            slot.mailbox_ack.clone()
+        })
+    }
     /// Last operation of the actual native preparation job, after installation.
     pub fn prepared(&self) {
         self.shared.finished.store(true, Ordering::SeqCst);
@@ -127,7 +154,16 @@ impl NativeEndpoint {
             return Ok(());
         }
         drop(slot);
-        if let Some(send) = self.content.take() {
+        if value.is_chunk() {
+            if slot_context_invalid(&self.shared, value.context())? {
+                return Err(ErrorCode::Stale);
+            }
+            self.content
+                .as_ref()
+                .ok_or(ErrorCode::Stale)?
+                .try_send(value)
+                .map_err(|_| ErrorCode::Unavailable)?;
+        } else if let Some(send) = self.content.take() {
             send.try_send(value).map_err(|_| ErrorCode::Unavailable)?;
         }
         Ok(())
@@ -343,6 +379,23 @@ impl Drop for Offer {
     }
 }
 impl WorkerPreparation {
+    pub(crate) fn acknowledge_chunk(
+        &self,
+        ack: avesra_contracts::browser::mailbox::Ack,
+    ) -> Result<(), ErrorCode> {
+        self.shared.current()?;
+        self.shared.reserved()?;
+        let mut slot = self
+            .shared
+            .publication
+            .lock()
+            .map_err(|_| ErrorCode::Unavailable)?;
+        if slot.terminal || slot.context.as_ref() != Some(&ack.context) {
+            return Err(ErrorCode::Stale);
+        }
+        slot.mailbox_ack = Some(ack);
+        Ok(())
+    }
     pub(crate) fn publish(&self, permit: PublicationPermit) -> Result<(), ErrorCode> {
         self.shared.current()?;
         self.shared.reserved()?;

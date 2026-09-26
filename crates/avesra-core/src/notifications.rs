@@ -249,8 +249,21 @@ pub(crate) fn memory_committed(
     tx: &Transaction<'_>,
     entry: &crate::memory::Entry,
 ) -> Result<(), ErrorCode> {
-    let device:String=sql(tx.query_row("SELECT c.device FROM conversation_tasks t JOIN accepted_conversations c ON c.id=t.turn WHERE t.task=?1 AND t.actor=?2 AND c.actor=?2",params![entry.source.task.to_string(),entry.actor.to_string()],|r|r.get(0)))?;
+    let turn = entry
+        .source
+        .as_ref()
+        .map(|v| v.turn)
+        .or_else(|| entry.accepted_source.as_ref().map(|v| v.turn))
+        .ok_or(ErrorCode::Malformed)?;
+    let device: String = sql(tx.query_row(
+        "SELECT device FROM accepted_conversations WHERE id=?1 AND actor=?2",
+        params![turn.to_string(), entry.actor.to_string()],
+        |r| r.get(0),
+    ))?;
     let description = match &entry.content {
+        crate::memory::Content::NamedFact { key, value } => Description::Fact {
+            value: format!("{key}: {value}"),
+        },
         crate::memory::Content::Fact { value } => Description::Fact {
             value: value.clone(),
         },

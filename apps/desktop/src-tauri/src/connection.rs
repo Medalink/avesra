@@ -646,6 +646,7 @@ pub struct VoiceAnalysis {
     pub transcript: String,
     pub embedding: Option<Vec<f32>>,
     pub activity: Option<avesra_contracts::activity::Activity>,
+    pub timing: Option<avesra_contracts::voice_timing::Analysis>,
 }
 pub async fn voice_activity_available(
     record: &PairingRecord,
@@ -692,6 +693,11 @@ pub async fn analyze_voice(
     activity: bool,
 ) -> Result<VoiceAnalysis, String> {
     use base64::Engine;
+    fn timing<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<avesra_contracts::voice_timing::Analysis>, D::Error> {
+        Option::deserialize(deserializer)
+    }
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Reply {
@@ -706,11 +712,13 @@ pub async fn analyze_voice(
         outcome: String,
         reason: String,
         accepted_turn: bool,
+        #[serde(deserialize_with = "timing")]
+        timing: Option<avesra_contracts::voice_timing::Analysis>,
         #[serde(default)]
         activity: Option<avesra_contracts::activity::Activity>,
     }
     let samples = u32::try_from(pcm.len() / 2).map_err(|_| "Voice sample limit exceeded")?;
-    let mut payload = serde_json::json!({"version":1,"request_id":id,"session_id":session.id,
+    let mut payload = serde_json::json!({"version":avesra_contracts::voice_timing::VERSION,"request_id":id,"session_id":session.id,
         "capture_epoch":session.epoch,"pcm_s16le":base64::engine::general_purpose::STANDARD.encode(pcm)});
     if activity {
         payload["activity"] = true.into();
@@ -731,7 +739,7 @@ pub async fn analyze_voice(
         bounded_response_with_limit(response, if activity { 32768 } else { 16384 }).await?,
     )
     .map_err(|_| "Invalid voice analysis response")?;
-    if value.version != 1
+    if value.version != avesra_contracts::voice_timing::VERSION
         || value.request_id != id
         || value.session_id != session.id
         || value.capture_epoch != session.epoch
@@ -740,6 +748,10 @@ pub async fn analyze_voice(
         || value.transcript.len() > 8192
         || value.outcome != "abstain"
         || value.accepted_turn
+        || value
+            .timing
+            .as_ref()
+            .is_some_and(|v| v.validate(id).is_err())
         || value.activity.is_some() != activity
         || value
             .activity
@@ -760,6 +772,7 @@ pub async fn analyze_voice(
         transcript: value.transcript,
         embedding: value.embedding,
         activity: value.activity,
+        timing: value.timing,
     })
 }
 async fn bounded_response(response: reqwest::Response) -> Result<serde_json::Value, String> {

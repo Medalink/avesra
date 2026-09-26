@@ -74,6 +74,7 @@ pub enum Mode {
     Excerpt,
     ProviderInspection { provider: super::provider::Provider },
     XReady { account: String },
+    Inbox { account: String },
 }
 impl Request {
     pub fn validate(&self) -> Result<(), ErrorCode> {
@@ -81,6 +82,12 @@ impl Request {
         if let Some(document) = &self.document {
             document.validate(&self.origin)?;
         } else if !matches!(self.mode, Mode::XReady { .. }) {
+            return Err(ErrorCode::Malformed);
+        }
+        if let Mode::Inbox { account } = &self.mode
+            && (!super::mailbox::account(account)
+                || self.origin.as_str() != "https://mail.google.com")
+        {
             return Err(ErrorCode::Malformed);
         }
         if let Mode::XReady { account } = &self.mode
@@ -98,7 +105,14 @@ impl Request {
         if !(1..=100).contains(&self.message_limit) {
             return Err(ErrorCode::Malformed);
         }
-        if self.remaining_ms == 0 || self.remaining_ms > LIFETIME_MS {
+        if self.remaining_ms == 0
+            || self.remaining_ms
+                > if matches!(self.mode, Mode::Inbox { .. }) {
+                    super::mailbox::LIFETIME_MS
+                } else {
+                    LIFETIME_MS
+                }
+        {
             return Err(ErrorCode::Expired);
         }
         encoded_bound(self)
@@ -122,6 +136,11 @@ impl Request {
                 if account == expected =>
             {
                 (super::provider::Provider::X.origin(), 1)
+            }
+            (ActionPayload::ReadInbox { account, count }, Mode::Inbox { account: expected })
+                if account == expected =>
+            {
+                ("https://mail.google.com", *count)
             }
             _ => return Err(ErrorCode::Denied),
         };
@@ -160,6 +179,9 @@ pub struct Excerpt {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Outcome {
+    Inbox {
+        terminal: super::mailbox::Terminal,
+    },
     Excerpt {
         excerpt: Excerpt,
     },
@@ -191,6 +213,23 @@ impl Reply {
             return Err(ErrorCode::Stale);
         }
         match (&request.mode, &self.outcome) {
+            (Mode::Inbox { account }, Outcome::Inbox { terminal }) => {
+                terminal.validate()?;
+                if terminal.account != *account
+                    || Some(&terminal.document) != request.document.as_ref()
+                {
+                    return Err(ErrorCode::Stale);
+                }
+            }
+            (
+                Mode::Inbox { .. },
+                Outcome::Excerpt { .. }
+                | Outcome::ProviderInspection { .. }
+                | Outcome::XReady { .. }
+                | Outcome::XNeedsInput { .. }
+                | Outcome::Empty,
+            ) => return Err(ErrorCode::Malformed),
+            (_, Outcome::Inbox { .. }) => return Err(ErrorCode::Malformed),
             (Mode::XReady { account }, Outcome::XNeedsInput { evidence }) => {
                 evidence.validate()?;
                 if evidence.account != *account
@@ -270,7 +309,7 @@ fn text(value: &str) -> bool {
         .chars()
         .all(|c| !c.is_control() || matches!(c, '\n' | '\t'))
 }
-fn encoded_bound(value: &impl Serialize) -> Result<(), ErrorCode> {
+pub(super) fn encoded_bound(value: &impl Serialize) -> Result<(), ErrorCode> {
     let bytes = serde_json::to_vec(value).map_err(|_| ErrorCode::Malformed)?;
     // Reserve space for the authenticated control envelope inside MAX_MESSAGE.
     if bytes.len() > MAX_MESSAGE - 2048 {

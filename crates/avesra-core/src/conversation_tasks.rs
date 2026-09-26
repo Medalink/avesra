@@ -245,6 +245,12 @@ fn read_link(db: &Connection, turn: Uuid) -> Result<Option<Link>, ErrorCode> {
         || link.target.id() != link.action.target_id
         || link.target.operation() != link.action.payload.operation()
         || !match (&link.target, &link.action.payload) {
+            (
+                TaskTarget::GmailInbox { scope, account },
+                ActionPayload::ReadInbox {
+                    account: expected, ..
+                },
+            ) => account == expected && scope.actor.uuid() == link.actor,
             (TaskTarget::XReady { scope, account }, ActionPayload::OpenX { account: expected }) => {
                 account == expected && scope.actor.uuid() == link.actor
             }
@@ -768,7 +774,24 @@ impl Store {
                 | "avesra, open x"
                 | "avesra, open x so i can post about my new app"
         );
-        let (target, payload, name) = if open_x {
+        let inbox_count = crate::workflows::mailbox::requested_count(&record.text);
+        let (target, payload, name) = if let Some(count) = inbox_count {
+            let matches:Vec<_>=permissions.iter().filter(|p|!p.revoked && matches!(&p.permission.target,TaskTarget::GmailInbox {scope,..} if scope.actor.uuid()==record.actor)).collect();
+            if matches.len() != 1 {
+                return Ok(TaskResolution::NeedsInput(request.turn));
+            }
+            let TaskTarget::GmailInbox { account, .. } = &matches[0].permission.target else {
+                return Err(ErrorCode::Malformed);
+            };
+            (
+                matches[0].permission.target.clone(),
+                ActionPayload::ReadInbox {
+                    account: account.clone(),
+                    count,
+                },
+                "gmail inbox".to_owned(),
+            )
+        } else if open_x {
             let matches: Vec<_> = permissions
                 .iter()
                 .filter(|p| {
@@ -827,16 +850,27 @@ impl Store {
                 project,
             )
         } else if let Some(entry) = &routine {
+            let source = entry.source.as_ref().ok_or(ErrorCode::Malformed)?;
             let matches: Vec<_> = permissions
                 .iter()
-                .filter(|p| !p.revoked && p.permission.target == entry.source.target)
+                .filter(|p| !p.revoked && p.permission.target == source.target)
                 .collect();
             if matches.len() != 1 {
                 return Ok(TaskResolution::NeedsInput(request.turn));
             }
             (
-                entry.source.target.clone(),
-                entry.source.payload.clone(),
+                entry
+                    .source
+                    .as_ref()
+                    .ok_or(ErrorCode::Malformed)?
+                    .target
+                    .clone(),
+                entry
+                    .source
+                    .as_ref()
+                    .ok_or(ErrorCode::Malformed)?
+                    .payload
+                    .clone(),
                 matches[0].permission.name.clone(),
             )
         } else if download_request(&record.text) == Some(false)
@@ -1020,10 +1054,11 @@ fn insert_link(
         deadline,
     } = resolved;
     let now = wall_time()?;
+    let maximum_age = payload.maximum_age_ms();
     let budget_ms = match deadline {
         Some(end) => u64::try_from(end.saturating_duration_since(Instant::now()).as_millis())
             .map_err(|_| ErrorCode::Expired)?,
-        None => avesra_contracts::MAX_ACTION_AGE_MS,
+        None => maximum_age,
     };
     if budget_ms == 0 {
         return Err(ErrorCode::Expired);
@@ -1045,7 +1080,7 @@ fn insert_link(
         payload,
         issued_at_ms: now,
         expires_at_ms: now
-            .checked_add(budget_ms.min(avesra_contracts::MAX_ACTION_AGE_MS))
+            .checked_add(budget_ms.min(maximum_age))
             .ok_or(ErrorCode::Expired)?,
     };
     let (body,revoked):(Vec<u8>,bool)=tx.query_row("SELECT substr(CAST(body AS BLOB),1,8193),revoked FROM ledger_grants WHERE id=?1 AND actor_id=?2",params![grant_id.to_string(),record.actor.to_string()],|r|Ok((r.get(0)?,r.get(1)?))).map_err(|_|ErrorCode::Denied)?;

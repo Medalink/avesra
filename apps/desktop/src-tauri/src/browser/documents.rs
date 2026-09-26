@@ -217,6 +217,7 @@ pub(super) fn reserve_target(
     let target = resolve_target(state, local, inner, reference, action.actor_id)?;
     let origin = match &action.payload {
         avesra_contracts::ActionPayload::ReadPage { origin, .. } => origin.as_str(),
+        avesra_contracts::ActionPayload::ReadInbox { .. } => "https://mail.google.com",
         avesra_contracts::ActionPayload::InspectBrowserProvider { provider } => provider.origin(),
         avesra_contracts::ActionPayload::OpenX { .. } => {
             avesra_contracts::browser::provider::Provider::X.origin()
@@ -229,6 +230,7 @@ pub(super) fn reserve_target(
     if matches!(
         action.payload,
         avesra_contracts::ActionPayload::OpenX { .. }
+            | avesra_contracts::ActionPayload::ReadInbox { .. }
     ) && !target.grant.operations.contains(&ScopeOperation::Navigate)
     {
         return Err(ErrorCode::Denied);
@@ -313,6 +315,12 @@ impl PreparedTarget {
                 1,
                 Mode::ProviderInspection {
                     provider: *provider,
+                },
+            ),
+            avesra_contracts::ActionPayload::ReadInbox { account, count } => (
+                *count,
+                Mode::Inbox {
+                    account: account.clone(),
                 },
             ),
             avesra_contracts::ActionPayload::OpenX { account } => (

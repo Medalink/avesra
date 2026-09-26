@@ -24,6 +24,12 @@ pub enum Host {
 #[derive(Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Stage {
+    VoiceCapture,
+    VoiceActivityEndpoint,
+    VoiceQueue,
+    VoiceAnalysis,
+    VoiceIntent,
+    VoiceGate,
     Accepted,
     NativePlanner,
     ControllerPlanner,
@@ -117,6 +123,8 @@ pub struct Record {
     pub queue_us: Option<u64>,
     pub retries: u32,
     pub deployment: Deployment,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analysis: Option<avesra_contracts::voice_timing::Analysis>,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -234,11 +242,11 @@ pub fn initialize(directory: &Path, host: Host) -> Result<(), ErrorCode> {
         if occupied {
             return Err(ErrorCode::Malformed);
         }
-    } else if version != 1 {
+    } else if !matches!(version, 1 | 2) {
         return Err(ErrorCode::Unsupported);
     }
 
-    sql(db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=1000; PRAGMA user_version=1; CREATE TABLE IF NOT EXISTS spans(id TEXT PRIMARY KEY,actor TEXT NOT NULL,device TEXT NOT NULL,turn TEXT NOT NULL,at_ms INTEGER NOT NULL,body TEXT NOT NULL CHECK(length(body)<=4096)); CREATE INDEX IF NOT EXISTS span_owner ON spans(actor,device,at_ms); CREATE TABLE IF NOT EXISTS rollups(actor TEXT NOT NULL,device TEXT NOT NULL,day INTEGER NOT NULL,stage TEXT NOT NULL,outcome TEXT NOT NULL,count INTEGER NOT NULL,total INTEGER NOT NULL,maximum INTEGER NOT NULL,PRIMARY KEY(actor,device,day,stage,outcome)); CREATE TABLE IF NOT EXISTS retention(id INTEGER PRIMARY KEY CHECK(id=1),days INTEGER NOT NULL CHECK(days BETWEEN 1 AND 7),evicted INTEGER NOT NULL); INSERT OR IGNORE INTO retention VALUES(1,7,0); CREATE TABLE IF NOT EXISTS observer(id INTEGER PRIMARY KEY CHECK(id=1),lost INTEGER NOT NULL,starts INTEGER NOT NULL); INSERT OR IGNORE INTO observer VALUES(1,0,0); UPDATE observer SET starts=starts+1 WHERE id=1;"))?;
+    sql(db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=1000; PRAGMA user_version=2; CREATE TABLE IF NOT EXISTS spans(id TEXT PRIMARY KEY,actor TEXT NOT NULL,device TEXT NOT NULL,turn TEXT NOT NULL,at_ms INTEGER NOT NULL,body TEXT NOT NULL CHECK(length(body)<=4096)); CREATE INDEX IF NOT EXISTS span_owner ON spans(actor,device,at_ms); CREATE TABLE IF NOT EXISTS rollups(actor TEXT NOT NULL,device TEXT NOT NULL,day INTEGER NOT NULL,stage TEXT NOT NULL,outcome TEXT NOT NULL,count INTEGER NOT NULL,total INTEGER NOT NULL,maximum INTEGER NOT NULL,PRIMARY KEY(actor,device,day,stage,outcome)); CREATE TABLE IF NOT EXISTS retention(id INTEGER PRIMARY KEY CHECK(id=1),days INTEGER NOT NULL CHECK(days BETWEEN 1 AND 7),evicted INTEGER NOT NULL); INSERT OR IGNORE INTO retention VALUES(1,7,0); CREATE TABLE IF NOT EXISTS observer(id INTEGER PRIMARY KEY CHECK(id=1),lost INTEGER NOT NULL,starts INTEGER NOT NULL); INSERT OR IGNORE INTO observer VALUES(1,0,0); UPDATE observer SET starts=starts+1 WHERE id=1;"))?;
     let (tx, rx) = mpsc::sync_channel(256);
     let loss = Arc::new(AtomicU64::new(0));
     let process = Uuid::new_v4();
@@ -453,6 +461,7 @@ pub fn begin(link: Link, stage: Stage) -> Span {
         queue_us: None,
         retries: 0,
         deployment: Deployment::default(),
+        analysis: None,
     });
     Span { record, started }
 }
@@ -521,10 +530,116 @@ impl Drop for Span {
     }
 }
 
+/// Transient only: it has no accepted turn or actor identifier and cannot emit
+/// until the actual native durable acceptance object is available.
+pub struct Deferred {
+    stage: Stage,
+    started: Instant,
+    ended: Instant,
+    analysis: Option<avesra_contracts::voice_timing::Analysis>,
+}
+impl Deferred {
+    pub fn interval(stage: Stage, started: Instant, ended: Instant) -> Self {
+        Self {
+            stage,
+            started,
+            ended,
+            analysis: None,
+        }
+    }
+    pub fn analysis(&mut self, value: Option<avesra_contracts::voice_timing::Analysis>) {
+        self.analysis = value;
+    }
+    pub fn promote(self, turn: &crate::conversations::DurableTurn) {
+        let Some(s) = SINK.get().filter(|s| s.host == Host::Native) else {
+            return;
+        };
+        let Some(start_us) = self.started.checked_duration_since(s.origin).map(micros) else {
+            return;
+        };
+        let Some(duration) = self.ended.checked_duration_since(self.started) else {
+            return;
+        };
+        let Some(age) = Instant::now().checked_duration_since(self.started) else {
+            return;
+        };
+        let source = turn.source();
+        if self
+            .analysis
+            .as_ref()
+            .is_some_and(|v| v.validate(source.utterance).is_err())
+        {
+            s.loss.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+        let r = Record {
+            id: Uuid::new_v4(),
+            link: Link {
+                turn: turn.id(),
+                actor: turn.actor(),
+                device: source.device,
+                operation: source.utterance,
+                parent: Some(turn.id()),
+            },
+            host: s.host,
+            process: s.process,
+            stage: self.stage,
+            outcome: Outcome::Complete,
+            error: None,
+            at_ms: now().saturating_sub(u64::try_from(age.as_millis()).unwrap_or(u64::MAX)),
+            start_us,
+            duration_us: micros(duration),
+            queue_us: None,
+            retries: 0,
+            deployment: Deployment::default(),
+            analysis: self.analysis,
+        };
+        if s.tx.try_send(Message::Record(r)).is_err() {
+            s.loss.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+/// Controller-local clock observation, not a retained preacceptance span.
+pub struct AudioTimer {
+    started: Instant,
+    stamp: Option<(Uuid, u64, u64)>,
+}
+impl AudioTimer {
+    pub fn start() -> Self {
+        let started = Instant::now();
+        let stamp = SINK.get().filter(|s| s.host == Host::Controller).map(|s| {
+            (
+                s.process,
+                now(),
+                micros(started.saturating_duration_since(s.origin)),
+            )
+        });
+        Self { started, stamp }
+    }
+    pub fn finish(
+        self,
+        worker: Uuid,
+        lane: avesra_contracts::voice_timing::Lane,
+        revision: &str,
+    ) -> Option<avesra_contracts::voice_timing::Receipt> {
+        let (process, at_ms, start_us) = self.stamp?;
+        Some(avesra_contracts::voice_timing::Receipt {
+            worker,
+            host: avesra_contracts::voice_timing::Host::Controller,
+            process,
+            lane,
+            model_revision: revision.into(),
+            at_ms,
+            start_us,
+            duration_us: micros(self.started.elapsed()),
+        })
+    }
+}
+
 /// OTLP/HTTP JSON projection. Full native records accompany this projection in
 /// exports; operation links are attributes, never fabricated parent span IDs.
 pub fn otlp(snapshots: &[&Snapshot]) -> serde_json::Value {
-    let resources=snapshots.iter().map(|snapshot| {
+    let mut resources=snapshots.iter().map(|snapshot| {
         let spans=snapshot.records.iter().map(|r| {
             let attr=|key:&str,value:String|serde_json::json!({"key":key,"value":{"stringValue":value}});
             let mut attrs=vec![attr("avesra.record.id",r.id.to_string()),attr("avesra.operation.id",r.link.operation.to_string()),attr("avesra.process.id",r.process.to_string()),attr("avesra.outcome",serde_json::to_string(&r.outcome).unwrap_or_default()),attr("avesra.duration.us",r.duration_us.to_string()),attr("avesra.clock.offset","unavailable".into()),attr("avesra.clock.monotonic.start_us",r.start_us.to_string()),attr("avesra.retry.count",r.retries.to_string())];
@@ -537,6 +652,16 @@ pub fn otlp(snapshots: &[&Snapshot]) -> serde_json::Value {
         }).collect::<Vec<_>>();
         serde_json::json!({"resource":{"attributes":[{"key":"service.name","value":{"stringValue":match snapshot.host{Host::Native=>"avesra-native",Host::Controller=>"avesra-controller"}}}]},"scopeSpans":[{"scope":{"name":"avesra.accepted","version":"1"},"spans":spans}]})
     }).collect::<Vec<_>>();
+    for record in snapshots.iter().flat_map(|snapshot| &snapshot.records) {
+        if let Some(analysis) = &record.analysis {
+            let spans=analysis.receipts.iter().map(|r|{
+                let attr=|key:&str,value:String|serde_json::json!({"key":key,"value":{"stringValue":value}});
+                let start=u128::from(r.at_ms)*1_000_000;
+                serde_json::json!({"traceId":record.link.turn.simple().to_string(),"spanId":&r.worker.simple().to_string()[..16],"name":match r.lane{avesra_contracts::voice_timing::Lane::Asr=>"asr_driver_round_trip",avesra_contracts::voice_timing::Lane::Speaker=>"speaker_driver_round_trip"},"kind":1,"startTimeUnixNano":start.to_string(),"endTimeUnixNano":(start+u128::from(r.duration_us)*1000).to_string(),"attributes":[attr("avesra.operation.id",r.worker.to_string()),attr("avesra.parent.operation.id",analysis.request.to_string()),attr("avesra.process.id",r.process.to_string()),attr("avesra.clock.monotonic.start_us",r.start_us.to_string()),attr("avesra.clock.offset","unavailable".into()),attr("avesra.model.revision",r.model_revision.clone()),attr("avesra.measurement","controller_driver_round_trip".into())],"status":{"code":1}})
+            }).collect::<Vec<_>>();
+            resources.push(serde_json::json!({"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"avesra-controller"}}]},"scopeSpans":[{"scope":{"name":"avesra.voice_analysis","version":"1"},"spans":spans}]}));
+        }
+    }
     serde_json::json!({"resourceSpans":resources})
 }
 
@@ -610,6 +735,11 @@ impl Snapshot {
                     || !digest(&r.deployment.model)
                     || !digest(&r.deployment.image)
                     || !digest(&r.deployment.config)
+                    || r.analysis.as_ref().is_some_and(|value| {
+                        !matches!(r.stage, Stage::VoiceAnalysis)
+                            || r.host != Host::Native
+                            || value.validate(r.link.operation).is_err()
+                    })
             })
         {
             return Err(ErrorCode::Malformed);

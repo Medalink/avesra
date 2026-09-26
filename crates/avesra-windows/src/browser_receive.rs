@@ -65,12 +65,32 @@ impl Settlement {
 }
 /// Received only on the actual authenticated current connection. No raw-body
 /// getter, Deserialize implementation or caller-supplied constructor exists.
+enum ContentValue {
+    Reply(browser::reading::Reply),
+    Chunk(browser::mailbox::Chunk),
+}
 pub struct Content {
-    reply: browser::reading::Reply,
+    value: ContentValue,
 }
 impl Content {
     pub fn context(&self) -> &browser::reading::Context {
-        &self.reply.context
+        match &self.value {
+            ContentValue::Reply(reply) => &reply.context,
+            ContentValue::Chunk(chunk) => &chunk.context,
+        }
+    }
+    pub(crate) fn is_chunk(&self) -> bool {
+        matches!(self.value, ContentValue::Chunk(_))
+    }
+    pub(crate) fn accept_chunk(
+        self,
+        execution: &mut avesra_core::browser_execution::ReadExecution<'_>,
+        current: &mut dyn FnMut() -> Result<(), ErrorCode>,
+    ) -> Result<browser::mailbox::Ack, ErrorCode> {
+        let ContentValue::Chunk(chunk) = self.value else {
+            return Err(ErrorCode::Malformed);
+        };
+        execution.append_mailbox(chunk, current)
     }
     /// Both owners stay borrowed through one-use consumption. This prerequisite
     /// cannot transfer evidence beyond the live worker/resource reservation.
@@ -79,9 +99,12 @@ impl Content {
         execution: &'a mut avesra_core::browser_execution::ReadExecution<'store>,
         current: &'a mut dyn FnMut() -> Result<(), ErrorCode>,
     ) -> Result<ReadReply<'a, 'store>, ErrorCode> {
+        let ContentValue::Reply(reply) = self.value else {
+            return Err(ErrorCode::Malformed);
+        };
         let result = (|| {
             current()?;
-            execution.finalize_content(&self.reply)?;
+            execution.finalize_content(&reply)?;
             current()?;
             execution.content_current()
         })();
@@ -90,7 +113,7 @@ impl Content {
             return Err(error);
         }
         Ok(ReadReply {
-            reply: Some(self.reply),
+            reply: Some(reply),
             execution,
             current,
         })
@@ -103,6 +126,21 @@ pub struct ReadReply<'a, 'store> {
     current: &'a mut dyn FnMut() -> Result<(), ErrorCode>,
 }
 impl ReadReply<'_, '_> {
+    pub fn consume_inbox(
+        mut self,
+    ) -> Result<
+        (
+            browser::reading::Reply,
+            Option<avesra_core::workflows::mailbox::Mailbox>,
+        ),
+        ErrorCode,
+    > {
+        self.execution.content_current()?;
+        (self.current)()?;
+        self.execution.content_current()?;
+        let mailbox = self.execution.take_mailbox()?;
+        Ok((self.reply.take().ok_or(ErrorCode::Stale)?, mailbox))
+    }
     pub fn consume(mut self) -> Result<browser::reading::Reply, ErrorCode> {
         self.execution.content_current()?;
         (self.current)()?;
@@ -237,6 +275,12 @@ impl ReceiveOwner {
                 observation_revision,
                 ..
             }
+            | Client::MailboxChunk {
+                session,
+                sequence,
+                observation_revision,
+                ..
+            }
             | Client::ReadSettlement {
                 session,
                 sequence,
@@ -306,6 +350,37 @@ impl ReceiveOwner {
                     },
                 }
             }
+            Client::MailboxChunk {
+                session,
+                sequence,
+                observation_revision,
+                chunk,
+            } => {
+                chunk.validate()?;
+                let authenticated = self
+                    .authenticated
+                    .as_ref()
+                    .ok_or(ErrorCode::Unauthenticated)?;
+                let (actor, app) = self
+                    .authenticated_binding
+                    .ok_or(ErrorCode::Unauthenticated)?;
+                if chunk.context.pairing != authenticated.pairing
+                    || chunk.context.actor != actor
+                    || chunk.context.browser_app != app
+                    || chunk.context.browser_session != self.session
+                    || chunk.context.browser_generation != self.generation
+                {
+                    return Err(ErrorCode::Stale);
+                }
+                Incoming::Content {
+                    session,
+                    sequence,
+                    observation_revision,
+                    content: Content {
+                        value: ContentValue::Chunk(chunk),
+                    },
+                }
+            }
             Client::ReadResult {
                 session,
                 sequence,
@@ -341,7 +416,9 @@ impl ReceiveOwner {
                         session,
                         sequence,
                         observation_revision,
-                        content: Content { reply },
+                        content: Content {
+                            value: ContentValue::Reply(reply),
+                        },
                     }
                 }
             }

@@ -21,10 +21,13 @@ use tauri::{Emitter, Manager};
 use uuid::Uuid;
 #[path = "tasks_download.rs"]
 pub mod download;
+#[path = "tasks_memory.rs"]
+pub mod memory;
 
 #[derive(Default)]
 pub struct State {
     download_pending: Mutex<Option<download::Pending>>,
+    memory_pending: Mutex<Option<memory::Pending>>,
     vpn_channel: Mutex<Option<(Uuid, connection::SessionIdentity, Instant, VpnChannel)>>,
     vpn: Mutex<Option<(Uuid, Instant, avesra_core::vpn::Profile)>>,
     panel: Mutex<Option<Panel>>,
@@ -63,6 +66,7 @@ pub struct PageView {
     provider: Option<avesra_contracts::browser::provider::Probe>,
     x_ready: Option<avesra_contracts::browser::provider::XReady>,
     x_needs_input: Option<avesra_contracts::browser::provider::XNeedsInput>,
+    inbox: Option<crate::browser::mailbox::View>,
 }
 struct Panel {
     id: Uuid,
@@ -73,6 +77,9 @@ struct Panel {
 }
 impl State {
     pub fn invalidate(&self) {
+        if let Ok(mut pending) = self.memory_pending.lock() {
+            *pending = None;
+        }
         if let Ok(mut pending) = self.download_pending.lock() {
             *pending = None;
         }
@@ -446,6 +453,7 @@ pub async fn grant_browser_read_action(
     panel: Uuid,
     reference: avesra_contracts::browser::ScopeRef,
     x_account: Option<String>,
+    gmail_account: Option<String>,
 ) -> Result<ActionSnapshot, String> {
     visible(&window)?;
     current(&app, panel)?;
@@ -482,7 +490,17 @@ pub async fn grant_browser_read_action(
                 .effects
                 .actions(ActionManagement::Grant {
                     actor,
-                    selection: if let Some(account) = x_account {
+                    selection: if let Some(account) = gmail_account {
+                        if x_account.is_some()
+                            || !avesra_contracts::browser::mailbox::account(&account)
+                        {
+                            return Err("Enter one exact Gmail account".into());
+                        }
+                        Selection::GmailInbox {
+                            scope: Box::new(scope),
+                            account,
+                        }
+                    } else if let Some(account) = x_account {
                         if !avesra_contracts::browser::provider::x_account(&account) {
                             return Err("Enter the exact X handle without @".into());
                         }
@@ -949,24 +967,27 @@ async fn execute_accepted(
         &target,
         avesra_core::action_permissions::TaskTarget::Vpn { .. }
     );
-    let consumer = if let avesra_core::action_permissions::TaskTarget::BrowserRead { scope }
-    | avesra_core::action_permissions::TaskTarget::XReady { scope, .. } = target
-    {
-        let expected = context.clone();
-        let owned_app = app.clone();
-        let origin = scope.origin.as_str().to_owned();
-        Some(avesra_windows::effects::ReadConsumer {
-            scope: *scope,
-            consume: Box::new(move |borrowed| {
-                expected.current_owner(&owned_app)?;
-                let reply = borrowed.consume()?;
-                retain_page(&owned_app, &expected, step, origin, reply)
-                    .map_err(|_| ErrorCode::Stale)
-            }),
-        })
-    } else {
-        None
-    };
+    let consumer =
+        if let avesra_core::action_permissions::TaskTarget::BrowserRead { scope }
+        | avesra_core::action_permissions::TaskTarget::XReady { scope, .. }
+        | avesra_core::action_permissions::TaskTarget::GmailInbox { scope, .. } = target
+        {
+            let expected = context.clone();
+            let owned_app = app.clone();
+            let origin = scope.origin.as_str().to_owned();
+            Some(avesra_windows::effects::ReadConsumer {
+                scope: *scope,
+                consume: Box::new(move |borrowed| {
+                    expected.current_owner(&owned_app)?;
+                    let (reply, mailbox) = borrowed.consume_inbox()?;
+                    let inbox = crate::browser::mailbox::consume(&reply, mailbox)?;
+                    retain_page(&owned_app, &expected, step, origin, reply, inbox)
+                        .map_err(|_| ErrorCode::Stale)
+                }),
+            })
+        } else {
+            None
+        };
     let waiter = state
         .effects
         .submit_with_withdrawal(
@@ -1049,6 +1070,7 @@ fn retain_page(
     step: Uuid,
     origin: String,
     reply: avesra_contracts::browser::reading::Reply,
+    inbox: Option<crate::browser::mailbox::View>,
 ) -> Result<(), String> {
     use avesra_contracts::browser::reading::Outcome;
     let source = &reply.context;
@@ -1070,7 +1092,9 @@ fn retain_page(
         _ => None,
     };
     let (blocks, truncated, excluded_content, provider) = match reply.outcome {
-        Outcome::XReady { .. } | Outcome::XNeedsInput { .. } => (Vec::new(), false, false, None),
+        Outcome::Inbox { .. } | Outcome::XReady { .. } | Outcome::XNeedsInput { .. } => {
+            (Vec::new(), false, false, None)
+        }
         Outcome::Excerpt { excerpt } => (
             excerpt.blocks,
             excerpt.truncated,
@@ -1121,6 +1145,7 @@ fn retain_page(
             provider,
             x_ready,
             x_needs_input,
+            inbox,
         },
     });
     drop(page);
@@ -1261,17 +1286,23 @@ pub async fn accepted(
                     expected.prepare(&owner_app)
                 })).map_err(|_|"Planner owner busy")?;
                 let claim=receive(receiver).await?;
-                if avesra_core::notifications::question_kind(&claim.transport().map_err(|_|"Accepted event question expired")?.text).is_some() {
+                let request=claim.transport().map_err(|_|"Accepted native question expired")?;
+                if avesra_core::memory::conversation::parse(&request.text).is_some(){
+                    return memory::answer(&app,context.clone(),claim).await;
+                }
+                let clock=avesra_core::clock::question_kind(&request.text).is_some();
+                if clock || avesra_core::notifications::question_kind(&request.text).is_some() {
                     let expected=context.clone();let owner_app=app.clone();
-                    let receiver=state.effects.event_answer(claim,Box::new(move |authority|{
+                    let authorize: avesra_windows::effects::PlannerAuthorization=Box::new(move |authority|{
                         if authority.context.turn!=expected.target.id||authority.context.turn_revision!=expected.target.revision||authority.binding!=&expected.binding{return Err(ErrorCode::Stale);}
                         expected.prepare(&owner_app)
-                    })).map_err(|_|"Event answer writer busy")?;
+                    });
+                    let receiver=if clock {state.effects.clock_answer(claim,authorize)}else{state.effects.event_answer(claim,authorize)}.map_err(|_|"Native answer writer busy")?;
                     let stored=receive(receiver).await?;
-                    context.check(&app).map_err(|_|"Event answer withdrawn")?;
+                    context.check(&app).map_err(|_|"Native answer withdrawn")?;
                     let local=state.local.lock().map_err(|_|"Local state unavailable")?;
-                    if local.action_epoch!=context.session.action_epoch||local.locked||!local.connected{return Err("Event answer context changed".into());}
-                    let reply=state.effects.publish_planner(stored).map_err(|_|"Event answer publication withdrawn")?;
+                    if local.action_epoch!=context.session.action_epoch||local.locked||!local.connected{return Err("Native answer context changed".into());}
+                    let reply=state.effects.publish_planner(stored).map_err(|_|"Native answer publication withdrawn")?;
                     return Ok(AcceptedResult::Reply(Box::new(reply)));
                 }
                 let future=crate::planner::answer(app.clone(),claim);

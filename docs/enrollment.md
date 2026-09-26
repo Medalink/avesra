@@ -3,7 +3,7 @@
 ## Personal conversation startup (current owner-directed product policy)
 
 Normal launch now establishes Personal admission automatically after pairing,
-unlocked Windows, current owner registration and loaded speech/activity/reasoning
+unlocked Windows, current owner registration and loaded speech/activity
 services. It honors saved mute, deafen, pause, revocation and endpoint selections;
 only genuinely new settings default to unmuted and actual default audio devices.
 Diagnostic output-recording launches never bootstrap listening or open a mic.

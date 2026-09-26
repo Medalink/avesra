@@ -100,8 +100,9 @@ configuration is not created automatically by the application. The isolated
 runtime observation below did not change controller or existing ASR configuration.
 
 `GET /voice-activity` supplies authenticated health for explicit preflight.
-`POST /voice-analysis` accepts an optional `activity: true`; omitted/false retains
-the original response shape and behavior. Explicit activity requests fail if the
+`POST /voice-analysis` version2 accepts an optional `activity: true`; omitted/false
+retains the base analysis shape, including its required nullable typed timing
+receipt ([voice-timing.md](voice-timing.md)). Explicit activity requests fail if the
 lane is absent/unready and never fall back to invented clean/unknown scores.
 The same PCM is processed concurrently with ASR/speaker under the existing
 15-second inference budget and current paired capture permission. Cancellation

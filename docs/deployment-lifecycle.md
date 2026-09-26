@@ -141,17 +141,17 @@ that old trusted package's extension, reload the browser, then
 `rollback --version <that-retained-version> --browser chrome --data <actual-app-data>`.
 The explicit target is never inferred from a previous pointer modified by
 unregistration. Rollback refuses a store schema newer than the package's declared
-support. Package creation requires schema13 through22 to match the actual frozen
+support. Package creation requires schema13 through24 to match the actual frozen
 source's schema marker; the trusted build record must also bind those executables
 to that source archive. The installer never guesses schema from a filename and
 never restores an old database. `unregister` retains package directories, source
 manifests, extensions and protected data. Incomplete staging directories are
 retained and reported for explicit inspection, never silently overwritten.
 
-Current source writes schema22. Schema20 preserves explicit already-satisfied action outcomes; schema21 adds exact X-ready targets; schema22 adds typed model/native-event reply provenance. These compatibility markers prevent old readers from reopening newly written serialized records; they add no tables. Schema17 adds the monotonically increasing native
+Current source writes schema24. Schema23 rebuilds private memory source columns for mutually exclusive task/accepted-turn provenance while preserving foreign keys; schema24 adds typed Gmail targets, payloads and bounded mailbox observations without new tables. Schema20 preserves explicit already-satisfied action outcomes; schema21 adds exact X-ready targets; schema22 adds typed model/native-event reply provenance. These compatibility markers prevent old readers from reopening newly written serialized records; they add no tables. Schema17 adds the monotonically increasing native
 planner claim counter;18 and19 mark VPN and browser-provider record compatibility.
 No database downgrade or counter reset is performed. Native/controller deployments
-must match planner-v4 and normal-speech-v4; older wire versions reject.
+must match planner-v4 and normal-speech-v5; older wire versions reject.
 
 `scripts/install-spark.py` stages a caller-hash-pinned controller, and installs or
 rolls back the owned persistent user unit against an existing private directory.

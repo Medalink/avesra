@@ -5,8 +5,12 @@ use serde::Deserialize;
 use std::{collections::HashSet, time::Instant};
 use uuid::Uuid;
 
-const MAX_BODY: usize = 16_384;
-const MAX_BODIES: usize = 262_144;
+#[path = "mailbox_stream.rs"]
+mod stream;
+pub(crate) use stream::Stream;
+
+const MAX_BODY: usize = avesra_contracts::browser::mailbox::BODY_BYTES;
+const MAX_BODIES: usize = avesra_contracts::browser::mailbox::TOTAL_BODY_BYTES;
 
 #[derive(Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -20,6 +24,8 @@ pub struct Message {
     pub body: String,
     pub body_complete: bool,
     pub thread_expanded: bool,
+    /// Observed message-specific Inbox membership, never its conversation label.
+    pub inbox_message_id: String,
 }
 
 #[derive(Deserialize)]
@@ -36,6 +42,9 @@ pub struct Batch {
     pub end_of_inbox: bool,
     pub order: Order,
     pub messages: Vec<Message>,
+    /// Proven upper date bound of every unvisited eligible individual message.
+    /// None only when actual Inbox end was observed.
+    pub unseen_at_most_ms: Option<u64>,
 }
 
 #[derive(Clone, Copy, Deserialize)]
@@ -74,6 +83,90 @@ fn text(value: &str, maximum: usize, multiline: bool) -> bool {
 fn identity(value: &str, maximum: usize) -> bool {
     !value.is_empty() && value.len() <= maximum && value.bytes().all(|b| (33..=126).contains(&b))
 }
+/// Closed whole accepted grammar. No model-provided account/count authority.
+pub fn requested_count(text: &str) -> Option<u16> {
+    let value = text
+        .trim()
+        .trim_end_matches(['.', '!', '?'])
+        .to_ascii_lowercase();
+    let value = value
+        .strip_prefix("avesra, ")
+        .or_else(|| value.strip_prefix("avesra "))
+        .unwrap_or(&value);
+    let rest = [
+        "read my latest ",
+        "read the latest ",
+        "check my latest ",
+        "check the latest ",
+        "check latest ",
+    ]
+    .iter()
+    .find_map(|prefix| value.strip_prefix(prefix))?;
+    let (number, tail) = rest.split_once(" emails")?;
+    if !matches!(
+        tail,
+        "" | " and see if i got my package delivered"
+            | " and determine package-delivery confirmation"
+            | " and determine package delivery confirmation"
+    ) {
+        return None;
+    }
+    spoken_count(number)
+}
+fn spoken_count(value: &str) -> Option<u16> {
+    if !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()) {
+        let n = value.parse::<u16>().ok()?;
+        return (1..=100).contains(&n).then_some(n);
+    }
+    if value == "one hundred" {
+        return Some(100);
+    }
+    let units = [
+        "one",
+        "two",
+        "three",
+        "four",
+        "five",
+        "six",
+        "seven",
+        "eight",
+        "nine",
+        "ten",
+        "eleven",
+        "twelve",
+        "thirteen",
+        "fourteen",
+        "fifteen",
+        "sixteen",
+        "seventeen",
+        "eighteen",
+        "nineteen",
+    ];
+    if let Some(index) = units.iter().position(|v| *v == value) {
+        return Some(index as u16 + 1);
+    }
+    for (index, ten) in [
+        "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let n = (index as u16 + 2) * 10;
+        if value == *ten {
+            return Some(n);
+        }
+        if let Some(unit) = value.strip_prefix(ten).and_then(|suffix| {
+            suffix
+                .strip_prefix(' ')
+                .or_else(|| suffix.strip_prefix('-'))
+        }) && let Some(index) = units[..9].iter().position(|v| *v == unit)
+        {
+            return Some(n + index as u16 + 1);
+        }
+    }
+    None
+}
+
 impl Message {
     fn validate(&self) -> Result<(), ErrorCode> {
         if !identity(&self.id, 128)
@@ -86,6 +179,7 @@ impl Message {
             || !text(&self.body, MAX_BODY, true)
             || !self.body_complete
             || !self.thread_expanded
+            || self.inbox_message_id != self.id
         {
             return Err(ErrorCode::Malformed);
         }
@@ -146,6 +240,10 @@ impl Mailbox {
             || batch.messages.len() > self.requested
             || batch.next.as_ref().is_some_and(|v| !identity(v, 256))
             || batch.end_of_inbox == batch.next.is_some()
+            || batch.end_of_inbox != batch.unseen_at_most_ms.is_none()
+            || batch
+                .unseen_at_most_ms
+                .is_some_and(|v| v == 0 || v > 8_640_000_000_000_000)
             || (!batch.end_of_inbox && batch.messages.is_empty())
         {
             return Err(ErrorCode::Malformed);
@@ -188,6 +286,13 @@ impl Mailbox {
         }
         if Instant::now() >= self.deadline {
             return Err(ErrorCode::Expired);
+        }
+        if batch.unseen_at_most_ms.is_some_and(|bound| {
+            self.messages
+                .last()
+                .is_none_or(|last| bound >= last.timestamp_ms)
+        }) {
+            return Err(ErrorCode::Stale);
         }
         self.batches += 1;
         self.cursor = batch.next;

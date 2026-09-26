@@ -142,6 +142,15 @@ impl Coordinator {
         }
         Ok(())
     }
+    pub(super) fn mailbox_ack(&self) -> Result<Option<browser::mailbox::Ack>, ErrorCode> {
+        let slot = self.slot.lock().map_err(|_| ErrorCode::Unavailable)?;
+        slot.active
+            .as_ref()
+            .and_then(|a| a.endpoint.as_ref())
+            .map(NativeEndpoint::mailbox_ack)
+            .transpose()
+            .map(Option::flatten)
+    }
     pub(super) fn settled(
         &self,
         proof: &avesra_windows::browser_receive::Settlement,

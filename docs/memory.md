@@ -77,3 +77,59 @@ Observe actual source commit, restart retrieval, correction, deletion, dependent
 copy removal and cross-actor isolation before marking A14–A16 passed. Compilation
 or a migrated empty table is not learning evidence. No test fixtures or harnesses
 are introduced under the owner's specs/code/direct-observation workflow.
+
+## Accepted named facts (schema 23)
+
+An actual accepted owner turn can directly say `remember that KEY is VALUE`,
+`update KEY to VALUE`, or `what do you remember about KEY`. KEY is an exact,
+normalized private label (1–80 UTF-8 bytes); VALUE is explicit owner content
+(1–512 UTF-8 bytes), not an independently verified fact. Command prefixes are
+case-insensitive. Values retain their original content, including punctuation;
+only label lookup and fixed query suffix punctuation are normalized. An existing
+label with a different value is not overwritten by remember: use explicit update.
+Unknown labels and unsupported forms receive one concise native clarification.
+Identical saves/updates are no-ops and emit no learning event.
+
+These commands consume the original opaque planner claim and current native
+owner/registration. The same writer commits the memory revision, useful event
+and deterministic NativeMemory reply together under the original deadline and
+withdrawal. No successful task is fabricated. The existing memory table gains a
+nullable task source and an accepted-turn source with exactly one present;
+legacy task-sourced records remain readable. Accepted facts retain their original
+turn/revision and the current correction's accepted-turn or protected-owner
+management provenance. A fact never becomes a routine or grants tool authority.
+
+`forget KEY` resolves one exact current private ID/revision, presents that record
+for explicit current-owner approval, and retains its original pending claim.
+Only the protected native approval may complete that deletion before expiry.
+Missing/ambiguous/changed records do not delete anything. There is no delete-all
+voice command. Closing the approval surface, pause/lock, caller loss, owner
+change or original deadline withdraws the pending proposal. The existing Memory
+page also permits protected exact-record correction/deletion.
+
+Direct retrieval returns only the current actor's exact named fact, after source
+and revision checks. No full store is injected into the model. NativeMemory
+turns/replies and reserved memory-command turns are excluded from later model
+dialogue retrieval, preventing correction/deletion from reinserting their old
+values through this derived context. Deletion clears all stored revision/event
+bodies and dependent notification bodies atomically. Original accepted command
+history and offline backups remain independently retained; this operation does
+not claim to erase them or unrelated model answers.
+
+Known credential/authentication labels (password/passcode, PIN, MFA/OTP, API or
+private keys, access tokens and recovery/seed phrases) are rejected before the
+new command is persisted as an accepted turn. This is a narrow label guard, not
+exhaustive semantic secret detection. Unknown/ambient speech has no entry point;
+no audio, screenshot, page body or enrollment sample is added by this feature.
+
+Direct two-turn save/read, restart read, explicit update, exact approved delete,
+post-delete retrieval and cross-actor checks remain required live evidence.
+Source/static/build results alone do not satisfy A14–A16.
+
+Value-bearing native recalls carry their exact memory ID/revision in the native
+publication owner. Protected Settings corrections/deletions withdraw the actor
+'s queued/published replies immediately. Accepted updates and approved forgets
+withdraw earlier pending replies and published value-bearing recalls before the
+writer changes storage. Publication and every normal-speech freshness check use
+that same withdrawal signal. Save/delete acknowledgments contain no saved value;
+already rendered audio cannot be erased retroactively.
