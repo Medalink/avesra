@@ -135,9 +135,9 @@
     >
       <div>
         <span class="av-kicker">Avesra</span>
-        <p class="mt-1 text-[13px] text-zinc-300">
+        {#if speaking || runtime?.microphone_check || runtime?.enrollment_capture}<p class="mt-1 text-[13px] text-zinc-300">
           {speaking ? (preview ? (s?.explicit_mute ? "Previewing a voice candidate. Microphone muted." : "Previewing a voice candidate.") : s?.explicit_mute ? "Still replying · unmute to talk" : "Replying.") : runtime?.reason ?? "The local companion is unavailable."}
-        </p>
+        </p>{/if}
       </div>
       {#if status === "disconnected"}
         <div class="flex items-start gap-2.5 bg-red-500/[0.08] px-3 py-2.5 ring-1 ring-red-500/25 ring-inset" role="status">
