@@ -53,6 +53,17 @@ structure drift, correction and deletion remain required live evidence.
 
 ## Optional passive app-opening session (schema 27)
 
+Gaming defers this optional passive observer without changing the saved opt-in.
+Entering Gaming invalidates the passive generation and requests cancellation of
+its active observer. Its actual worker remains owned and visible as finishing
+until it returns; switching back cannot revive the old evidence or start a
+replacement while that owner remains. An attempted session is not automatically
+retried on return to Single Spark. Gaming does not disable explicit teaching or
+Personal voice learning. The current Single Spark/Gaming change is background
+policy only: both use the same Spark deployments, so it preserves the current
+capture, playback and action epochs. Device changes still invalidate those epochs.
+This is not qualification or retirement proof for client inference allocations.
+
 The owner may explicitly enable passive learning for one existing allowed app
 scope. This is optional and never a prerequisite for conversation. The saved
 setting binds the exact scope revision and is separate from execution grants.

@@ -1,7 +1,7 @@
 //! Bounded selected-endpoint observations on the retained native effect worker.
 use avesra_contracts::ErrorCode;
 use avesra_core::{
-    diagnostics::{Catalog, DiskSpace, Reading, Unavailable},
+    diagnostics::{DiskSpace, Reading, Unavailable},
     download::{Context, DnsState, Endpoint, Report},
 };
 use std::{
@@ -186,7 +186,11 @@ pub fn run(
     context.validate()?;
     let end = Instant::now() + Duration::from_secs(10);
     current(end, authorize)?;
-    let resources = crate::diagnostics::run(Catalog::HostResources, authorize)?;
+    let resources = crate::diagnostics::host_resources(
+        context.input.destination_drive,
+        end.min(Instant::now() + Duration::from_secs(5)),
+        authorize,
+    )?;
     let name: Vec<u16> = context
         .input
         .endpoint

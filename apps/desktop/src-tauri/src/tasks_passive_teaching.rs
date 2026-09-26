@@ -41,6 +41,7 @@ fn current(
         || !local.connected
         || local.locked
         || local.settings.paused
+        || local.settings.profile == avesra_contracts::Profile::Gaming
         || local.action_epoch != session.action_epoch
         || state.connection_generation.load(Ordering::SeqCst) != session.generation
         || !state
@@ -144,6 +145,7 @@ pub fn start_passive(app: tauri::AppHandle) {
                     || !local.connected
                     || local.locked
                     || local.settings.paused
+                    || local.settings.profile == avesra_contracts::Profile::Gaming
                     || local.active_task
                     || local.enrollment_capture
                     || local.microphone_check
@@ -216,6 +218,21 @@ pub fn start_passive(app: tauri::AppHandle) {
             let id = Uuid::new_v4();
             let control = Arc::new(AtomicU8::new(0));
             {
+                // Serialize admission with the profile change. The generation
+                // stays invalid even if Gaming is immediately switched back.
+                let Ok(local) = state.local.lock() else {
+                    continue;
+                };
+                if local.settings.profile == avesra_contracts::Profile::Gaming
+                    || state
+                        .tasks
+                        .teaching
+                        .passive_generation
+                        .load(Ordering::SeqCst)
+                        != generation
+                {
+                    continue;
+                }
                 let Ok(mut active) = state.tasks.teaching.active.lock() else {
                     continue;
                 };

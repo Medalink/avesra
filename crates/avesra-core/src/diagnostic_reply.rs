@@ -8,9 +8,9 @@ use avesra_contracts::{Action, ActionPayload, ErrorCode, Outcome};
 fn host(report: &Report) -> String {
     let Report::HostResources {
         interval_ms,
+        disk_activity,
         cpu_busy_basis_points,
         network,
-        system_drive_space,
         default_routes,
         ipv4_dns_servers,
         ..
@@ -20,10 +20,10 @@ fn host(report: &Report) -> String {
     };
     let cpu = match cpu_busy_basis_points {
         Reading::Available { value } => format!(
-            "CPU usage for the measured processor group was {:.0} percent",
+            "Processor-group CPU: {:.0} percent",
             f64::from(*value) / 100.0
         ),
-        _ => "CPU usage was unavailable".into(),
+        _ => "CPU unavailable".into(),
     };
     let rate = if let Reading::Available { value } = network {
         value
@@ -38,25 +38,40 @@ fn host(report: &Report) -> String {
     };
     let network = match rate {
         Some(value) => format!(
-            "the highest measured interface receive rate was {:.2} megabytes per second, including other traffic",
+            "highest interface receive average: {:.2} megabytes per second, including other traffic",
             value as f64 / 1_000_000.0
         ),
-        None => "network rates were unavailable".into(),
+        None => "network rates unavailable".into(),
     };
     let local = if matches!(default_routes,Reading::Available{value} if value.is_empty()) {
-        "no default route was observed".into()
+        "No default route observed. "
     } else if matches!(ipv4_dns_servers, Reading::Available { value: 0 }) {
-        "no configured IPv4 DNS server was observed".into()
-    } else if let Reading::Available { value } = system_drive_space {
-        format!(
-            "system-drive free space was {:.1} gigabytes",
-            value.caller_available_bytes as f64 / 1_000_000_000.0
-        )
+        "No IPv4 DNS server configured. "
     } else {
-        "system-drive space was unavailable".into()
+        ""
+    };
+    let activity = match disk_activity {
+        Reading::Available { value } => {
+            let scope = match value.scope {
+                crate::diagnostics::DiskScope::SystemVolume => "System volume",
+                crate::diagnostics::DiskScope::SelectedDestination => "Destination volume",
+            };
+            let busy = match value.non_idle_basis_points {
+                Reading::Available { value } => {
+                    format!("{:.0} percent non-idle", f64::from(value) / 100.0)
+                }
+                Reading::Unavailable { .. } => "non-idle time unavailable".into(),
+            };
+            format!(
+                "{scope} {}: {busy} over {:.2} seconds. ",
+                value.drive,
+                value.interval_ms as f64 / 1000.0,
+            )
+        }
+        Reading::Unavailable { .. } => "Volume activity unavailable. ".into(),
     };
     format!(
-        "Over {:.2} seconds, {cpu}; {network}; {local}. ",
+        "Over {:.2} seconds: {cpu}; {network}. {local}{activity}",
         *interval_ms as f64 / 1000.0
     )
 }
@@ -80,7 +95,7 @@ pub(crate) fn describe(
     }
     let mut text=match observation {
         Some(EffectObservation::Diagnostic{report})=>match report.as_ref() {
-            Report::HostResources{..}=>format!("{}The bottleneck, app rate, throttle and destination remain unknown; select the download endpoint for a connection check.",host(report)),
+            Report::HostResources{..}=>format!("{}Cause unproven; nothing changed. Full measurements are in the report.",host(report)),
             Report::CiscoVpnStatus{state}=>match state {
                 Reading::Available{value:VpnState::Connected}=>"Cisco reports a connected VPN. This status alone does not prove the selected work target or Spark is reachable.".into(),
                 Reading::Available{value:VpnState::Disconnected}=>"Cisco reports the VPN is disconnected.".into(),
@@ -89,19 +104,19 @@ pub(crate) fn describe(
             },
         },
         Some(EffectObservation::Download{report})=>{
-            let mut value=if report.dns_failure(){"Both address families returned DNS failures. The cause, including stale cache, is unproven. ".to_owned()}
-                else if report.endpoints.is_empty(){"Endpoint resolution was unavailable or timed out; that does not justify clearing DNS cache. ".into()}
+            let mut value=if report.dns_failure(){"IPv4 and IPv6 DNS failed. ".to_owned()}
+                else if report.endpoints.is_empty(){"Endpoint resolution unavailable. ".into()}
                 else {let successful=report.endpoints.iter().filter_map(|e|match e.tcp_connect_micros{Reading::Available{value}=>Some(value),_=>None}).min();
-                    match successful{Some(micros)=>format!("The fastest successful TCP connection took {:.1} milliseconds; this is not download throughput. ",micros as f64/1000.0),None=>"The endpoint connection checks did not complete successfully; the cause remains unknown. ".into()}};
+                    match successful{Some(micros)=>format!("Fastest TCP connection: {:.1} milliseconds. ",micros as f64/1000.0),None=>"Endpoint connection unavailable. ".into()}};
             value.push_str(&host(&report.resources));
             match &report.destination_space {
                 Reading::Available { value: space } => value.push_str(&format!(
-                    "Destination drive {} had {:.1} gigabytes available under your quota. ",
+                    "Destination {}: {:.1} gigabytes available under your quota. ",
                     space.drive, space.caller_available_bytes as f64 / 1_000_000_000.0,
                 )),
-                Reading::Unavailable { .. } => value.push_str("Destination free space was unavailable. "),
+                Reading::Unavailable { .. } => value.push_str("Destination space unavailable. "),
             }
-            value.push_str("App throughput, throttling, disk utilization and server capacity remain unmeasured. These observations do not establish the bottleneck. Nothing was changed.");value
+            value.push_str("Cause unproven; nothing changed. Full measurements are in the report.");value
         },
         Some(EffectObservation::DnsFlush{command_completed:true,..}) if outcome==Outcome::Success=>"The approved Windows DNS-cache flush command completed. This does not prove that stale cache caused the problem or that the download is fixed. Ask me to diagnose the download again to obtain fresh observations.".into(),
         Some(EffectObservation::DnsFlush{..})=>"The DNS-cache command's outcome is uncertain. I will not retry it automatically or claim the problem is fixed.".into(),
@@ -120,7 +135,7 @@ pub(crate) fn describe(
         },
         _=>return Err(ErrorCode::Unsupported),
     };
-    // Less than one bounded short spoken response; never truncate a fact.
+    // Bounded concise summary, not a playback-duration guarantee; never truncate a fact.
     if text.len() > 1024 || !avesra_contracts::planner::valid_text(&text) {
         return Err(ErrorCode::TooLarge);
     }

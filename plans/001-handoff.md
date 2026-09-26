@@ -1,5 +1,10 @@
 # Plan 001 handoff — 2026-09-25
 
+Current continuation: use [the 2026-09-26 acceptance ledger](001-acceptance-2026-09-26.md)
+and [plan index](README.md) for installed artifacts, actual evidence and remaining
+work. They supersede the historical checkpoint states below. Plan001 remains
+IN PROGRESS; previews and compilation do not establish the owner workflows.
+
 ## Latest owner priority: usable development build
 
 Latest delivery checkpoint: [development voice](../docs/evidence/development-voice-2026-09-26.md).

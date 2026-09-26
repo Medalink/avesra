@@ -408,7 +408,7 @@ def main():
     create = commands.add_parser("package")
     for name in ("source", "output", "release", "extension"):
         create.add_argument("--" + name, required=True)
-    create.add_argument("--store-schema", type=int, choices=(13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27), required=True)
+    create.add_argument("--store-schema", type=int, choices=(13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28), required=True)
     staged = commands.add_parser("stage")
     for name in ("package", "sha256", "extension-id"):
         staged.add_argument("--" + name, required=True)

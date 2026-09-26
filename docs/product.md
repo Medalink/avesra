@@ -16,6 +16,14 @@ Every effect requires an accepted task, current actor grant, exact target and ob
 
 Single Spark is the baseline. Gaming prohibits client inference. Accelerated remains unavailable until measured capability and transition requirements are met. No cloud inference fallback exists. Service absence remains visible and prevents dependent work.
 
+The current Single Spark/Gaming toggle preserves the existing Spark conversation
+and tasks because it changes no inference placement. Gaming defers optional
+passive app learning and retires its actual observer; explicit teaching and
+Personal voice learning remain available. An observer still finishing is not
+reported as retired. Device changes retain their existing invalidation behavior.
+Any future transition involving different inference placement must implement the
+separate validated replacement and actual job-drain contract before using it.
+
 The approved design is normative: square corners, bundled Geist/Geist Mono, Ruby accents, neutral greys, six settings sections, compact transparent 440×124 overlay and separate 880×640 settings with 200px navigation. Prototype signals and results must never appear as runtime facts.
 
 ## Companion setup overview

@@ -309,14 +309,30 @@ async fn save_settings(
         }
         let pending = enqueue(&state, settings.clone())?;
         let scale_changed = settings.interface_scale != local.settings.interface_scale;
-        if settings.speaker != local.settings.speaker || settings.profile != local.settings.profile
+        // Only these two profiles share the unchanged Spark inference route.
+        let same_spark_route = matches!(
+            (local.settings.profile, settings.profile),
+            (
+                avesra_contracts::Profile::SingleSpark,
+                avesra_contracts::Profile::Gaming
+            ) | (
+                avesra_contracts::Profile::Gaming,
+                avesra_contracts::Profile::SingleSpark
+            )
+        );
+        let route_changed = settings.profile != local.settings.profile && !same_spark_route;
+        if settings.profile != local.settings.profile
+            && settings.profile == avesra_contracts::Profile::Gaming
         {
+            tasks::teaching::defer_passive(&state);
+        }
+        if settings.speaker != local.settings.speaker || route_changed {
             local.playback_epoch = local.playback_epoch.saturating_add(1);
             local.action_epoch = local.action_epoch.saturating_add(1);
         }
         if settings.microphone != local.settings.microphone
             || settings.speaker != local.settings.speaker
-            || settings.profile != local.settings.profile
+            || route_changed
         {
             local.microphone_check = false;
             local.enrollment_capture = false;

@@ -1,4 +1,6 @@
 //! Synchronous fixed catalog. The actual effect worker retains this work.
+#[path = "diagnostics_disk.rs"]
+mod disk_activity;
 use avesra_contracts::ErrorCode;
 use avesra_core::diagnostics::{Catalog, DiskSpace, Network, Reading, Report, Unavailable};
 use std::{
@@ -287,6 +289,16 @@ pub fn run(
     if catalog == Catalog::CiscoVpnStatus {
         return crate::vpn::observe(deadline, authorize);
     }
+    host_resources(None, deadline, authorize)
+}
+/// The selected destination changes only this observation's logical-volume scope.
+pub(crate) fn host_resources(
+    destination: Option<char>,
+    deadline: Instant,
+    authorize: &mut dyn FnMut() -> Result<(), ErrorCode>,
+) -> Result<Report, ErrorCode> {
+    check(deadline, authorize)?;
+    let pending_disk = disk_activity::begin(destination, deadline, authorize)?;
     let first_cpu = cpu();
     let first_network = network();
     let origin = Instant::now();
@@ -298,6 +310,7 @@ pub fn run(
     let last_cpu = cpu();
     let last_network = network();
     let interval = origin.elapsed();
+    let disk_activity = pending_disk.finish(deadline, authorize)?;
     let cpu_busy_basis_points = match first_cpu.zip(last_cpu).and_then(|(a, b)| {
         let total = b
             .kernel
@@ -350,6 +363,7 @@ pub fn run(
         network,
         system_drive_space: disk(),
         disk_pressure: unavailable(Unavailable::Unsupported),
+        disk_activity,
         default_routes: default_routes(),
         ipv4_dns_servers: ipv4_dns_servers(),
     };

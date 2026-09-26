@@ -91,10 +91,11 @@ at most 64 interfaces. CPU uses the calling primary processor group's
 GetSystemTimes scope. Network deltas are per interface, not a sum that double
 counts virtual/VPN traffic. Added/changed/reset counters are unavailable. Disk
 space is explicitly the Windows system drive's caller-visible quota, not the
-download destination or disk utilization. Disk pressure remains unsupported.
+download destination or disk utilization. Legacy disk pressure remains unsupported; the on-demand logical-volume activity
+section below defines the separate measured activity scope.
 DNS configuration and default-route metadata are read locally. The selected-endpoint
 path below adds bounded DNS/TCP observations and optional fixed-disk destination
-space. Per-app throughput/throttling and disk utilization remain unavailable;
+space. Per-app throughput/throttling and causal disk pressure remain unavailable;
 aggregate counters do not establish those facts.
 
 The Cisco reader pins the independently observed Authenticode-valid Cisco Systems
@@ -126,7 +127,7 @@ and [caller-visible disk space](https://learn.microsoft.com/en-us/windows/win32/
 The implemented catalog includes current adapter/link properties, cumulative
 network byte counters with a second host-local monotonic sample, CPU usage/free
 space, selected VPN state, and bounded DNS/TCP observations to the specifically
-selected endpoint. Disk utilization remains unavailable. It does not scan unrelated hosts,
+selected endpoint. Logical-volume activity is separate from disk saturation. It does not scan unrelated hosts,
 download speed-test data, reset networking or invoke model-authored scripts.
 Where a required Windows counter is inaccessible or resets between samples,
 report unavailable with its fixed reason; never substitute zero.
@@ -360,21 +361,22 @@ spoken only if the original live owner still allows output; otherwise their
 existing task report remains the durable result. Historical observation replies
 are not retrieved as current diagnostic evidence in later model prompts.
 
-Host-only download diagnosis summarizes CPU and per-interface observations,
-local DNS/default-route presence and system-drive free space. It explicitly says
-that the selected download endpoint, app rate, throttle and destination are
-unknown and asks for the endpoint only when endpoint-specific evidence would
-help. A selected-endpoint spoken report now retains the already collected host
-CPU, highest measured interface receive rate, local configuration/system-drive
-summary, and selected destination free space or its explicit unavailability.
-Interface rates use decimal megabytes per second and include other traffic;
-the observed interval is stated. The destination's caller-visible quota is not
-disk utilization. These are the original immutable observation, never a fresh
-probe or a model-supplied number. DNS resolution, TCP timing, host counters and
-free space alone do not establish download throughput, a bottleneck or stale
-cache. App rate/throttle and disk utilization remain unmeasured; no cause or
-successful repair is inferred. The existing 1,024-byte explanation bound remains
-and an overlong response fails rather than truncating a fact.
+The spoken diagnosis is a concise selection of the original measured facts,
+roughly sixty words in a typical selected-endpoint result, not a reading of the
+whole report. It states processor-group CPU, the highest measured interface
+interval-average receive rate (decimal megabytes/sec, including other traffic), their collection
+interval, and logical-volume non-idle time with its own scope/interval or explicit
+unavailability. A missing default route or configured IPv4 DNS server is called
+out when actually observed. Selected-endpoint results add DNS failure or TCP
+connection timing and destination quota-visible free space. Unavailable facts
+stay unavailable. One closing sentence preserves unproven cause/no-change status.
+The UI retains all typed observations, including per-interface rates, system-drive
+space, volume read/write throughput, and the distinction between volume activity,
+app throughput and physical saturation. The summary never claims a bottleneck,
+stale cache or repair, and does not truncate a fact or issue a fresh probe.
+The 1,024-byte guard remains a text bound, not a speech-duration guarantee;
+original normal-speech deadlines and cancellation are unchanged. Shorter copy
+reduces budget risk; actual complete spoken delivery remains a live proof gate.
 A completed flush is described solely as command completion, with remeasurement
 needed. VPN output distinguishes already connected, newly observed target match,
 owner authentication, other connection and unresolved state; it never claims
@@ -392,3 +394,72 @@ DNS-write grammar, exact proposal approval, VPN actions, collectors, UI reports,
 planner wire and persistent schema are unaffected. No new measurement is started.
 The owner's no-tests override applies; source review/static verification and later
 owner-authorized actual diagnosis remain separate, with no runtime proof implied.
+
+## On-demand logical-volume activity (schema 28)
+
+The original HostResources effect worker samples one local fixed volume when the
+owner actually requests diagnosis. An explicitly selected destination takes
+precedence; otherwise the Windows system volume is used and labeled as such.
+An unsupported selected destination does not silently fall back to another disk.
+The current drive letter must resolve to the same volume identity before and
+after collection. That identity is transient; the report retains only drive,
+scope and numeric observations. No volume enumeration or recurring sampler runs.
+
+One owned PDH query contains exactly three language-neutral local counter paths:
+`LogicalDisk(X:)\% Idle Time`, `LogicalDisk(X:)\Disk Read Bytes/sec` and
+`LogicalDisk(X:)\Disk Write Bytes/sec`. X is a validated native-selected ASCII
+drive letter. No wildcard, remote host, counter supplied by a model, shell,
+elevation, performance-group changes or counter-enabling command is allowed.
+The query takes two samples separated by the existing at-least-one-second host
+observation wait; it does not add another sampling loop. Each counter needs
+successful raw and formatted status, the expected WinPerf counter type (precision
+100ns timer for idle, bulk-count rate for bytes), increasing collection
+timestamps and nondecreasing raw accumulators. Missing/reset/changed/invalid
+counter data stays explicitly unavailable. Formatted values must be finite and
+in representable bounds; scaling and percentage capping are disabled so invalid
+values cannot become plausible by clamping. Non-idle is `100 - idle` only when
+idle is in [0,100]. Byte rates are independently reported in bytes/sec, rounded
+down below one byte/sec. Percentages use basis points. The report records the
+actual native collection-completion interval, distinct from PDH's provider rate
+denominator. `PdhCollectQueryDataWithTime` query timestamps and each raw counter
+timestamp must advance within their own basis. Raw timestamps are documented as
+local FILETIME; there is no comparison to UTC wall time, timezone adjustment, or
+assumption that 100ns representation promises 1ms clock precision. PDH performs
+the rate calculation with its actual provider samples. Native authority and the
+original five-second deadline bound publication; timestamp resets remain unavailable.
+
+The `disk_activity` field has a default Missing state for older history. Its
+logical-volume non-idle time is not a physical-device capacity/saturation score,
+a per-app download rate, queue length, latency or proof of a bottleneck. Disk
+read/write throughput is separate from network throughput. Queue length and
+transfer latency remain unmeasured. The legacy `disk_pressure` field remains
+Unsupported. UI preserves all fields and their scope; concise deterministic
+speech selects volume non-idle time with its own interval. Neither substitutes
+unknown values or infers that the download is fixed.
+
+The existing actual effects worker retains the query and counter handles through
+all synchronous PDH calls and query closure. One process-wide admission flag
+bounds live or uncertain query ownership. Explicit successful closure is required
+before publishing an available activity report. If closure fails on any path,
+the query is quarantined (no retry on a possibly invalid handle), the flag stays
+owned until process exit, and later disk collection reports unavailable without
+allocating another query. Other diagnostic facts remain independently available.
+Original authority/deadline checks
+occur before/after each call and during the existing 20ms wait. Caller cancellation
+cannot close a query still in an OS call, detach its worker or admit a replacement.
+PDH offers no documented per-call cancellation deadline: a blocked OS call can
+outlive the five-second attempt budget, with ownership retained until return.
+No asynchronous collection thread or background polling is introduced. Successful
+read completion does not assert every optional counter was available.
+
+Ledger compatibility marker 28 prevents older strict Report readers from opening
+new observations. Existing rows are not rewritten; tables and action/speech
+protocols are unchanged. Package schema whitelists must include 28, and deployment
+requires the usual genuine SQLite backup. Source-only work is not live proof.
+
+Primary references: Microsoft's [two-sample collection contract](https://learn.microsoft.com/en-us/windows/win32/perfctrs/collecting-performance-data),
+[language-neutral counter API](https://learn.microsoft.com/en-us/windows/win32/api/pdh/nf-pdh-pdhaddenglishcounterw),
+[query collection timestamp](https://learn.microsoft.com/en-us/windows/win32/api/pdh/nf-pdh-pdhcollectquerydatawithtime),
+[raw status/timestamp semantics](https://learn.microsoft.com/en-us/windows/win32/api/pdh/ns-pdh-pdh_raw_counter),
+[formatted values and scaling](https://learn.microsoft.com/en-us/windows/win32/api/pdh/nf-pdh-pdhgetformattedcountervalue),
+and [query retirement](https://learn.microsoft.com/en-us/windows/win32/api/pdh/nf-pdh-pdhclosequery).

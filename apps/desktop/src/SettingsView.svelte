@@ -500,7 +500,7 @@
           <section class="section">
             <span class="av-kicker">Profiles</span>
             <div class="grid grid-cols-3 gap-2">
-              {#each [["single-spark", "Single Spark", "All inference on Spark."], ["accelerated", "Accelerated", "Qualified client lanes."], ["gaming", "Gaming", "No client inference."]] as profile}<button
+              {#each [["single-spark", "Single Spark", "All inference on Spark."], ["accelerated", "Accelerated", "Qualified client lanes."], ["gaming", "Gaming", "Spark inference; passive app learning deferred."]] as profile}<button
                   class="flex flex-col gap-2 p-3 text-left ring-1 ring-inset disabled:opacity-45 {s?.profile ===
                   profile[0]
                     ? 'bg-white/[0.06] ring-av-500 shadow-[inset_0_-2px_0_var(--color-av-500)]'
@@ -515,6 +515,8 @@
                 >{/each}
             </div>
             <p class="av-hint">
+              Single Spark and Gaming preserve your current conversation. Gaming
+              stops optional passive app observation; explicit teaching remains available.
               Accelerated is unavailable until client capability and performance
               are verified.
             </p>

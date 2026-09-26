@@ -38,6 +38,15 @@ struct ActiveView {
     finishing: bool,
 }
 impl State {
+    fn defer_passive(&self) {
+        self.passive_generation.fetch_add(1, Ordering::SeqCst);
+        if let Ok(active) = self.active.lock()
+            && let Some(active) = active.as_ref()
+            && active.passive
+        {
+            active.control.store(2, Ordering::SeqCst);
+        }
+    }
     pub(super) fn invalidate(&self) {
         self.generation.fetch_add(1, Ordering::SeqCst);
         if let Ok(active) = self.active.lock()
@@ -56,6 +65,9 @@ impl State {
             active.control.store(2, Ordering::SeqCst);
         }
     }
+}
+pub(crate) fn defer_passive(runtime: &Runtime) {
+    runtime.tasks.teaching.defer_passive();
 }
 fn command(
     app: &tauri::AppHandle,
