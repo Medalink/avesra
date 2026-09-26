@@ -5,7 +5,7 @@ use avesra_core::{
     action_permissions::{PermissionView, Selection, TaskTarget},
     conversations::{
         CancellationTarget, DurableTurn, ExactTaskRequest, ObservationRequest, PlannerAuthority,
-        PlannerCancellation, PlannerClaim, PlannerRequest, PlannerRetirement,
+        PlannerCancellation, PlannerClaim, PlannerLifetime, PlannerRequest, PlannerRetirement,
         Source as ConversationSource, StoredReply, Summary as ConversationSummary, TaskAuthority,
         TaskResolution,
     },
@@ -83,10 +83,10 @@ enum Command {
         SyncSender<Result<teaching::ResultValue, ErrorCode>>,
     ),
     MemoryAnswer {
-        claim: Box<PlannerClaim>,
         approved: Option<Box<avesra_core::memory::conversation::Deletion>>,
         authorize: PlannerAuthorization,
         reply: SyncSender<Result<avesra_core::conversations::MemoryAnswer, ErrorCode>>,
+        claim: Box<PlannerClaim>,
     },
     ObservationAnswer {
         request: Box<ObservationRequest>,
@@ -131,10 +131,10 @@ enum Command {
         reply: SyncSender<Result<PlannerClaim, ErrorCode>>,
     },
     FinishPlanner {
-        claim: Box<PlannerClaim>,
         result: avesra_contracts::planner::Reply,
         authorize: PlannerAuthorization,
         reply: SyncSender<Result<StoredReply, ErrorCode>>,
+        claim: Box<PlannerClaim>,
     },
     AcceptActionTask {
         request: ExactTaskRequest,
@@ -602,13 +602,14 @@ struct PublishedSource {
     target: CancellationTarget,
     registration: Uuid,
     signal: PlannerCancellation,
+    lifetime: PlannerLifetime,
 }
 struct State {
     action_epoch: u64,
     allowed: bool,
     active: Option<Active>,
     pending_cancellations: Vec<CancellationTarget>,
-    planners: Vec<(CancellationTarget, PlannerCancellation)>,
+    planners: Vec<(CancellationTarget, PlannerCancellation, PlannerLifetime)>,
     replies: Vec<PublishedSource>,
 }
 fn planner_current(
@@ -623,7 +624,7 @@ fn planner_current(
         || !state
             .planners
             .iter()
-            .any(|(t, c)| *t == target && !c.cancelled())
+            .any(|(t, c, lifetime)| *t == target && !c.cancelled() && lifetime.is_alive())
     {
         return Err(ErrorCode::Stale);
     }
@@ -926,19 +927,23 @@ impl NativeEffects {
         let epoch = request.action_epoch();
         let cancellation = request.cancellation();
         let mut state = self.state.lock().map_err(|_| ErrorCode::Unavailable)?;
-        state.planners.retain(|(_, c)| !c.cancelled());
-        state.replies.retain(|s| !s.signal.cancelled());
+        state
+            .planners
+            .retain(|(_, _, lifetime)| lifetime.is_alive());
+        state.replies.retain(|s| s.lifetime.is_alive());
         if cancellation.cancelled()
             || !state.allowed
             || state.action_epoch != epoch
             || state.pending_cancellations.contains(&target)
             || state.planners.len() + state.replies.len() >= 16
-            || state.planners.iter().any(|(t, _)| *t == target)
+            || state.planners.iter().any(|(t, _, _)| *t == target)
             || state.replies.iter().any(|s| s.target == target)
         {
             return Err(ErrorCode::Stale);
         }
-        state.planners.push((target, cancellation.clone()));
+        state
+            .planners
+            .push((target, cancellation.clone(), request.lifetime()));
         let (reply, receive) = mpsc::sync_channel(1);
         if self
             .send
@@ -951,7 +956,9 @@ impl NativeEffects {
             .is_err()
         {
             cancellation.cancel();
-            state.planners.retain(|(t, _)| *t != target);
+            state
+                .planners
+                .retain(|(_, _, lifetime)| lifetime.is_alive());
             return Err(ErrorCode::Unavailable);
         }
         Ok(receive)
@@ -1039,7 +1046,7 @@ impl NativeEffects {
             }
             // Private-memory corrections/deletion must withdraw any queued or
             // published grounded response before its source content is redacted.
-            for (target, signal) in &state.planners {
+            for (target, signal, _) in &state.planners {
                 if target.actor == *actor {
                     signal.cancel();
                 }
@@ -1169,18 +1176,18 @@ impl NativeEffects {
                                 planner_current(&owned,target,epoch)?;
                                 if approved.is_some() || matches!(avesra_core::memory::conversation::parse(&claim.transport()?.text),Some(avesra_core::memory::conversation::Command::Update{..})) {
                                     let state=owned.lock().map_err(|_|ErrorCode::Unavailable)?;
-                                    for (other,signal) in &state.planners {if other.actor==target.actor && *other!=target {signal.cancel();}}
+                                    for (other,signal,_) in &state.planners {if other.actor==target.actor && *other!=target {signal.cancel();}}
                                     for source in &state.replies {if source.target.actor==target.actor && source.memory.is_some(){source.signal.cancel();}}
                                 }
                                 controller.management().finish_memory_answer(*claim,approved.map(|v|*v),&adapter.apps,&mut|authority|{planner_current(&owned,target,epoch)?;authorize(authority)?;planner_current(&owned,target,epoch)})
                             })();
-                            if result.is_err(){cancellation.cancel();if let Ok(mut state)=owned.lock(){state.planners.retain(|(t,_)|*t!=target);}}
+                            if result.is_err(){cancellation.cancel();if let Ok(mut state)=owned.lock(){state.planners.retain(|(_,_,lifetime)|lifetime.is_alive());}}
                             let _=reply.try_send(result);continue;
                         }
                         Command::ObservationAnswer{request,dispatch,mut authorize,reply}=>{
                             let target=request.target();let epoch=request.action_epoch();let cancellation=request.cancellation();
                             let result=(||{planner_current(&owned,target,epoch)?;controller.management().finish_observation_answer(*request,dispatch,&mut|authority|{planner_current(&owned,target,epoch)?;authorize(authority)?;planner_current(&owned,target,epoch)})})();
-                            if result.is_err(){cancellation.cancel();if let Ok(mut state)=owned.lock(){state.planners.retain(|(t,_)|*t!=target);}}
+                            if result.is_err(){cancellation.cancel();if let Ok(mut state)=owned.lock(){state.planners.retain(|(_,_,lifetime)|lifetime.is_alive());}}
                             let _=reply.try_send(result);continue;
                         }
                         Command::ClockAnswer { claim, mut authorize, reply }=>{
@@ -1190,7 +1197,7 @@ impl NativeEffects {
                                 let observation=crate::clock::observe()?;
                                 controller.management().finish_clock_answer(*claim,observation,&adapter.apps,&mut |authority|{planner_current(&owned,target,epoch)?;authorize(authority)?;planner_current(&owned,target,epoch)})
                             })();
-                            if result.is_err()&&let Ok(mut state)=owned.lock(){state.planners.retain(|(t,_)|*t!=target);}
+                            if result.is_err()&&let Ok(mut state)=owned.lock(){state.planners.retain(|(_,_,lifetime)|lifetime.is_alive());}
                             let _=reply.try_send(result);continue;
                         }
                         Command::EventAnswer { claim, mut authorize, reply }=>{
@@ -1199,7 +1206,7 @@ impl NativeEffects {
                                 planner_current(&owned,target,epoch)?;
                                 controller.management().finish_event_answer(*claim,&adapter.apps,&mut |authority|{planner_current(&owned,target,epoch)?;authorize(authority)?;planner_current(&owned,target,epoch)})
                             })();
-                            if result.is_err()&&let Ok(mut state)=owned.lock(){state.planners.retain(|(t,_)|*t!=target);}
+                            if result.is_err()&&let Ok(mut state)=owned.lock(){state.planners.retain(|(_,_,lifetime)|lifetime.is_alive());}
                             let _=reply.try_send(result);continue;
                         }
                         Command::Notification { command, mut authorize, reply } => {
@@ -1345,10 +1352,9 @@ impl NativeEffects {
                         }
                         Command::BrowserCompletionWake => continue,
                         Command::RetirePlanner { retirement, reply } => {
-                            let target = retirement.target();
                             let result = controller.management().retire_planner(retirement);
                             if let Ok(mut state) = owned.lock() {
-                                state.planners.retain(|(t, _)| *t != target);
+                                state.planners.retain(|(_, _, lifetime)| lifetime.is_alive());
                             }
                             let _ = reply.try_send(result);
                             continue;
@@ -1371,7 +1377,7 @@ impl NativeEffects {
                             if result.is_err()
                                 && let Ok(mut state) = owned.lock()
                             {
-                                state.planners.retain(|(t, _)| *t != target);
+                                state.planners.retain(|(_, _, lifetime)| lifetime.is_alive());
                             }
                             if let Err(
                                 mpsc::TrySendError::Full(Ok(claim))
@@ -1380,7 +1386,7 @@ impl NativeEffects {
                             {
                                 let _ = controller.management().retire_planner(claim.retirement());
                                 if let Ok(mut state) = owned.lock() {
-                                    state.planners.retain(|(t, _)| *t != target);
+                                    state.planners.retain(|(_, _, lifetime)| lifetime.is_alive());
                                 }
                             }
                             continue;
@@ -1406,7 +1412,7 @@ impl NativeEffects {
                             if result.is_err()
                                 && let Ok(mut state) = owned.lock()
                             {
-                                state.planners.retain(|(t, _)| *t != target);
+                                state.planners.retain(|(_, _, lifetime)| lifetime.is_alive());
                             }
                             let _ = reply.try_send(result);
                             continue;
@@ -1650,7 +1656,7 @@ impl NativeEffects {
                 active.cancellation.cancel();
             }
             if action_epoch != state.action_epoch || !allowed {
-                for (_, planner) in &state.planners {
+                for (_, planner, _) in &state.planners {
                     planner.cancel();
                 }
                 for source in &state.replies {
@@ -1685,7 +1691,7 @@ impl NativeEffects {
         let target = retirement.target();
         {
             let state = self.state.lock().map_err(|_| ErrorCode::Unavailable)?;
-            for (owned, signal) in &state.planners {
+            for (owned, signal, _) in &state.planners {
                 if *owned == target {
                     signal.cancel();
                 }
@@ -1721,24 +1727,31 @@ impl NativeEffects {
             || !state.allowed
             || state.action_epoch != c.action_epoch
             || state.pending_cancellations.contains(&target)
-            || !state
-                .planners
-                .iter()
-                .any(|(t, signal)| *t == target && !signal.cancelled())
+            || !state.planners.iter().any(|(t, signal, lifetime)| {
+                *t == target && !signal.cancelled() && lifetime.is_alive()
+            })
         {
             return Err(ErrorCode::Stale);
         }
-        state.replies.retain(|source| !source.signal.cancelled());
+        state.replies.retain(|source| source.lifetime.is_alive());
         if state.replies.len() >= 16 || state.replies.iter().any(|source| source.target == target) {
             return Err(ErrorCode::Unavailable);
         }
         let signal = state
             .planners
             .iter()
-            .find(|(t, _)| *t == target)
+            .find(|(t, _, _)| *t == target)
             .ok_or(ErrorCode::Stale)?
             .1
             .clone();
+        let lifetime = reply.lifetime();
+        if !state
+            .planners
+            .iter()
+            .any(|(t, _, admitted)| *t == target && admitted.same_owner(&lifetime))
+        {
+            return Err(ErrorCode::Stale);
+        }
         // Transfer under one state lock; exact-source cancellation has no gap.
         state.replies.push(PublishedSource {
             memory: match reply.provenance() {
@@ -1752,8 +1765,9 @@ impl NativeEffects {
             target,
             registration: c.registration_revision,
             signal,
+            lifetime,
         });
-        state.planners.retain(|(t, _)| *t != target);
+        state.planners.retain(|(t, _, _)| *t != target);
         Ok(PublishedReply { reply })
     }
     pub fn claim_planner(
@@ -1765,18 +1779,22 @@ impl NativeEffects {
         let epoch = request.action_epoch();
         let cancellation = request.cancellation();
         let mut state = self.state.lock().map_err(|_| ErrorCode::Unavailable)?;
-        state.planners.retain(|(_, c)| !c.cancelled());
-        state.replies.retain(|source| !source.signal.cancelled());
+        state
+            .planners
+            .retain(|(_, _, lifetime)| lifetime.is_alive());
+        state.replies.retain(|source| source.lifetime.is_alive());
         if !state.allowed
             || state.action_epoch != epoch
             || state.pending_cancellations.contains(&target)
             || state.planners.len() + state.replies.len() >= 16
-            || state.planners.iter().any(|(t, _)| *t == target)
+            || state.planners.iter().any(|(t, _, _)| *t == target)
             || state.replies.iter().any(|source| source.target == target)
         {
             return Err(ErrorCode::Denied);
         }
-        state.planners.push((target, cancellation.clone()));
+        state
+            .planners
+            .push((target, cancellation.clone(), request.lifetime()));
         let (reply, receive) = mpsc::sync_channel(1);
         if self
             .send
@@ -1788,7 +1806,9 @@ impl NativeEffects {
             .is_err()
         {
             cancellation.cancel();
-            state.planners.retain(|(t, _)| *t != target);
+            state
+                .planners
+                .retain(|(_, _, lifetime)| lifetime.is_alive());
             return Err(ErrorCode::Unavailable);
         }
         Ok(receive)
@@ -1909,7 +1929,7 @@ impl NativeEffects {
             return Err(ErrorCode::Unavailable);
         }
         state.pending_cancellations.push(target);
-        for (owned, planner) in &state.planners {
+        for (owned, planner, _) in &state.planners {
             if *owned == target {
                 planner.cancel();
             }

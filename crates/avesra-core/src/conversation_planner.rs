@@ -6,7 +6,7 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use std::{
     sync::{
-        Arc,
+        Arc, Weak,
         atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant},
@@ -159,14 +159,30 @@ impl PlannerCancellation {
         }
     }
 }
+/// Weak native content-lifetime receipt, never an acceptance or output authority.
+#[derive(Clone)]
+pub struct PlannerLifetime(Weak<()>);
+impl PlannerLifetime {
+    pub fn is_alive(&self) -> bool {
+        self.0.strong_count() != 0
+    }
+    pub fn same_owner(&self, other: &Self) -> bool {
+        self.0.ptr_eq(&other.0)
+    }
+}
 pub struct PlannerRequest {
     turn: DurableTurn,
     session: DispatchSession,
     binding: Binding,
     started: Instant,
     cancellation: PlannerCancellation,
+    // Last: all content-bearing fields retire before the weak receipt expires.
+    lifetime: Arc<()>,
 }
 impl PlannerRequest {
+    pub fn lifetime(&self) -> PlannerLifetime {
+        PlannerLifetime(Arc::downgrade(&self.lifetime))
+    }
     /// Shares the original native caller's withdrawal; it cannot create a turn.
     pub fn with_withdrawal(mut self, signal: Arc<AtomicBool>) -> Self {
         self.cancellation = PlannerCancellation(signal);
@@ -211,6 +227,7 @@ impl PlannerRequest {
             binding,
             started: Instant::now(),
             cancellation: PlannerCancellation(Arc::new(AtomicBool::new(false))),
+            lifetime: Arc::new(()),
         })
     }
 }
@@ -256,6 +273,7 @@ pub struct PlannerAuthority<'a> {
 #[derive(Clone)]
 pub struct PlannerRetirement {
     plan: Plan,
+    _lifetime: Arc<()>,
 }
 impl PlannerRetirement {
     pub fn target(&self) -> super::CancellationTarget {
@@ -278,6 +296,7 @@ pub struct PlannerClaim {
     plan: Plan,
     started: Instant,
     cancellation: PlannerCancellation,
+    lifetime: Arc<()>,
 }
 impl Drop for PlannerClaim {
     fn drop(&mut self) {
@@ -304,6 +323,7 @@ impl PlannerClaim {
     pub fn retirement(&self) -> PlannerRetirement {
         PlannerRetirement {
             plan: self.plan.clone(),
+            _lifetime: self.lifetime.clone(),
         }
     }
     pub fn transport(&self) -> Result<planner::Request, ErrorCode> {
@@ -343,6 +363,7 @@ pub struct StoredReply {
     task: Option<super::tasks::LinkedTask>,
     started: Instant,
     provenance: Provenance,
+    lifetime: Arc<()>,
 }
 pub(super) struct MailboxLifetime {
     deadline: Instant,
@@ -354,6 +375,9 @@ impl Drop for StoredReply {
     }
 }
 impl StoredReply {
+    pub fn lifetime(&self) -> PlannerLifetime {
+        PlannerLifetime(Arc::downgrade(&self.lifetime))
+    }
     pub fn provenance(&self) -> &Provenance {
         &self.provenance
     }
@@ -754,7 +778,10 @@ impl Store {
             .check()
             .and_then(|_| remaining(request.started).map(|_| ()))
         {
-            self.retire_planner(PlannerRetirement { plan })?;
+            self.retire_planner(PlannerRetirement {
+                plan,
+                _lifetime: request.lifetime.clone(),
+            })?;
             return Err(error);
         }
         Ok(PlannerClaim {
@@ -762,6 +789,7 @@ impl Store {
             plan,
             started: request.started,
             cancellation: request.cancellation,
+            lifetime: request.lifetime,
         })
     }
     pub fn retire_planner(&mut self, retirement: PlannerRetirement) -> Result<(), ErrorCode> {
@@ -1014,6 +1042,7 @@ impl Store {
             task,
             started: claim.started,
             provenance: result.provenance,
+            lifetime: claim.lifetime.clone(),
         })
     }
 }

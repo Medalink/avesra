@@ -58,6 +58,7 @@ impl ObservationClaim {
             cancellation: PlannerCancellation(withdrawal),
             mailbox: None,
             mailbox_lifetime: None,
+            lifetime: Arc::new(()),
         };
         request.current()?;
         Ok(request)
@@ -69,8 +70,13 @@ pub struct ObservationRequest {
     claim: ObservationClaim,
     binding: Binding,
     cancellation: PlannerCancellation,
+    // Last: the weak receipt must outlive every content-bearing field.
+    lifetime: Arc<()>,
 }
 impl ObservationRequest {
+    pub fn lifetime(&self) -> PlannerLifetime {
+        PlannerLifetime(Arc::downgrade(&self.lifetime))
+    }
     pub fn target(&self) -> super::super::CancellationTarget {
         self.claim.target
     }
@@ -299,6 +305,7 @@ impl Store {
             task: None,
             started: request.claim.started,
             provenance: result.provenance,
+            lifetime: request.lifetime,
         })
     }
 }

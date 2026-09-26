@@ -1,8 +1,8 @@
 //! Native accepted-fact reply and exact deletion continuation.
 use super::*;
 pub struct PendingMemory {
-    pub claim: PlannerClaim,
     pub deletion: crate::memory::conversation::Deletion,
+    pub claim: PlannerClaim,
 }
 pub enum MemoryAnswer {
     Reply(Box<StoredReply>),

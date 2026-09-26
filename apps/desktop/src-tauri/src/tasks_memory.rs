@@ -105,6 +105,7 @@ async fn wait(
             *slot = None;
         }
     }
+    drop(view);
     let _ = app.emit("memory-forget-changed", ());
     let authorize = match authorization {
         Ok(value) => value,

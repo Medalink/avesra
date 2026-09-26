@@ -28,6 +28,29 @@ Normal answer speech is separate from explicit generated-reference preview and t
 
 Make the native publication handoff a distinct opaque PublishedReply type so an unpublished StoredReply cannot enter output. Retain its exact accepted-source withdrawal signal on the existing effects owner after planner publication and through output preparation, reservation and playback. Moving between owners must not remove the only registry entry and leave a cancellation gap. The bounded registry retires when the actual reply/output owner finishes or drops; cancellation cannot reconstruct a reply from history.
 
+Native withdrawal and actual retirement are separate. Create an opaque lifetime
+owner before admitting a PlannerRequest or native ObservationRequest to the
+effects registry. Carry that same owner through the queued request, PlannerClaim,
+any PlannerRetirement copies, StoredReply and PublishedReply, including every
+actual Arc holder during output preparation and playback. Declare the owner after
+content-bearing fields so their destructors run before its final release. The
+registry retains only a weak receipt; neither the receipt nor a cancellation
+signal can construct, extend or revive authority. Publication must match the
+admitted lifetime receipt as well as the exact current source.
+
+The combined planner/reply bound remains sixteen actual owners. Cancellation,
+failed delivery, durable retirement bookkeeping and actor/session withdrawal do
+not remove a still-held owner from this bound. Compact dead weak receipts on
+admission; transfer a live planner receipt to the reply roster under the same
+lock. Failed or abandoned unpublished replies therefore release capacity on
+actual drop, while cancelled-but-held replies continue occupying it. This receipt
+covers native content ownership only, not controller/private model retirement,
+physical memory erasure or permission to delete history. It covers the admitted
+request/claim/reply chain and its retirement copies; independently returned
+Settings projections and persisted history are outside this receipt. Temporary
+grammar-routing and approval-display copies in the reply handoff must be dropped
+before transferring their sole actual claim owner.
+
 Exact-source cancellation, actor revocation and action/session invalidation withdraw this pending/output source even when its answered history is already immutable. The durable answered row remains unchanged. Local Stop, deafen, pause, lock, disconnect and output/selected-voice changes additionally revoke the independent native playback lease. Mic mute and current capture epoch changes alone do not revoke it. Current authenticated actor registration, paired certificate/device/session/generation, acknowledged action/output epochs and selected exact voice identity are checked before admission and after every preparatory await.
 
 Native owner/pairing/intent reads and ledger interaction keep their existing actual owners and lock order, with no window getters under Runtime.local. This is accepted-task output, not Settings management; it does not require Settings to remain visible or a fresh Windows Hello prompt. One actual native output owner excludes setup preview and another normal response. Retain ownership through native device opening, socket/stream work, cancellation and the bounded final drain. No deadline drop may free admission while an old native opening/output job remains owned.

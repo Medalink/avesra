@@ -160,7 +160,7 @@ impl NativeEffects {
             if let Some(active) = state.active.as_ref().filter(|v| v.actor == request.actor) {
                 active.cancellation.cancel();
             }
-            for (target, signal) in &state.planners {
+            for (target, signal, _) in &state.planners {
                 if target.actor == request.actor {
                     signal.cancel();
                 }

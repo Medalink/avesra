@@ -1319,12 +1319,16 @@ pub async fn accepted(
                     expected.prepare(&owner_app)
                 })).map_err(|_|"Planner owner busy")?;
                 let claim=receive(receiver).await?;
-                let request=claim.transport().map_err(|_|"Accepted native question expired")?;
-                if avesra_core::memory::conversation::parse(&request.text).is_some(){
+                let (memory_question,clock,event_question)={
+                    let request=claim.transport().map_err(|_|"Accepted native question expired")?;
+                    (avesra_core::memory::conversation::parse(&request.text).is_some(),
+                     avesra_core::clock::question_kind(&request.text).is_some(),
+                     avesra_core::notifications::question_kind(&request.text).is_some())
+                };
+                if memory_question{
                     return memory::answer(&app,context.clone(),claim).await;
                 }
-                let clock=avesra_core::clock::question_kind(&request.text).is_some();
-                if clock || avesra_core::notifications::question_kind(&request.text).is_some() {
+                if clock || event_question {
                     let expected=context.clone();let owner_app=app.clone();
                     let authorize: avesra_windows::effects::PlannerAuthorization=Box::new(move |authority|{
                         if authority.context.turn!=expected.target.id||authority.context.turn_revision!=expected.target.revision||authority.binding!=&expected.binding{return Err(ErrorCode::Stale);}

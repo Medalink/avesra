@@ -14,8 +14,8 @@ mod planner;
 mod tasks;
 pub use planner::{
     MemoryAnswer, ObservationClaim, ObservationRequest, PendingMemory, PlannerAuthority,
-    PlannerCancellation, PlannerClaim, PlannerRequest, PlannerRetirement, PlannerSummary,
-    StoredReply,
+    PlannerCancellation, PlannerClaim, PlannerLifetime, PlannerRequest, PlannerRetirement,
+    PlannerSummary, StoredReply,
 };
 pub(crate) use planner::{PLAN_SCHEMA, REPLY_SCHEMA, SEQUENCE_SCHEMA};
 pub(crate) use tasks::verified_task_source;
