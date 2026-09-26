@@ -2,7 +2,7 @@
 
 ## Status and intent
 
-- Status: IN PROGRESS (implementation explicitly authorized by the owner, 2026-09-26). Native avatar/portrait implementation and live proof are still outstanding; this is not a completion claim.
+- Status: IN PROGRESS (implementation explicitly authorized by the owner, 2026-09-26). The protected native foundation is published in draft PR14 (44eb9a8); portrait capture, renderer and live proof are still outstanding. This is not a completion claim.
 - Priority: P2 product identity. Effort: M, staged. Risk: low to medium; it touches protected speaker storage and enrollment capture, not action authority.
 - Depends on: Plan 001's protected owner and enrollment flow (`docs/owner-identity.md`, `docs/enrollment.md`) and the People & Voice ID screen in the design mockups.
 - Owner request: generate a unique-to-the-user "avatar" graph and animation of their voice, built from their real voice. The same user must get the same avatar every time. Suggested starting point: have them say about 20 words.
@@ -13,6 +13,35 @@ The avatar is a portrait, not a password. It makes the owner's voice identity vi
 
 The owner requires complete functional implementation, exact matching to the authoritative design mockups in the real app, actual evidence, and PRs as work proceeds. Compare matching states at the same scale. Simulated mock data must be replaced with actual native state, never copied as success evidence. Preserve the simple Personal conversation startup: optional portrait creation must not become a new prerequisite to talking. Instrument portrait capture/extraction/render preparation with bounded content-free timings, including failures/cancellation; biometric inputs and render parameters are excluded from metrics. Live capture and repeatability evidence remain unrun.
 
+
+### Current foundation and precision of guarantees
+
+Draft [PR14](https://github.com/Medalink/avesra/pull/14) implements the native
+foundation only. Its governing implementation contract is `docs/voice-avatar.md`
+on `codex/voice-avatar`. Actual owner-bound PersonalVoice is required to derive a
+portrait; an unbound candidate alone is insufficient. Candidate2 and Personal1
+remain unchanged; a separate protected avatar vault supports either real source.
+All v1 petals and tempo are absent, not estimated or completed.
+
+The original design language below overstates several mathematical and rendering
+guarantees. Stable stored integer parameters on this installation are the precise
+reproducibility contract; a versioned renderer must produce stable geometry, but
+cross-machine raster pixels cannot be guaranteed across graphics stacks. Registry
+checks guarantee distinct retained ring values, not global or perceptual uniqueness.
+Lossy keyed projection is not a proved biometric inversion or unlinkability defence.
+These limits must remain explicit in product and evidence claims; they cannot be
+converted into passing acceptance results by relabeling the foundation as complete.
+Personal learning must not redraw an existing portrait. Source changes require an
+explicit future redraw; changed owner revision fails closed.
+
+Next native slice: optional two-batch capture with actual received-sample prompt
+progress, original management lifetime, selected-device ownership and retained
+worker retirement. Current ASR supplies no word timestamps. Energy islands in
+800ms prompt slots may provide bounded acoustic features, not lexical verification;
+ambiguous slots remain missing. Version2 typed petals will carry actual edge and
+energy geometry while retaining the v1 reader and stable ring. Prompt pace is not
+measured syllable rate. No portrait or verification requirement may be added to
+ordinary Personal conversation.
 ## The core problem: unique and reproducible pull in opposite directions
 
 - **Live audio is never the same twice.** Microphone, room, distance, mood and illness all change the waveform. Hashing a new recording gives a different avatar every time. Drawing straight from live features gives an avatar that drifts from day to day.
