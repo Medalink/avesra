@@ -103,14 +103,49 @@ absence, not completion. Verification follows the owner's no-tests override:
 source review, static checks/builds when released, then separately authorized real
 app observations. No test fixtures, imported evidence or generated voice identity.
 
-Native timing integration inventory: `speaker_candidates` has the actual retained
-blocking operation; `voice_avatar::current` owns source resolution/vault read and
-parameter preparation; `shape::build` owns the keyed projection; `publish` owns
-protected encoding/staging/sync/publication. These phases must use the shared
-Portrait-domain timing owner when integrated, with failed/withdrawn/abandoned
-outcomes. Until then, a measured IPC round-trip is not separate native phase
-evidence. No source identity, ring, digest, parameter, vector, word or feature may
-enter those observations. Capture/extraction have no implementation in this slice.
+## Native portrait timing contract
+
+The existing bounded app-timing writer observes actual native work, independently
+of the `speaker_candidates` frontend invoke round trip. The finite portrait
+operation names use the existing `work` stage:
+
+| Operation | Actual measured boundary |
+| --- | --- |
+| `prepare` | Entire retained `voice_avatar::current` call, including source/vault locking and preparation; not the Settings IPC or worker retirement |
+| `source_load` | Native current-owner/Personal/candidate source resolution |
+| `vault_load` | Protected vault/key read, decode and validation, including a legitimate absent vault |
+| `derive` | Actual keyed projection and integer parameter construction in `shape::build`; absent on stored-record reads |
+| `publish` | Protected encoding, staging, sync, final authorization and atomic publication, including pending-file cleanup |
+| `remove` | Source-bound avatar cleanup during candidate deletion; not subsequent candidate/selection deletion |
+
+Each preparation or removal call creates a fresh random timing operation UUID,
+unrelated to its actor, profile, candidate, source, display digest or ring. Nested
+phases share only that timing UUID. Existing authorization-check rejection and an
+publication-time owner mismatch produce `withdrawn`; other returned errors produce
+`failed`. A returned successful phase produces `complete`; a dropped unfinished
+span produces `abandoned`. Missing source/vault or an already-absent cleanup is a
+successful lookup/no-op, not proof of a populated avatar or a deleted profile.
+No new authorization checks, retries or result changes are introduced by timing.
+
+A phase that completed before later withdrawal keeps its actual outcome. In
+particular, completed publication followed by withdrawal is not relabelled as a
+rollback. The enclosing preparation/removal span records its own result. Nested
+elapsed durations overlap and must not be added. The spans remain owned by the
+actual synchronous blocking call if its IPC caller disappears; they neither
+prove caller receipt nor worker retirement. Process abort may lose observations.
+
+No error text, source identity, parameters, digest, ring, vector, word, feature,
+PCM, path or other biometric detail enters observations. Existing bounded
+nonblocking observation, loss counters and retention apply. Telemetry schema 8
+is the forward-only compatibility marker for the new finite portrait operations;
+product Store schema 30 and accepted trace query version 3 remain unchanged.
+Older telemetry writers must not reopen the newer store. Installed migration and
+retained timing/export proof remain unrun.
+
+Capture/extraction and redraw have no implementation in this slice. Frontend SVG
+preparation, GPU presentation, owner qualification and end-to-end latency are not
+measured by these native phases. Timing does not enable capture, create authority,
+make the portrait required for conversation or establish Plan 003 completion.
 
 ## People card presentation and source disclosure
 

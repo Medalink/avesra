@@ -19,6 +19,17 @@ pub enum View {
     Awareness,
     Memory,
 }
+/// Closed native-only phase names; never biometric inputs or source identities.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Portrait {
+    Prepare,
+    SourceLoad,
+    VaultLoad,
+    Derive,
+    Publish,
+    Remove,
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(
     tag = "kind",
@@ -34,6 +45,7 @@ pub enum Operation {
     View(View),
     Command(String),
     History,
+    Portrait(Portrait),
 }
 impl Operation {
     pub fn valid(&self) -> bool {
