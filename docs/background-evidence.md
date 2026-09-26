@@ -148,6 +148,33 @@ The helper logs the exact child PID and package-identity check. Record that PID;
 only that explicitly owned inspection instance may be closed afterward. Do not
 kill every process named Avesra. No microphone operation is part of this procedure.
 
+If Codex's filesystem view is redirected and no existing Explorer window is
+available to launch the helper, a verified **local-only** fallback is CIM process
+creation. Use an already reviewed wrapper that invokes `inspect-background.ps1`
+with the exact executable, new WAV path and evidence logs:
+
+```powershell
+$startup = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0 }
+$created = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
+  CommandLine = 'pwsh.exe -WindowStyle Hidden -NoProfile -File "E:\absolute\existing-wrapper.ps1"'
+  ProcessStartupInformation = $startup
+}
+$created
+```
+
+Do not supply a remote computer/session or bypass the wrapper's guards. A success
+return and helper PID alone are insufficient: its log must still verify the
+physical normal voice store, native child package result `15700` (no MSIX
+identity), a new non-input desktop and unchanged `Default` input desktop. This
+fallback was observed on 2026-09-26 with helper PID `83428` and native inspection
+PID `80956` in session 1; no UI opened on the input desktop. That launch used
+source `dda8c65` and Windows executable SHA256
+`37fa18ba3ff70342c2e385b20c6cd5ac0a405b47928d146f2ebc9ec9ded6e812`.
+The launch checks establish isolation; the completed preview is recorded below.
+This is only a launch
+fallback for the already authorized diagnostic procedure, not general permission
+to create background processes or modify the guards.
+
 The native recorder writes a new float32 stereo WAV at the selected device rate
 and `<path>.json`. It captures only the first opened output stream, starting with
 its first nonzero mixed sample. It has a 120-second no-signal wait and a maximum
@@ -262,8 +289,19 @@ TTS. Evidence is retained under
 The WAV sidecars identify actual native postmix/postformat output before hardware
 silencing. This establishes the observed TTS preview cancel/resume path, not
 audible-device playback, activity mute/resume, live Personal conversation,
-microphone acceptance or acoustic interruption. A subsequent frontend merge
-requires its own fresh preview observation; these artifacts describe `8613e48`.
+microphone acceptance or acoustic interruption. These cancel/resume artifacts
+describe `8613e48`.
+
+The merged frontend received a separate completed default preview in native
+inspection PID `80956`, started at `06:55:38.479Z` on 2026-09-26. `merged.wav` and
+its sidecar in the same artifact directory record 9.03 seconds, 216720 frames,
+24 kHz stereo float32, finalized with `stream_disposed` and hardware silence.
+`merged-complete.png` records the actual UI idle without alerts; the saved Razer
+Seiren X input and SPDIF output remained selected. The build source was
+`dda8c65` (`7ec4b0c` changes documentation only), with Windows executable SHA256
+`37fa18ba3ff70342c2e385b20c6cd5ac0a405b47928d146f2ebc9ec9ded6e812`.
+This completes the fresh merged-build preview observation with the same
+diagnostic limits above; it does not establish live conversation.
 
 ### Historical transient-unit caveat (2026-09-25)
 
