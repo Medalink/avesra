@@ -208,6 +208,8 @@ impl Drop for ActivityStream {
                 // Preserve ownership until cancellation acknowledgement or the
                 // complete fixed remote lifetime. Dropping a HTTP/socket caller
                 // is not evidence that the worker stopped processing.
+                // Success acknowledges actual child reset/CUDA retirement or
+                // completed kill/reap; mere socket closure never releases this permit.
                 if client.cancel(request).await.is_err() {
                     tokio::time::sleep(remaining).await;
                 }

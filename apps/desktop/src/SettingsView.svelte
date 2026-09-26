@@ -4,6 +4,7 @@
   import { tick } from "svelte";
   import Icon from "./Icon.svelte";
   import SetupOverview from "./SetupOverview.svelte";
+  import { personalVoiceView } from "./owner-setup";
   import { sparkConnection } from "./runtime";
   import Pairing from "./Pairing.svelte";
   import VoiceDesigner from "./VoiceDesigner.svelte";
@@ -48,6 +49,7 @@
     hide: () => Promise<void>;
     drag: (event: PointerEvent) => Promise<void>;
   } = $props();
+  const voice = $derived(personalVoiceView(runtime));
   const spark = $derived(sparkConnection(runtime));
   function restoredSection() {
     try {
@@ -336,26 +338,17 @@
                         : ""}</option
                     >{/each}</select
                 ><span class="av-hint"
-                  >Automatic responses require voice setup. Voice previews are available with a selected output.</span
+                  >Replies and voice previews use this output. Your selected Avesra voice is kept.</span
                 >
               </div>
             </div>
           </section>
           <section class="section">
             <span class="av-kicker">How Avesra listens</span>
-            <div class="grid grid-cols-3 gap-2">
-              {#each [["Continuous", "No wake word after enrollment"], ["Wake phrase", "Optional listening mode"], ["Push to talk", "Hold a keyboard shortcut"]] as mode, i}<div
-                  class="flex flex-col gap-1 p-3 ring-1 ring-inset {i === 0
-                    ? 'bg-white/[0.06] ring-av-500 shadow-[inset_0_-2px_0_var(--color-av-500)]'
-                    : 'bg-white/[0.02] ring-white/10'}"
-                >
-                  <span class="text-[12.5px] font-medium">{mode[0]}</span><span
-                    class="av-hint">{mode[1]}</span
-                  >
-                </div>{/each}
-            </div>
-            <div class="warning">
-              {runtime?.enrollment_capture ? "Recording an explicit enrollment phrase. Mute or cancel enrollment to stop." : runtime?.enrolled && runtime.voice_ready ? runtime.reason : "Listening is off. Pair Spark, prepare the speech services and enroll your voice to begin."}
+            <div class="av-card flex flex-col gap-2 p-3" role="status">
+              <span class="text-[13px] font-medium">{voice.label}</span>
+              <p class="av-hint">{runtime?.enrollment_capture ? "Recording an optional voice sample. Mute or cancel recording to stop." : voice.reason}</p>
+              <p class="av-hint">Talk naturally. No wake word or calibration session is required. Mute or pause whenever you want quiet.</p>
             </div>
             <div class="row">
               <div>
@@ -437,7 +430,7 @@
           <Notifications {runtime} />
         {:else if section === "models"}
           <div class="warning">
-            {runtime?.voice_ready ? "Automatic listening is enabled. This development build has not completed release validation." : runtime?.connected ? "Complete owner setup and the short live voice check in People & Voice ID to enable development listening." : "Connect Spark to inspect configured services. Model downloads alone do not establish readiness."}
+            {voice.label}: {voice.reason}
           </div>
           <div class="flex items-center gap-3">
             <p class="av-hint flex-1" role="status">{probing ? "Inspecting configured audio and reasoning services…" : healthError || "Audio and controlled reasoning metadata comes from the paired Spark. Probe reads status without running inference."}</p>

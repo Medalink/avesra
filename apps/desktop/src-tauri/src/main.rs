@@ -261,6 +261,9 @@ async fn local_control(
                 task.abort();
             }
         }
+        if matches!(control, LocalControl::Unmute) {
+            state.qualification.resume_personal();
+        }
         local.apply(control);
         let snapshot = local.clone();
         state.publish(&snapshot);
@@ -654,7 +657,24 @@ fn main() {
             })?;
             app.manage(instance_lock);
             let mut store = Store::open(&directory.join("avesra.db"))?;
-            let settings = store.settings()?;
+            let mut settings = store.settings()?;
+            if (settings.microphone.is_none() || settings.speaker.is_none())
+                && let Ok(devices) = avesra_windows::audio_devices()
+            {
+                if settings.microphone.is_none() {
+                    settings.microphone = devices
+                        .iter()
+                        .find(|v| v.direction == "input" && v.is_default)
+                        .map(|v| v.id.clone());
+                }
+                if settings.speaker.is_none() {
+                    settings.speaker = devices
+                        .iter()
+                        .find(|v| v.direction == "output" && v.is_default)
+                        .map(|v| v.id.clone());
+                }
+                store.save_settings(&settings)?;
+            }
             let zoom = f64::from(settings.interface_scale) / 100.0;
             apply_interface_scale(app.handle(), settings.interface_scale)?;
             if let Some(window) = app.get_webview_window("overlay") {

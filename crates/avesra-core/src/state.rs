@@ -66,7 +66,7 @@ impl Default for Settings {
             action_chime_volume: None,
             speech_volume: 80,
             speech_rate: 100,
-            explicit_mute: true,
+            explicit_mute: false,
             deafened: false,
             paused: false,
         }
@@ -124,6 +124,26 @@ pub enum ConnectionPhase {
     Error,
 }
 #[derive(Clone, Debug, Serialize)]
+pub struct PersonalVoiceStatus {
+    pub state: PersonalVoicePhase,
+    pub reason: String,
+}
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PersonalVoicePhase {
+    Learning,
+    Listening,
+    Unavailable,
+}
+impl Default for PersonalVoiceStatus {
+    fn default() -> Self {
+        Self {
+            state: PersonalVoicePhase::Unavailable,
+            reason: "Preparing personal voice services.".into(),
+        }
+    }
+}
+#[derive(Clone, Debug, Serialize)]
 pub struct LocalState {
     pub revision: u64,
     pub settings: Settings,
@@ -135,6 +155,7 @@ pub struct LocalState {
     pub connection_error: Option<String>,
     pub enrolled: bool,
     pub voice_ready: bool,
+    pub personal_voice: PersonalVoiceStatus,
     pub enrollment_capture: bool,
     pub microphone_check: bool,
     #[serde(skip)]
@@ -172,6 +193,7 @@ impl LocalState {
             connection_error: None,
             enrolled: false,
             voice_ready: false,
+            personal_voice: PersonalVoiceStatus::default(),
             enrollment_capture: false,
             microphone_check: false,
             microphone_check_epoch: None,
@@ -288,7 +310,7 @@ impl LocalState {
         } else if !self.enrolled {
             (
                 "unavailable",
-                "Enroll and validate the owner before listening.",
+                "Preparing personal voice for this Windows owner.",
             )
         } else if !self.voice_ready {
             ("unavailable", "Speech and identity services are not ready.")
@@ -300,5 +322,16 @@ impl LocalState {
         };
         self.status = status.into();
         self.reason = reason.into();
+        if self.locked
+            || !self.connected
+            || self.settings.paused
+            || self.settings.deafened
+            || self.settings.explicit_mute
+        {
+            self.personal_voice = PersonalVoiceStatus {
+                state: PersonalVoicePhase::Unavailable,
+                reason: self.reason.clone(),
+            };
+        }
     }
 }

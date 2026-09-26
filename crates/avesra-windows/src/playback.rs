@@ -279,6 +279,7 @@ where
     let mut renderer = Renderer::new(rate, output_rate)?;
     let mut mixer = crate::sound::Mixer::new(output_rate, &control)?;
     let mut pending: Option<Box<PlaybackReference>> = None;
+    let mut reference_sequence = 0u64;
     let mut tail: Option<Tail> = None;
     let mut invalidated = false;
     let error_gate = gate.clone();
@@ -289,6 +290,26 @@ where
         .build_output_stream(
             config,
             move |output: &mut [T], info: &cpal::OutputCallbackInfo| {
+                let entered = Instant::now();
+                let scheduled = info
+                    .timestamp()
+                    .playback
+                    .duration_since(&info.timestamp().callback)
+                    .filter(|delay| *delay <= Duration::from_millis(500))
+                    .and_then(|delay| entered.checked_add(delay));
+                // Bound the complete callback's predicted DAC horizon, including
+                // its last sample. A partial reference may be lost on cancellation.
+                let horizon = Duration::from_secs_f64(
+                    (output.len() / channels) as f64 / f64::from(output_rate),
+                );
+                if scheduled
+                    .and_then(|start| start.checked_add(horizon))
+                    .is_none_or(|end| {
+                        end.saturating_duration_since(entered) > Duration::from_millis(500)
+                    })
+                {
+                    gate.close_attempt();
+                }
                 let epoch = gate.epoch();
                 for (offset, frame) in output.chunks_exact_mut(channels).enumerate() {
                     // Recheck authority per sample. A cosmetic fade never delays stop.
@@ -401,6 +422,13 @@ where
                         *destination = submitted[usize::from(channels == 2 && channel == 1)];
                     }
                     if record.valid_samples == 0 {
+                        reference_sequence = reference_sequence.saturating_add(1);
+                        record.sequence = reference_sequence;
+                        record.played_at = scheduled.and_then(|start| {
+                            start.checked_add(Duration::from_secs_f64(
+                                offset as f64 / f64::from(output_rate),
+                            ))
+                        });
                         record.epoch = epoch;
                         record.utterance = binding.utterance;
                         record.submitted = Instant::now();

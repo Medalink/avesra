@@ -149,7 +149,12 @@ impl AudioHealth {
             )
             || self.permission_authority
             || (self.streaming && !matches!(self.lane.as_str(), "asr" | "tts" | "activity"))
-            || self.cancellation != "terminate_process"
+            || !matches!(
+                self.cancellation.as_str(),
+                "terminate_process" | "cooperative_reset_or_terminate"
+            )
+            || (self.cancellation == "cooperative_reset_or_terminate"
+                && !matches!(self.lane.as_str(), "activity" | "tts"))
             || self
                 .last_inference_ms
                 .is_some_and(|v| !v.is_finite() || !(0.0..=30_000.0).contains(&v))

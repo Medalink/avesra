@@ -1,8 +1,51 @@
 # Paired actor registration and accepted planner/reply transport
 
+## Current conversation context
+
+Planner wire version 3 adds `dialogue`, a chronological list of at most three
+completed user/assistant pairs, totaling at most 4096 UTF-8 bytes of plain text.
+An omitted list is empty; version 1/2 requests are not admitted on the wire.
+Only the actual native ledger claim worker selects these pairs, from at most
+16 preceding accepted records in the same actor/device/control session. It
+revalidates each original record, plan, reply and exact registration binding,
+requires the current action epoch, and excludes pending, cancelled, suspended
+and action-proposal records. Keep whole newest pairs; never truncate text into
+a misleading fragment. A context boundary or oversized newest pair stops older
+context selection. Historical v1/v2 storage remains readable with empty dialogue.
+
+Context is generated conversation content, not proof that speech was heard or
+an effect happened. It grants no authority, cannot reconstruct an accepted turn,
+and does not expand persistent memory retrieval. A new opaque durable turn is
+still mandatory. Proposals must still match the current original accepted request
+under native resolution; history cannot provide missing action authority.
+
+The reasoning request sends the fixed system instruction, these bounded pairs
+as user/assistant messages, then the current accepted utterance. Assistant
+messages retain their strict typed JSON shape. Actual tokenization covers the
+entire resulting prompt with the existing 512-token output reservation and
+original deadline. Context overflow rejects before inference; no silent request
+retry or model substitution is added. Conversation answers should normally be
+one to three short spoken sentences; the assistant is named Avesra, but saying
+its exact name is not a planner admission requirement.
+
+Entry points: native `claim_planner` is the only context selector;
+`PlannerClaim::transport` and paired `/planner` carry the frozen list;
+the actual reasoning adapter tokenizes and generates it. Stored history readers
+only validate records, `/normal-speech` still consumes the original opaque reply,
+and directedness keeps its independent transcript-only request and policy.
+Checks for this change are source review/formatting/compilation under the user's
+no-automated-tests constraint; a real two-turn spoken exchange remains runtime proof.
+
+The current controller retains at most 64 planner attempts per control session,
+including failed or cancelled attempts, to preserve replay rejection. Further
+attempts require a new control session; this source does not claim indefinite
+conversation or implement automatic session rotation. Rotation would discard
+the old session's dialogue context and cannot replay pending work.
+
 ## Typed action proposal continuation
 
-Planner wire version 2 accepts strict internally tagged results: `answer` and
+Planner wire version 3 retains the strict internally tagged results introduced
+in version 2: `answer` and
 `needs_input` carry `text`; `proposal` carries one typed `action`. Supported
 proposals are `launch_app` with a bounded logical `alias`, or `set_volume` with an
 integer `percent` from 0 through 100 for the owner's configured speakers target.
@@ -20,11 +63,11 @@ ownership survive the handoff. The existing executor still revalidates immediate
 before effects and reports its actual result or uncertainty. Proposal text is
 never normal speech, and native clarification must not alter the server's original
 response identity or claim an effect occurred. Legacy stored conversations remain
-inspectable through strict storage compatibility; no version-1 wire fallback or
+inspectable through strict storage compatibility; no version-1/2 wire fallback or
 replay of historical proposals is permitted.
 
 Entry points: `/planner`, `/planner/cancel`, exact tokenizer admission and model
-result parsing use version 2. Native `finish_planner` owns durable proposal
+result parsing use version 3. Native `finish_planner` owns durable proposal
 resolution and the existing accepted coordinator owns dispatch. `/normal-speech`
 explicitly rejects proposal responses; Settings previews are unaffected. This is
 source integration, not reasoning deployment or owner qualification evidence.

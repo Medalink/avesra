@@ -136,6 +136,28 @@ impl MediaWorker {
     ) -> Result<crate::playback_signal::OutputObservation, String> {
         self.telemetry.observe_output(output)
     }
+    /// Personal-only residual processor; this never constructs NoOutput.
+    /// Caller retains current native admission and capture lease checks.
+    pub fn personal_input(
+        &self,
+        local: &LocalState,
+    ) -> Result<crate::playback_signal::personal_audio::Input, String> {
+        let config = self
+            .configuration
+            .lock()
+            .map_err(|_| "Media state unavailable")?;
+        if !local.capture_allowed()
+            || !local.voice_ready
+            || local.enrollment_capture
+            || config.epoch != local.capture_epoch
+            || config.input != local.settings.microphone
+            || config.output != local.settings.speaker
+            || config.input.is_none()
+        {
+            return Err("Personal microphone context unavailable".into());
+        }
+        Ok(self.telemetry.personal_input(local.capture_epoch))
+    }
     pub fn no_output(&self, local: &LocalState) -> Option<NoOutput> {
         let config = self.configuration.lock().ok()?;
         (!config.playback
@@ -362,6 +384,21 @@ impl MediaWorker {
     }
     /// Called with Runtime.local held after validating a fresh paired WSS ack.
     pub fn open_voice_window(&self, local: &LocalState, lease: uuid::Uuid) -> Result<(), String> {
+        self.open_voice_capture(local, lease, false)
+    }
+    pub fn open_personal_stream(
+        &self,
+        local: &LocalState,
+        lease: uuid::Uuid,
+    ) -> Result<(), String> {
+        self.open_voice_capture(local, lease, true)
+    }
+    fn open_voice_capture(
+        &self,
+        local: &LocalState,
+        lease: uuid::Uuid,
+        continuous: bool,
+    ) -> Result<(), String> {
         if lease.is_nil()
             || !local.capture_allowed()
             || local.enrollment_capture
@@ -387,7 +424,7 @@ impl MediaWorker {
         config.voice_window = true;
         config.voice_lease = Some(lease);
         config.capture = true;
-        config.capture_deadline = Some(Instant::now() + Duration::from_secs(11));
+        config.capture_deadline = (!continuous).then(|| Instant::now() + Duration::from_secs(11));
         config.revision = config.revision.saturating_add(1);
         self.capture_gate.publish(true, local.capture_epoch);
         Ok(())

@@ -1,4 +1,6 @@
 //! Native conversation evidence boundary; no serialized value grants authority.
+#[path = "voice_personal.rs"]
+pub mod personal;
 #[path = "voice_qualification.rs"]
 pub mod qualification;
 #[path = "voice_utterance.rs"]
@@ -34,6 +36,13 @@ impl Context {
 }
 pub enum AudioCondition {
     Unknown,
+    PersonalReference {
+        utterance: Uuid,
+        context: Context,
+        known: bool,
+        output_overlap: bool,
+        near_end: bool,
+    },
     Measured {
         adapter_revision: String,
         utterance: Uuid,
@@ -51,6 +60,10 @@ pub enum SignalEvidence {
     },
 }
 pub enum DirectedIntent {
+    Personal {
+        utterance: Uuid,
+        context: Context,
+    },
     Unknown,
     Rejected {
         adapter_revision: String,
@@ -87,13 +100,15 @@ pub struct Observation {
 #[derive(Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AdmissionKind {
+    Personal,
     Development,
     ReleaseQualified,
 }
 /// Created only by native measured admission review. Never deserialized.
 pub struct QualifiedProfile {
     kind: AdmissionKind,
-    candidate: Candidate,
+    candidate: Option<Candidate>,
+    personal: Option<personal::Voice>,
     actor: Uuid,
     qualification_revision: Uuid,
     grant_revision: Uuid,
@@ -120,7 +135,10 @@ impl QualifiedProfile {
         self.grant_revision
     }
     pub fn candidate_revision(&self) -> Uuid {
-        self.candidate.revision
+        self.candidate.as_ref().map_or_else(
+            || self.personal.as_ref().map_or(Uuid::nil(), |v| v.id),
+            |v| v.revision,
+        )
     }
     pub fn qualification_revision(&self) -> Uuid {
         self.qualification_revision
@@ -130,6 +148,49 @@ impl QualifiedProfile {
     }
     pub fn valid(&self) -> bool {
         Instant::now() < self.valid_until
+    }
+    fn microphone(&self) -> &str {
+        self.candidate.as_ref().map_or_else(
+            || self.personal.as_ref().map_or("", |v| v.microphone.as_str()),
+            |v| v.microphone.as_str(),
+        )
+    }
+    fn speaker_revision(&self) -> &str {
+        self.candidate.as_ref().map_or_else(
+            || {
+                self.personal
+                    .as_ref()
+                    .map_or("", |v| v.model_revision.as_str())
+            },
+            |v| v.model_revision.as_str(),
+        )
+    }
+    fn speaker_valid(&self) -> bool {
+        match (&self.candidate, &self.personal) {
+            (Some(v), None) => {
+                self.kind != AdmissionKind::Personal
+                    && v.validate().is_ok()
+                    && v.held_out_similarities
+                        .iter()
+                        .all(|s| *s >= self.threshold + self.held_out_margin)
+            }
+            (None, Some(v)) => self.kind == AdmissionKind::Personal && v.validate().is_ok(),
+            _ => false,
+        }
+    }
+    pub fn personal_voice(&self) -> Option<&personal::Voice> {
+        self.personal.as_ref()
+    }
+    pub fn learn_personal(
+        &mut self,
+        utterance: Uuid,
+        samples: u32,
+        embedding: &[f32],
+    ) -> Result<bool, ErrorCode> {
+        match self.personal.as_mut() {
+            Some(value) => value.observe(utterance, samples, embedding),
+            None => Ok(false),
+        }
     }
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -202,7 +263,7 @@ pub struct FollowUp {
 impl AcceptedConversation {
     fn current(&self, context: &Context, profile: &QualifiedProfile) -> bool {
         self.context == *context
-            && self.profile_revision == profile.candidate.revision
+            && self.profile_revision == profile.candidate_revision()
             && self.qualification_revision == profile.qualification_revision
             && context.grant_revision == Some(profile.grant_revision)
             && context.actor == Some(profile.actor)
@@ -316,14 +377,14 @@ impl TurnGate {
         let Some(profile) = profile else {
             return reject(Abstention::Unqualified);
         };
-        if profile.candidate.validate().is_err()
+        if !profile.speaker_valid()
             || profile.actor.is_nil()
             || current.actor != Some(profile.actor)
             || profile.qualification_revision.is_nil()
             || profile.grant_revision.is_nil()
             || current.grant_revision != Some(profile.grant_revision)
-            || profile.candidate.microphone != current.microphone
-            || profile.candidate.model_revision != observation.speaker_revision
+            || profile.microphone() != current.microphone
+            || profile.speaker_revision() != observation.speaker_revision
             || profile.asr_revision != observation.asr_revision
             || now >= profile.valid_until
             || !profile.threshold.is_finite()
@@ -337,11 +398,6 @@ impl TurnGate {
             || profile.directed_adapter_revision.is_empty()
             || profile.overlap_adapter_revision.is_empty()
             || profile.echo_adapter_revision.is_empty()
-            || profile
-                .candidate
-                .held_out_similarities
-                .iter()
-                .any(|score| *score < profile.threshold + profile.held_out_margin)
         {
             return reject(Abstention::Unqualified);
         }
@@ -367,6 +423,15 @@ impl TurnGate {
             }
         }
         let directed_kind = match observation.directed {
+            DirectedIntent::Personal { utterance, context } => {
+                if profile.kind != AdmissionKind::Personal
+                    || utterance != observation.utterance
+                    || context != *current
+                {
+                    return reject(Abstention::DirectednessUnknown);
+                }
+                DirectedKind::Request
+            }
             DirectedIntent::Unknown => return reject(Abstention::DirectednessUnknown),
             DirectedIntent::Rejected {
                 adapter_revision,
@@ -400,6 +465,7 @@ impl TurnGate {
             }
         };
         match observation.overlap {
+            AudioCondition::PersonalReference { .. } => return reject(Abstention::OverlapUnknown),
             AudioCondition::Unknown => return reject(Abstention::OverlapUnknown),
             AudioCondition::Measured {
                 adapter_revision,
@@ -419,6 +485,31 @@ impl TurnGate {
             }
         }
         match observation.echo {
+            AudioCondition::PersonalReference {
+                utterance,
+                context,
+                known,
+                output_overlap,
+                near_end,
+            } => {
+                if profile.kind != AdmissionKind::Personal
+                    || utterance != observation.utterance
+                    || context != *current
+                    || !known
+                {
+                    return reject(Abstention::EchoUnknown);
+                }
+                if output_overlap
+                    && (!near_end
+                        || profile
+                            .personal
+                            .as_ref()
+                            .and_then(|v| v.representation())
+                            .is_none())
+                {
+                    return reject(Abstention::Echo);
+                }
+            }
             AudioCondition::Unknown => return reject(Abstention::EchoUnknown),
             AudioCondition::Measured {
                 adapter_revision,
@@ -448,18 +539,25 @@ impl TurnGate {
         if !norm.is_finite() || norm < 1e-12 {
             return reject(Abstention::UnknownSpeaker);
         }
-        let similarity = vector
-            .iter()
-            .zip(&profile.candidate.representation)
-            .map(|(a, b)| f64::from(*a) * f64::from(*b) / norm)
-            .sum::<f64>();
-        if similarity < f64::from(profile.threshold) {
+        let representation = profile
+            .candidate
+            .as_ref()
+            .map(|v| v.representation.clone())
+            .or_else(|| profile.personal.as_ref().and_then(|v| v.representation()));
+        if representation.as_ref().is_some_and(|representation| {
+            vector
+                .iter()
+                .zip(representation)
+                .map(|(a, b)| f64::from(*a) * f64::from(*b) / norm)
+                .sum::<f64>()
+                < f64::from(profile.threshold)
+        }) {
             return reject(Abstention::UnknownSpeaker);
         }
         let text = observation.transcript.trim();
         let follow = follow_up.is_some_and(|invitation| {
             invitation.context == *current
-                && invitation.profile_revision == profile.candidate.revision
+                && invitation.profile_revision == profile.candidate_revision()
                 && invitation.qualification_revision == profile.qualification_revision
                 && invitation.created.elapsed() < Duration::from_secs(5)
                 && invitation
@@ -475,7 +573,7 @@ impl TurnGate {
         Decision::Accepted(Box::new(AcceptedConversation {
             context: current.clone(),
             utterance: observation.utterance,
-            profile_revision: profile.candidate.revision,
+            profile_revision: profile.candidate_revision(),
             qualification_revision: profile.qualification_revision,
             accepted: now,
             text: text.into(),

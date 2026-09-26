@@ -19,6 +19,77 @@ to control their active desktop, capture their microphone or record other apps.
 No successful build, capture or metadata response closes Plan 001. A01-A29 and
 OW1-OW3 still require their specific evidence. Record failures as failures.
 
+## Personal conversation and interruption evidence
+
+The continuous conversation requirement added on 2026-09-26 needs a separate,
+owner-operated observation in the ordinary application. The silent diagnostic
+instance below deliberately disables automatic microphone capture; its preview
+WAV, an operator reasoning greeting, or a successful build cannot establish
+continuous listening, native acceptance, dialogue context, or interruption.
+Do not remove those diagnostic guards to obtain a result. This procedure adds no
+microphone recording automation, input-desktop control, injected transcript,
+synthetic accepted turn, or automated acceptance harness.
+
+Record the matched desktop/controller source and binary identities, current
+reasoning incarnation, actual loaded audio lanes, selected stable input/output
+endpoints, and whether Personal admission is learning or has a native voice
+anchor. Keep identifiers in private evidence where appropriate; do not dump
+credentials, embeddings, raw microphone audio or unrelated application content.
+Personal operation is not release qualification. Its initial voice learning
+must not learn the assistant's own playback as the owner.
+
+The owner then performs these brief natural interactions on **both headphones
+and room speakers**, noting which endpoint and sound preset were actually used:
+
+1. Start ordinary Avesra and say a natural greeting or question. No exact wake
+   phrase or calibration script is required for Personal conversation. Observe
+   an actual native accepted turn, a correlated complete planner reply, and the
+   matching accepted-reply output stream. A generated answer stored in history
+   is not proof that output reached the callback or was heard.
+2. Ask a follow-up that depends on the previous answer. Record whether the answer
+   uses the recent dialogue correctly. The actual current-session native claim
+   must select that context; replaying a preview or an old stored reply is not
+   a second accepted turn. Context presently contains at most three completed
+   pairs, and the controller has a 64-attempt session limit; do not report an
+   indefinite conversation soak from this brief observation.
+3. While Avesra is still speaking, interrupt naturally with a new question, then
+   separately with one owner-chosen action that already has its explicit native
+   grant. Do not grant or invoke an unrelated action merely to manufacture proof.
+   Observe capture continuing during actual output, a distinct bounded utterance,
+   and the new request's current native provenance. Capture continuity alone
+   does not establish correct separation of the owner's speech from playback.
+4. For interruption, distinguish immediate old-output gate closure from actual
+   stream/device retirement and upstream job settlement. Record whether old
+   speech stops, whether the new request is accepted only once, and whether the
+   new answer/action starts under its own current ownership. A cancelled waiter
+   or dropped task handle does not prove inference or an OS effect was cancelled.
+   A committed action can remain an uncertain effect; interruption must not
+   silently replay it. A bounded pending request must retain its original age
+   and context rather than receive a fresh lifetime on dequeue.
+5. Let Avesra finish speaking without interrupting. Note any self-trigger, false
+   owner learning, repeated answer or unintended action. Repeat the interaction
+   with the user's normal effects/background music enabled, since the reference
+   must cover the actual full mix, including tails, rather than dry speech alone.
+   Check mute, deafen, pause and lock separately through the owner's normal
+   controls; neither listening nor output may survive its revoked permission.
+
+For source/runtime review, submitted output references must retain exact
+utterance/epoch, sample rate, continuity and original timing before buffers are
+recycled. Microphone hardware capture time and output callback submission time
+are different observations; account for actual scheduled playback time or an
+explicit bounded latency search. Missing or discontinuous references are unknown,
+not evidence of clean audio. Correlation or adaptive residual handling is a
+provisional Personal signal-processing observation, not a measured acoustic echo
+cancellation guarantee, biometric proof, or justification to label simultaneous
+playback as `NoOutput`. Headphone success does not prove speaker-room behavior.
+
+Retain the owner's observed success/failure and any existing bounded native
+metadata needed to correlate the steps. Do not add plaintext/biometric diagnostic
+logging for this procedure. If a boundary has no instrumentation, record it as
+unobserved instead of inferring it from a UI animation. Existing silent background
+screenshots/WAV/video procedures remain useful for their narrower output/UI
+claims and remain unchanged below.
+
 ## Preconditions
 
 1. Record `git rev-parse HEAD`, dirty source inventory, source snapshot identity,

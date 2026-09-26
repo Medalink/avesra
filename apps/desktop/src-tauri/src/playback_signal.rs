@@ -1,5 +1,7 @@
 //! Submission telemetry and native rejection-only interval observations.
 //! Display events remain non-authoritative. Never called from an audio callback.
+#[path = "personal_audio.rs"]
+pub mod personal_audio;
 use avesra_windows::audio::PlaybackReference;
 use serde::Serialize;
 use std::{
@@ -55,6 +57,7 @@ pub struct Telemetry {
     origin: Instant,
     state: Mutex<State>,
     observation: Mutex<Weak<Mutex<ObservedOutput>>>,
+    personal: Arc<personal_audio::Reference>,
 }
 struct ObservedOutput {
     output: Uuid,
@@ -82,7 +85,11 @@ impl Telemetry {
             origin: Instant::now(),
             state: Mutex::new(State::default()),
             observation: Mutex::new(Weak::new()),
+            personal: Arc::new(personal_audio::Reference::default()),
         }
+    }
+    pub fn personal_input(&self, epoch: u64) -> personal_audio::Input {
+        personal_audio::Input::new(self.personal.clone(), epoch)
     }
     pub fn observe_output(&self, output: Uuid) -> Result<OutputObservation, String> {
         let mut slot = self
@@ -155,6 +162,7 @@ impl Telemetry {
         }
         state.last_epoch = epoch;
         state.active = Some((epoch, output, purpose));
+        self.personal.open(epoch, output);
         state.overlay_revealed = false;
         state.last_sample = None;
     }
@@ -170,6 +178,7 @@ impl Telemetry {
                 return;
             }
             state.active = None;
+            self.personal.retire(epoch);
             if state.sequence >= MAX_SEQUENCE {
                 return;
             }
@@ -214,6 +223,7 @@ impl Telemetry {
             }
             // The media worker has verified the exact live output lease. Keep
             // actual submission intervals before display-only throttling.
+            self.personal.push(reference);
             self.observe_reference(reference, raw);
             if state.last_speech == reference.speech
                 && state

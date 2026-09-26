@@ -6,7 +6,7 @@
   import { ensureManagementVerification } from "./setup";
   import { latestRead } from "./latest-read";
   import { readSpeakerStore, type SpeakerCandidate as Candidate } from "./speaker-profiles";
-  import { type RegistrationView } from "./owner-setup";
+  import { personalVoiceView, type RegistrationView } from "./owner-setup";
   let { runtime, navigate, control }: { runtime: Runtime | null; navigate: (section: string, target?: string) => void; control: (value: string) => Promise<void> } = $props();
   type Status = { enrollment: string; completed_segments: number; next_segment: string | null; reason: string };
   let status = $state<Status | null>(null);
@@ -33,7 +33,9 @@
   const savedVoice = $derived(candidates.find(c => c.state === "selected_quality_unqualified" && c.segments === 6) ?? candidates.find(c => c.segments === 6));
   const savedVoiceReadError = $derived(candidatesError || (candidatesLoaded && candidates.length > 0 && !savedVoice ? "Your saved voice was found, but Avesra couldn't read it. Keep your recordings and retry the check; you do not need to record six new phrases." : ""));
   const ownerComplete = $derived(owner?.state === "configured");
-  const allSaved = $derived(ownerComplete && registration.state === "registered" && !!savedVoice && !candidatesError);
+  const voice = $derived(personalVoiceView(runtime));
+  let ownsEnrollment = false;
+  let advanced = $state(false);
   const unavailable = $derived(!runtime?.connected ? "Connect your Spark to continue setup." : runtime.locked ? "Unlock Windows to continue setup." : runtime.settings.paused ? "Resume Avesra before continuing setup." : "");
   const acting = $derived(busy || registrationBusy);
   const audioAction = $derived(runtime?.settings.paused ? { label: "Resume Avesra", value: "resume" } : runtime?.settings.deafened ? { label: "Turn off Deafen", value: "undeafen" } : runtime?.settings.explicit_mute ? { label: "Unmute microphone", value: "unmute" } : null);
@@ -102,12 +104,12 @@
         if (savedVoiceReadError || !candidatesLoaded) return;
         if (candidates.length) { note = "Your six voice phrases are already saved. No new recording is needed."; return; }
       }
-      await verifyManagement(ownerCurrent); if (!mounted || current !== generation) return; progress = "Preparing voice enrollment…"; const next = await command<Status>("begin_enrollment"); if (mounted && current === generation) status = next;
+      await verifyManagement(ownerCurrent); if (!mounted || current !== generation) return; progress = "Preparing voice enrollment…"; ownsEnrollment = true; const next = await command<Status>("begin_enrollment"); if (mounted && current === generation) status = next;
     }
     catch (e) { if (current === generation) error = String(e); }
     finally { busy = false; progress = ""; }
   }
-  async function cancel() { generation++; status = null; await command("cancel_setup"); }
+  async function cancel() { generation++; status = null; await command("cancel_setup"); ownsEnrollment = false; }
   const prompts = ["Read naturally: Avesra helps me keep track of my work and the things I want to do today.", "Read naturally: I can pause the assistant whenever I need a quiet moment to think.", "Read naturally: The next project will take several careful steps, and I want to review each result.", "Speak naturally for eight seconds about a typical part of your day.", "Held-out phrase: A clear voice carries across the room while the afternoon light changes.", "Held-out phrase: Tomorrow I may choose a different task, but today I will finish this one."];
   async function record() {
     busy = true; error = "";
@@ -115,13 +117,13 @@
     try {
       const next = await command<Status>("record_enrollment");
       if (!mounted || current !== generation) return;
-      status = next.enrollment === "unavailable" ? null : next;
-      if (status?.completed_segments === 6) { progress = "Saving your six voice phrases…"; await command("finish_enrollment"); if (mounted && current === generation) { status = null; note = "All six voice phrases are saved."; await refresh(); } }
+      status = next.enrollment === "unavailable" ? null : next; if (!status) ownsEnrollment = false;
+      if (status?.completed_segments === 6) { progress = "Saving your six voice phrases…"; await command("finish_enrollment"); ownsEnrollment = false; if (mounted && current === generation) { status = null; note = "All six voice phrases are saved."; await refresh(); } }
     }
     catch (e) {
       if (current === generation) {
         error = String(e);
-        try { const next = await command<Status>("setup_status"); if (mounted && current === generation) status = next.enrollment === "unavailable" ? null : next; }
+        try { const next = await command<Status>("setup_status"); if (mounted && current === generation) status = next.enrollment === "unavailable" ? null : next; if (!status) ownsEnrollment = false; }
         catch { if (current === generation) status = null; }
       }
     }
@@ -129,7 +131,7 @@
   }
   async function save() {
     busy = true; error = "";
-    try { await command("finish_enrollment"); status = null; await refresh(); }
+    try { await command("finish_enrollment"); ownsEnrollment = false; status = null; await refresh(); }
     catch(e) { error = String(e); }
     finally { busy = false; }
   }
@@ -150,33 +152,34 @@
     const refreshSavedVoice = () => { if (native && mounted) void refresh(); };
     refreshSavedVoice();
     window.addEventListener("focus", refreshSavedVoice);
-    return () => { mounted = false; window.removeEventListener("focus", refreshSavedVoice); candidateReader.dispose(); generation++; ownerGeneration++; if (native) void command("cancel_setup").catch(() => {}); };
+    return () => { mounted = false; window.removeEventListener("focus", refreshSavedVoice); candidateReader.dispose(); generation++; ownerGeneration++; if (native && ownsEnrollment) void command("cancel_setup").catch(() => {}); };
   });
 </script>
 <section class="section">
-  {#if runtime?.enrolled && runtime.voice_ready}
-    <div class="av-card flex flex-col gap-2 p-3.5"><h2 class="text-[14px] font-medium">Automatic listening is enabled</h2><p class="av-hint">Local mute, deafen and pause controls still apply. Development permission does not establish release-validated speaker, replay or overlap reliability.</p></div>
-  {:else}
-    <div class="flex flex-col gap-2 border border-amber-400/25 bg-amber-400/[0.04] p-3.5" role="status">
-      <h2 class="text-[14px] font-medium text-amber-200">{allSaved ? "Your saved voice is ready for a live check" : "Set up automatic voice interaction"}</h2>
-      <p class="text-[12.5px] leading-relaxed text-zinc-200">Use six saved phrases and one genuine eight-second check to enable development listening with your permission. Full release validation is optional for your own testing.</p>
-      <p class="av-hint">{allSaved ? "Keep your saved recordings. Continue with the short check below." : savedVoice ? "Your six voice phrases are already saved. Complete the remaining owner and Spark setup, then use the short check." : "Save your owner setup and voice below. Windows verification appears when a protected step needs it."}</p>
+  <div class="av-card flex flex-col gap-2 p-3.5" role="status">
+    <div class="flex flex-wrap items-center justify-between gap-2"><h2 class="text-[16px] font-medium">{voice.title}</h2><span class="av-chip text-zinc-300 ring-white/15">{voice.label}</span></div>
+    <p class="av-hint">{voice.reason}</p>
+    <p class="av-hint">Talk naturally. Avesra reuses your saved voice or learns it as you talk. You can add other people later.</p>
+    <div class="flex flex-wrap gap-2 pt-1">
+      {#if !runtime?.connected}<button class="av-btn av-btn-primary av-btn-sm" onclick={() => navigate("profiles", "spark-pairing")}>Connect Spark</button>{/if}
+      {#if audioAction}<button class="av-btn av-btn-secondary av-btn-sm" disabled={!native} onclick={restoreAudio}>{audioAction.label}</button>{:else}<button class="av-btn av-btn-secondary av-btn-sm" disabled={!native || !runtime} onclick={() => control("mute").catch(e => error = String(e))}>Mute microphone</button><button class="av-btn av-btn-ghost av-btn-sm" disabled={!native || !runtime} onclick={() => control("pause").catch(e => error = String(e))}>Pause Avesra</button>{/if}
+      <button class="av-btn av-btn-ghost av-btn-sm" onclick={() => navigate("audio")}>Audio &amp; Voice</button>
     </div>
-  {/if}
-
-  {#if unavailable}
-    <div class="av-card flex flex-wrap items-center gap-3 p-3.5"><p class="av-hint flex-1">{unavailable}</p>{#if !runtime?.connected}<button class="av-btn av-btn-primary av-btn-sm" onclick={() => navigate("profiles", "spark-pairing")}>Connect Spark</button>{:else if runtime?.settings.paused}<button class="av-btn av-btn-secondary av-btn-sm" onclick={restoreAudio}>Resume Avesra</button>{/if}</div>
-  {/if}
-
+  </div>
+  {#if error && !advanced}<p class="av-hint text-amber-200" role="alert">{error}</p>{/if}
+  <details class="av-card p-3.5" bind:open={advanced}>
+    <summary class="cursor-pointer text-[12.5px] font-medium">Advanced voice tools</summary>
+    <p class="av-hint my-3">Optional owner management, saved recordings and diagnostics. These are not required to start talking.</p>
+    {#if advanced}
   <div class="av-card px-3.5">
     <div class="flex flex-col gap-2 py-3">
-      <div class="flex items-center gap-3"><span class="font-mono text-xs text-zinc-400">01</span><span class="min-w-0 flex-1 text-[13px] font-medium text-zinc-100">Create your owner account</span><span class="av-chip {ownerComplete ? 'text-emerald-300 ring-emerald-400/30' : 'text-zinc-300 ring-white/15'}">{ownerLoading ? "Checking…" : ownerComplete ? "Complete" : ownerError ? "Check failed" : "Action needed"}</span></div>
+      <div class="flex items-center gap-3"><span class="min-w-0 flex-1 text-[13px] font-medium text-zinc-100">Create your owner account</span><span class="av-chip {ownerComplete ? 'text-emerald-300 ring-emerald-400/30' : 'text-zinc-300 ring-white/15'}">{ownerLoading ? "Checking…" : ownerComplete ? "Complete" : ownerError ? "Check failed" : "Action needed"}</span></div>
       <p class="av-hint ml-7">{ownerLoading ? "Reading your saved owner account…" : ownerComplete ? "Your owner account is saved for this Windows user." : ownerError ? `Couldn't read your owner account. ${ownerError}` : "Create an owner account for this Windows user. Windows will ask you to verify."}</p>
       {#if !ownerLoading && !ownerComplete}<button class="av-btn av-btn-primary av-btn-sm ml-7 self-start" disabled={acting || !!unavailable || !native} onclick={ownerError || owner?.state !== "missing" ? refreshOwner : createOwner}>{ownerError || owner?.state !== "missing" ? "Retry owner check" : "Create owner account"}</button>{/if}
     </div>
     <ActorRegistration {runtime} ownerReady={ownerComplete} parentBusy={busy} onstate={registrationChanged} onbusy={value => registrationBusy = value} />
     <div class="flex flex-col gap-2 border-t border-white/10 py-3">
-      <div class="flex items-center gap-3"><span class="font-mono text-xs text-zinc-400">03</span><span class="min-w-0 flex-1 text-[13px] font-medium text-zinc-100">Save your voice</span><span class="av-chip {savedVoice && !savedVoiceReadError ? 'text-emerald-300 ring-emerald-400/30' : 'text-zinc-300 ring-white/15'}">{checkingSavedVoice || (!candidatesLoaded && !savedVoiceReadError) ? "Checking…" : savedVoiceReadError ? "Check failed" : savedVoice ? "Complete · 6 of 6" : "Action needed"}</span></div>
+      <div class="flex items-center gap-3"><span class="min-w-0 flex-1 text-[13px] font-medium text-zinc-100">Save your voice</span><span class="av-chip {savedVoice && !savedVoiceReadError ? 'text-emerald-300 ring-emerald-400/30' : 'text-zinc-300 ring-white/15'}">{checkingSavedVoice || (!candidatesLoaded && !savedVoiceReadError) ? "Checking…" : savedVoiceReadError ? "Check failed" : savedVoice ? "Complete · 6 of 6" : "Action needed"}</span></div>
       <p class="av-hint ml-7">{savedVoiceReadError || (savedVoice ? "All six phrases are saved on this PC. No new recording is needed." : !candidatesLoaded ? "Reading your saved voice…" : registration.state !== "registered" ? "Complete the owner and Spark steps above, then record six short phrases." : "Record six eight-second phrases. Avesra saves your voice after the last one.")}</p>
       {#if !savedVoiceReadError && candidatesLoaded && !savedVoice && registration.state === "registered" && !status}
         {#if enrollmentBlock}<p class="av-hint ml-7 text-amber-200">{enrollmentBlock}</p><button class="av-btn av-btn-secondary av-btn-sm ml-7 self-start" disabled={acting} onclick={restoreAudio}>{audioAction?.label ?? "Choose microphone"}</button>{:else}<button class="av-btn av-btn-primary av-btn-sm ml-7 self-start" disabled={acting || candidatesLoading || !!unavailable} onclick={() => prepare()}>Record my voice</button>{/if}
@@ -204,25 +207,27 @@
 
   {#if savedVoice}
     <div class="av-card p-3.5">
-      <h2 class="text-[12.5px] font-medium">04 · Live check and listening permission</h2>
+      <h2 class="text-[12.5px] font-medium">Optional voice diagnostics</h2>
       {#if enrollmentBlock}<p class="av-hint mt-2 text-amber-200">{enrollmentBlock}</p><button class="av-btn av-btn-secondary av-btn-sm mt-2" disabled={acting} onclick={restoreAudio}>{audioAction?.label ?? "Open audio settings"}</button>{/if}
       <VoiceCheck id={savedVoice.id} revision={savedVoice.revision} {runtime} blocked={acting || !!status || !!enrollmentBlock || !ownerComplete || registration.state !== "registered"} onbusy={value => busy = value} />
     </div>
   {/if}
   <details class="av-card p-3.5">
     <summary class="cursor-pointer text-[12.5px] font-medium">Manage saved voice · advanced</summary>
-    <p class="av-hint mt-3">These options replace or remove saved setup. You do not need them to finish the steps above.</p>
+    <p class="av-hint mt-3">These options replace or remove saved setup. They are not required for normal listening.</p>
     <div class="my-3 flex flex-wrap gap-2"><button class="av-btn av-btn-secondary av-btn-sm" disabled={acting || !!enrollmentBlock || !!unavailable || !!status} onclick={() => prepare(true)}>Record a new voice…</button><button class="av-btn av-btn-ghost av-btn-sm" disabled={acting || candidatesLoading || checkingSavedVoice || !native} onclick={checkSavedVoice}>{checkingSavedVoice ? "Checking saved voice…" : "Reload saved voices"}</button></div>
     {#if storageDirectory}<p class="av-hint break-all">Saved voice folder: {storageDirectory}</p>{/if}
     {#each candidates as candidate, i (candidate.revision)}
       <div class="flex flex-col gap-2 border-t border-white/10 py-3">
         <span class="text-[12.5px] font-medium">Saved voice {i + 1} · {candidate.segments === 6 ? "6 phrases" : "Could not read"}{candidate.state === "selected_quality_unqualified" ? " · selected" : ""}</span>
-        <p class="av-hint">Selecting a voice stores your recognition preference. Use the live check and listening-permission step to activate it.</p>
+        <p class="av-hint">Selecting a voice stores your recognition preference. Native listening status above shows when it is in use.</p>
         {#if candidate.read_error}<p class="av-hint text-amber-200">{candidate.read_error}. The saved file has not been changed.</p>{/if}
         <div class="flex flex-wrap gap-2"><button class="av-btn av-btn-secondary av-btn-sm" disabled={acting || candidate.state !== "candidate_quality_unqualified"} onclick={() => select(candidate)}>Select this saved voice</button><button class="av-btn av-btn-ghost av-btn-sm" disabled={acting} onclick={() => remove(candidate)}>Delete saved voice…</button></div>
       </div>
     {/each}
     <button class="av-btn av-btn-ghost av-btn-sm" disabled={acting} onclick={() => select(null)}>Clear saved voice selection…</button>
     <p class="av-hint mt-2">Changes ask for Windows verification when needed.</p>
+  </details>
+    {/if}
   </details>
 </section>

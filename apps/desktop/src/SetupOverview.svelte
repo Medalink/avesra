@@ -1,7 +1,7 @@
 <script lang="ts">
   import Icon from "./Icon.svelte";
   import { native, type Runtime, type AudioDevice } from "./runtime";
-  import { automaticVoiceLimitation } from "./owner-setup";
+  import { personalVoiceView } from "./owner-setup";
 
   let {
     runtime,
@@ -17,6 +17,7 @@
     navigate: (section: string, target?: string) => void;
   } = $props();
 
+  const voice = $derived(personalVoiceView(runtime));
   const connected = $derived(runtime?.connected === true);
   const input = $derived(
     devices.find(
@@ -48,8 +49,8 @@
     {
       number: "02",
       icon: "models",
-      title: "Prepare the models",
-      state: runtime?.voice_ready ? "Voice ready" : "Not ready",
+      title: "Speech services",
+      state: runtime?.voice_ready ? "Ready" : "View status",
       ready: !!runtime?.voice_ready,
       detail: "Check the services that listen, reason and speak.",
       action: "Review services",
@@ -76,18 +77,18 @@
     {
       number: "04",
       icon: "people",
-      title: "Make it yours",
-      state: runtime?.enrolled && runtime.voice_ready ? "Ready" : "Not implemented yet",
-      ready: !!runtime?.enrolled && !!runtime?.voice_ready,
-      detail: runtime?.enrolled && runtime.voice_ready ? "Your owner voice is ready." : automaticVoiceLimitation,
-      action: "Review owner setup",
+      title: "Your voice",
+      state: voice.label,
+      ready: voice.active,
+      detail: voice.reason,
+      action: "Voice status",
       section: "people",
     },
     {
       number: "05",
       icon: "mic",
       title: "Give Avesra a voice",
-      state: "Review needed",
+      state: "Optional",
       ready: false,
       detail: "Create, preview and select a generated voice.",
       action: "Open voice designer",
@@ -98,7 +99,7 @@
       number: "06",
       icon: "awareness",
       title: "Choose what it can do",
-      state: "Review needed",
+      state: "Optional",
       ready: false,
       detail: "Review observation, app aliases and browser access.",
       action: "Review actions",
@@ -122,10 +123,10 @@
     <div class="min-w-0 flex-1">
       <span class="av-kicker">Your local assistant</span>
       <h2 class="mt-1 text-[20px] font-medium tracking-[-0.035em]">
-        Let's get Avesra ready.
+        {voice.title}
       </h2>
       <p class="mt-2 text-[12px] leading-[18px] text-zinc-400">
-        Connect your Spark, choose your devices and make Avesra yours.
+        {voice.reason}
       </p>
     </div>
   </div>
@@ -141,17 +142,15 @@
           : "Browser view · no native runtime"}</span
     >
     <span class="av-chip text-amber-200 ring-amber-400/25"
-      >{runtime?.voice_ready && runtime.enrolled
-        ? "Voice configured"
-        : "Voice setup needed"}</span
+      >{voice.label}</span
     >
     {#each restrictions as restriction}<span class="av-chip text-amber-200 ring-amber-400/25">{restriction}</span>{/each}
   </div>
 </section>
 
-<section class="section" aria-label="Setup steps">
+<section class="section" aria-label="Companion settings">
   <div class="flex items-center justify-between">
-    <span class="av-kicker">Set up your companion</span><span
+    <span class="av-kicker">Your companion</span><span
       class="caption text-zinc-500">On this PC + your Spark</span
     >
   </div>
@@ -163,7 +162,7 @@
         aria-label={`${step.action}. ${step.state}`}
       >
         <span class="flex items-center gap-2">
-          <span class="caption text-zinc-500">{step.number}</span>
+
           <span class="text-zinc-400"><Icon name={step.icon} size={15} /></span>
           <strong class="min-w-0 flex-1 text-[12.5px] font-medium text-zinc-100"
             >{step.title}</strong

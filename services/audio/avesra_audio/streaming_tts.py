@@ -4,6 +4,7 @@ import hashlib
 from importlib import metadata
 from pathlib import Path
 import time
+from .cancellation import check
 
 SOURCES = {
     "inference/qwen3_tts_model.py": "e1da450732857c1f5fe3e36ebab85db2f6dc6a48caaff6973f463384e30275e4",
@@ -22,7 +23,7 @@ def verify_package():
             raise ValueError("streaming_tts_source")
 
 
-def synthesize(wrapper, prompt, torch, text, deadline, emit):
+def synthesize(wrapper, prompt, torch, text, deadline, emit, cancelled=lambda: False):
     verify_package()
     if not isinstance(text, str) or not text.strip() or len(text) > 512:
         raise ValueError("invalid_text")
@@ -49,6 +50,7 @@ def synthesize(wrapper, prompt, torch, text, deadline, emit):
     chunks = samples = 0
 
     def current():
+        check(cancelled)
         if time.monotonic() >= deadline:
             raise ValueError("streaming_tts_expired")
 
@@ -101,6 +103,7 @@ def synthesize(wrapper, prompt, torch, text, deadline, emit):
         current()
         return result
 
+    current()
     hook = None
     installed = False
     try:

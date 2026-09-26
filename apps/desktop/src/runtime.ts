@@ -65,6 +65,7 @@ export type Runtime = {
   connection_error: string | null;
   enrolled: boolean;
   voice_ready: boolean;
+  personal_voice: { state: "learning" | "listening" | "unavailable"; reason: string };
   enrollment_capture: boolean;
   microphone_check: boolean;
   capture_error: string | null;

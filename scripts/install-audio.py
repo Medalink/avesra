@@ -129,7 +129,8 @@ def health(record):
                 or value.get("model_revision") != record["revision"]
                 or value.get("streaming") != record["streaming"]
                 or value.get("permission_authority") is not False
-                or value.get("cancellation") != "terminate_process"
+                or value.get("cancellation") not in {"terminate_process", "cooperative_reset_or_terminate"}
+                or (value.get("cancellation") == "cooperative_reset_or_terminate" and record["lane"] not in {"activity", "tts"})
                 or value.get("state") not in {"unavailable", "loading", "loaded_unqualified", "termination_pending"}):
             raise ValueError("Audio health identity/contract changed")
         return value["state"]

@@ -1,5 +1,47 @@
 # Explicit voice enrollment
 
+## Personal conversation startup (current owner-directed product policy)
+
+Normal launch now establishes Personal admission automatically after pairing,
+unlocked Windows, current owner registration and loaded speech/activity/reasoning
+services. It honors saved mute, deafen, pause, revocation and endpoint selections;
+only genuinely new settings default to unmuted and actual default audio devices.
+Diagnostic output-recording launches never bootstrap listening or open a mic.
+There is no required recording button, timing annotation, consent wizard or
+release corpus. Existing six-sample selected voice is reused without rewriting it.
+
+Personal is explicitly unvalidated and distinct from Development/ReleaseQualified.
+Its product defaults are speech/overlap score0.5, ten80ms quiet frames, one80ms
+voiced quantum, at most1% clipping and cosine affinity0.65. These are provisional
+settings, not measured qualification. The existing release path stays unchanged.
+Fresh complete nonoverlapping speech with native Personal reference provenance
+is conversational input, including greetings and short replies; no strict model
+classifier or exact wake-name spelling is required in Personal mode. Its explicit
+native intent variant cannot be used by other admission kinds. It never grants
+an action scope or approves a protected action.
+
+For a genuinely new owner voice, the first accepted natural utterance is treated
+as that Windows owner's provisional voice. This assumes the person speaking at
+this personal computer is its owner; it is not identity verification or replay
+resistance. Only current, accepted, nonoverlapping actual192-dimensional embeddings
+are learned. At most32 observations over the first three minutes of voiced audio
+are retained with real request identities/sample counts in user-DPAPI storage;
+there are no invented six segments, held-outs, corpus counts, transcripts or PCM.
+After an initial anchor, mismatching voices do not update it. Saved selected
+profiles are not retuned by this workflow. Different users and profile management
+remain explicit advanced operations with their existing protections.
+
+| Entry point | Contract |
+| --- | --- |
+| normal voice spawn/startup | automatic native Personal bootstrap; diagnostic mode excluded |
+| normal capture/process/TurnGate | existing PCM ownership and durable conversation path; typed Personal policy |
+| protected personal record read/write | exact Windows owner, selected source, endpoint/model binding; bounded real observations |
+| owner creation/registration | create only if absent; existing/corrupt/revoked identities never replaced |
+| advanced checks/review/revoke | existing explicit operations and release evidence remain distinct |
+
+Verification follows the owner's no-tests instruction: source review, static
+checks and builds; no automated fixtures or harnesses.
+
 ## Short development setup (owner-directed activation policy)
 
 The saved-permission revoke control remains available even when automatic
@@ -188,3 +230,5 @@ Windows session monitoring starts closed. During native setup the owned Settings
 This follows the [WTS session-state contract](https://learn.microsoft.com/en-us/windows/win32/api/wtsapi32/ns-wtsapi32-wtsinfoex_level1_w) and [same-thread subclass requirement](https://learn.microsoft.com/en-us/windows/win32/api/commctrl/nf-commctrl-setwindowsubclass). The notification path is compiled source only; actual lock/unlock, logoff and teardown behavior have not been exercised during the owner's gaming restriction.
 
 Recording failures must distinguish actual five-minute expiry from local cancellation and microphone failure. The shared native media worker preserves a bounded, non-sensitive failure reason (device open, stream interruption, clock discontinuity, invalid timestamp, queue overflow or deadline). Enrollment returns that reason from the current runtime instead of labelling every invalidated session expired. No PCM, device credentials or raw driver errors are exposed. A new explicit recording clears the prior failure. The same native capture failure reasons apply to both native-rate and resampled microphones; gates remain closed on failure.
+
+Personal revocation also persists explicit mute. Normal restart remains muted; deliberate Unmute (including the configured shortcut) permits fresh owner/session/service revalidation, without reviving revoked actor registration or action grants. A selected six-sample candidate is reused only on its exact recorded microphone/model; another deliberately selected endpoint learns a separate protected Personal voice and never alters the original candidate.

@@ -48,7 +48,16 @@ It does not create an event or replay history, and recorded delivery stays
 uncertain rather than advancing the announcement pointer. The recording sidecar
 identifies this mode. Ordinary output capture keeps this worker disabled.
 
-Always-on listening hands off only at a measured idle boundary. A genuine claimed
+Personal continuous listening does not need a microphone gap for a notification.
+Only an actually current native Personal profile permits notification output
+while capture is owned. The notification keeps its original actor/session,
+foreground-task priority, toggles, volume, bounded output owner and final-submission
+checks. Its real postmix tone enters the same Personal echo-reference lane; no
+notification manufactures quiet input or voice authority. Qualification locks are
+released before runtime publication. Other admission modes retain the measured
+quiet-gap behavior below.
+
+Non-Personal always-on listening hands off only at a measured idle boundary. A genuine claimed
 batch requests a native token; the normal utterance owner first observes quiet,
 sends its real final tail, verifies that tail stayed quiet, and awaits stream
 retirement before granting the token. New windows defer while the token is held.

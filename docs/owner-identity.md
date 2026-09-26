@@ -1,5 +1,20 @@
 # First authenticated owner and native management
 
+## Automatic personal bootstrap (current product policy)
+
+On a normal unlocked connected launch, a missing local owner may be created
+natively for the actual current Windows SID without a Hello dialog. This is
+create-only publication under the existing retained owner coordinator and current
+session checks. Existing, unreadable, foreign-principal or revoked owner records
+are never replaced. A missing paired owner registration may be established using
+the same durable native registration intent and exact current actor identity;
+uncertain operations are reconciled through actual status and never silently
+transferred to another owner. Voice learning establishes only a provisional
+speaker association with that Windows owner, never Windows identity or grants.
+Advanced replacement, people management and protected actions retain verification.
+This current personal-startup policy supersedes the historical manual-first setup
+requirements below; those controls remain advanced management options.
+
 ## Guided owner setup
 
 People & Voice ID presents three concrete setup steps: create the local owner, register that owner on the connected Spark, and save six voice phrases. Each step independently shows loading, completed, action needed or an actionable read error. Show only the first incomplete step's primary action. Registration is read automatically after owner/context changes and once a temporarily busy parent operation finishes; a capture/verification transition cannot leave an empty status with no retry scheduled. Failed reads require an explicit retry rather than a retry loop. Never infer registration from connection or mark unknown state complete.

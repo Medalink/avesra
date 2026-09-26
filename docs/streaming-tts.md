@@ -1,5 +1,10 @@
 # Incremental generated-voice synthesis
 
+Normal interruption uses [warm cancellation](audio-cancellation.md): the actual
+child unwinds its hook, retires CUDA work and acknowledges the exact request
+before the controller releases its permit. Uncertain retirement still terminates
+the worker; a cancelled prefix never becomes a completed speech result.
+
 Explicit editable voice tests and fixed startup greetings use preview wire
 version 2 to expose this actual incremental path. Their controller waits for the
 first validated private chunk, sends `StreamingReady` with a sample ceiling, and

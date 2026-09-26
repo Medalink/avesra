@@ -179,10 +179,13 @@ struct Plan {
 }
 impl Plan {
     fn validate(&self) -> Result<(), ErrorCode> {
-        // Historical v1 has exactly the same strict request shape. This local
-        // read validation does not relax the wire or construct a live claim.
+        // Historical records have no dialogue. This local read validation does
+        // not relax the wire or construct a live claim from saved history.
         let mut request = self.request.clone();
-        if request.version == 1 {
+        if matches!(request.version, 1 | 2) {
+            if !request.dialogue.is_empty() {
+                return Err(ErrorCode::Malformed);
+            }
             request.version = planner::VERSION;
         }
         request.validate()?;
@@ -402,6 +405,9 @@ fn read_reply(db: &Connection, plan: &Plan) -> Result<Option<ReplyRecord>, Error
         }
         checked.version = planner::VERSION;
     }
+    if checked.version == 2 {
+        checked.version = planner::VERSION;
+    }
     checked.validate(&plan.request.context)?;
     if value.revision.is_nil()
         || value.revision.to_string() != revision
@@ -439,6 +445,69 @@ pub(super) fn cancel(db: &Connection, record: &Record) -> Result<(), ErrorCode> 
         .map_err(|_| ErrorCode::Storage)?;
     }
     Ok(())
+}
+/// Content-only context selected inside the same actual claim transaction.
+/// No reader can turn these records into a live claim or output capability.
+fn recent_dialogue(
+    db: &Connection,
+    current: &Record,
+    binding: &Binding,
+) -> Result<Vec<planner::DialoguePair>, ErrorCode> {
+    let mut query = db.prepare(
+        "SELECT substr(id,1,37) FROM accepted_conversations WHERE actor=?1 AND device=?2 AND session=?3 AND rowid<(SELECT rowid FROM accepted_conversations WHERE id=?4) ORDER BY rowid DESC LIMIT 16",
+    ).map_err(|_| ErrorCode::Storage)?;
+    let mut rows = query
+        .query(params![
+            current.actor.to_string(),
+            current.source.device.to_string(),
+            current.source.session.to_string(),
+            current.id.to_string()
+        ])
+        .map_err(|_| ErrorCode::Storage)?;
+    let mut pairs = Vec::new();
+    let mut bytes = 0usize;
+    while let Some(row) = rows.next().map_err(|_| ErrorCode::Storage)? {
+        let id: String = row.get(0).map_err(|_| ErrorCode::Malformed)?;
+        let id = Uuid::parse_str(&id).map_err(|_| ErrorCode::Malformed)?;
+        let (record, state) = super::tasks::read_record(db, id)?;
+        if record.actor != current.actor
+            || record.source.device != current.source.device
+            || record.source.session != current.source.session
+            || record.action_epoch != current.action_epoch
+        {
+            break;
+        }
+        if !matches!(state.as_str(), "answered" | "waiting_input") {
+            continue;
+        }
+        let Some((plan, plan_state)) = read_plan(db, &record)? else {
+            continue;
+        };
+        if plan.binding != *binding {
+            break;
+        }
+        if plan_state != "replied" {
+            continue;
+        }
+        let reply = read_reply(db, &plan)?.ok_or(ErrorCode::Malformed)?;
+        if matches!(reply.reply.response, planner::Response::Proposal { .. }) {
+            continue;
+        }
+        let pair_bytes = record.text.len() + reply.reply.response.text().len();
+        if bytes + pair_bytes > planner::MAX_DIALOGUE_BYTES {
+            break;
+        }
+        bytes += pair_bytes;
+        pairs.push(planner::DialoguePair {
+            user: record.text,
+            assistant: reply.reply.response,
+        });
+        if pairs.len() == planner::MAX_DIALOGUE_PAIRS {
+            break;
+        }
+    }
+    pairs.reverse();
+    Ok(pairs)
 }
 impl Store {
     pub fn claim_planner(
@@ -480,6 +549,7 @@ impl Store {
                     action_epoch: record.action_epoch,
                 },
                 text: record.text.clone(),
+                dialogue: recent_dialogue(&tx, &record, &request.binding)?,
                 remaining_ms: planner::MAX_BUDGET_MS,
             },
             binding: request.binding,

@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 pub const REVISION: &str = "cd03eee90fbec18297ac31b8c21546e596b7f71c";
 pub const FRAME_SAMPLES: u32 = 1280;
+pub const STREAM_VERSION: u16 = 2;
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -54,6 +55,8 @@ pub struct Start {
 pub struct Packet {
     pub sequence: u64,
     pub sample_offset: u32,
+    /// Original oldest native sample age at send, rounded up; at most 500 ms.
+    pub captured_age_ms: u16,
     pub pcm_s16le: String,
     pub r#final: bool,
 }

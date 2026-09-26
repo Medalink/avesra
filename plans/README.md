@@ -120,3 +120,10 @@ Specific home-light integration, multiple-Spark distribution, additional desktop
 ## Completion boundary
 
 Implementation is in progress, with intermediate source/build/native UI evidence recorded in [the execution review](001-execution-review.md). A functioning voice assistant has not been demonstrated or deployed. The owner authorized model setup through Local Studio on `ssh spark2`; that target is reachable, all six selected model packages are downloaded and hash checked, and earlier reasoning recipe verification is recorded in the setup evidence. The earlier failed `spark` alias is superseded. The owner chose dedicated local speech/speaker drivers alongside Local Studio. No Avesra microphone, enrollment, desktop-automation, or end-to-end performance proof exists. Downloads, build checks and static UI inspection cannot satisfy the owner workflows.
+# Current execution priority
+
+The2026-09-26 owner request supersedes manual voice calibration: normal launch
+should start personal conversation and learn the voice during natural dialogue.
+Existing owner/enrollment is reused. Implemented work is on
+`codex/simple-conversation`; the unpublished interval-feedback change is deferred.
+See Plan001's latest owner override. Full-plan and release validation remain open.

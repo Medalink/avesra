@@ -347,6 +347,8 @@ impl Drop for TtsStream {
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             runtime.spawn(async move {
                 let _permit = permit;
+                // Success acknowledges actual child reset/CUDA retirement or
+                // completed kill/reap; mere socket closure never releases this permit.
                 if client.cancel(request).await.is_err() {
                     tokio::time::sleep(remaining).await;
                 }

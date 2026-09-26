@@ -17,6 +17,8 @@ use std::{
 };
 use tauri::{Emitter, Manager};
 use uuid::Uuid;
+#[path = "voice_continuous.rs"]
+mod continuous;
 
 pub struct Worker(tauri::async_runtime::JoinHandle<()>);
 impl Drop for Worker {
@@ -28,9 +30,17 @@ pub fn spawn(app: tauri::AppHandle, record: PairingRecord, generation: u64) -> W
     Worker(tauri::async_runtime::spawn(async move {
         #[cfg(windows)]
         if avesra_windows::output_recording::enabled() {
+            let state = app.state::<Runtime>();
+            if let Ok(mut local) = state.local.lock() {
+                local.personal_voice.reason =
+                    "Microphone disabled for background output inspection.".into();
+                state.publish(&local);
+                let _ = app.emit("runtime-state", local.clone());
+            }
             return;
         }
         let mut restore_attempt = None;
+        let mut personal_playback = continuous::Playback::default();
         loop {
             tokio::time::sleep(Duration::from_millis(100)).await;
             let state = app.state::<Runtime>();
@@ -59,21 +69,24 @@ pub fn spawn(app: tauri::AppHandle, record: PairingRecord, generation: u64) -> W
                 && restore_attempt != Some((session.id, session.epoch))
             {
                 restore_attempt = Some((session.id, session.epoch));
-                if let Err(error) = crate::qualification::restore(&app, &record, session).await {
+                if let Err(error) =
+                    crate::qualification::start_personal(&app, record.clone(), session).await
+                {
+                    if let Ok(mut local) = state.local.lock() {
+                        local.personal_voice.reason = error.clone();
+                        state.publish(&local);
+                        let _ = app.emit("runtime-state", local.clone());
+                    }
                     let _ = app.emit(
                         "runtime-error",
-                        format!("Saved qualification was not restored: {error}"),
+                        format!("Personal voice unavailable: {error}"),
                     );
                 }
                 continue;
             }
             let ready = (|| {
                 let local = state.local.lock().ok()?;
-                if !local.capture_allowed()
-                    || !local.voice_ready
-                    || local.enrollment_capture
-                    || local.active_task
-                {
+                if !local.capture_allowed() || !local.voice_ready || local.enrollment_capture {
                     return None;
                 }
                 let session = (*state.acknowledged_session.lock().ok()?)?;
@@ -81,16 +94,30 @@ pub fn spawn(app: tauri::AppHandle, record: PairingRecord, generation: u64) -> W
                     return None;
                 }
                 let admission = state.qualification.admission(&state, &local)?;
-                let quiet = state.media.no_output(&local)?;
+                let quiet = if admission.kind == voice::AdmissionKind::Personal {
+                    None
+                } else {
+                    Some(state.media.no_output(&local)?)
+                };
                 Some((session, admission, quiet))
             })();
             let Some((session, admission, quiet)) = ready else {
                 continue;
             };
-            let Some(_voice_owner) = crate::notifications::voice_owner(&app) else {
-                continue;
-            };
             let work = async {
+                if admission.kind == voice::AdmissionKind::Personal {
+                    return continuous::run(
+                        &app,
+                        &record,
+                        session,
+                        &admission,
+                        &mut personal_playback,
+                    )
+                    .await;
+                }
+                let Some(_voice_owner) = crate::notifications::voice_owner(&app) else {
+                    return Ok(());
+                };
                 let observed = crate::connection::directedness::metadata(
                     &record,
                     session,
@@ -104,8 +131,18 @@ pub fn spawn(app: tauri::AppHandle, record: PairingRecord, generation: u64) -> W
                 if observed != admission.directed {
                     return Err("Directedness incarnation changed".into());
                 }
+                let quiet = quiet.ok_or("Quiet capture evidence missing")?;
                 if let Some(segment) = capture(&app, &record, session, &admission, &quiet).await? {
-                    process(&app, &record, session, &admission, quiet, segment).await?;
+                    process(
+                        &app,
+                        &record,
+                        session,
+                        &admission,
+                        InputProof::Quiet(quiet),
+                        segment,
+                        &mut continuous::Playback::default(),
+                    )
+                    .await?;
                 }
                 Ok::<_, String>(())
             };
@@ -114,7 +151,11 @@ pub fn spawn(app: tauri::AppHandle, record: PairingRecord, generation: u64) -> W
                 && state.connection_generation.load(Ordering::SeqCst) == generation
                 && local.capture_epoch == session.epoch
             {
+                state.qualification.suspend_personal(admission.session);
                 local.voice_ready = false;
+                local.personal_voice.state = avesra_core::state::PersonalVoicePhase::Unavailable;
+                local.personal_voice.reason =
+                    format!("Listening stopped: {error}. Unmute to revalidate and resume.");
                 local.capture_epoch = local.capture_epoch.saturating_add(1);
                 local.refresh();
                 state.publish(&local);
@@ -343,13 +384,26 @@ async fn capture(
         value = &mut produce => { value?; consume.await }
     }
 }
+enum InputProof {
+    Quiet(crate::media::NoOutput),
+    Personal(continuous::Evidence),
+}
+impl InputProof {
+    fn current(&self, state: &Runtime, local: &avesra_core::state::LocalState) -> bool {
+        match self {
+            Self::Quiet(value) => state.media.no_output_current(value, local),
+            Self::Personal(value) => value.known,
+        }
+    }
+}
 async fn process(
     app: &tauri::AppHandle,
     pairing: &PairingRecord,
     session: SessionIdentity,
     admission: &Admission,
-    quiet: crate::media::NoOutput,
+    proof: InputProof,
     segment: Completed,
+    playback: &mut continuous::Playback,
 ) -> Result<(), String> {
     current(app, session, admission)?;
     let id = segment.id();
@@ -359,7 +413,10 @@ async fn process(
     let samples = segment.samples();
     let voiced = segment.voiced_samples();
     let overlap = segment.overlapping_samples();
-    let clipped = segment.clipped_samples();
+    let clipped = match &proof {
+        InputProof::Personal(value) => segment.clipped_samples().max(value.clipped),
+        InputProof::Quiet(_) => segment.clipped_samples(),
+    };
     // Existing analysis backend has a one-second minimum; shorter segments
     // abstain rather than pad audio or weaken signal operating points.
     if samples < 16000 {
@@ -377,42 +434,50 @@ async fn process(
     if analysis.transcript.trim().is_empty() {
         return Ok(());
     }
-    let directed = crate::connection::directedness::classify(
-        pairing,
-        session,
-        id,
-        &context,
-        &analysis.transcript,
-        || current(app, session, admission),
-    )
-    .await?;
-    app.state::<Runtime>().performance.record(
-        crate::performance::Operation::Voice,
-        crate::performance::Stage::EndpointToDirectedness,
-        endpoint.elapsed(),
-        crate::performance::Outcome::Complete,
-    );
-    app.state::<Runtime>()
-        .qualification
-        .directed_current(admission.session, &directed.binding)?;
-    use avesra_contracts::directedness::Category;
-    let directed = match directed.category {
-        Category::Request | Category::FollowUp => voice::DirectedIntent::Directed {
-            adapter_revision: directed.binding.adapter_revision,
+    let learned_embedding = analysis.embedding.clone();
+    let directed = if admission.kind == voice::AdmissionKind::Personal {
+        voice::DirectedIntent::Personal {
             utterance: id,
             context: context.clone(),
-            kind: if matches!(directed.category, Category::Request) {
-                voice::DirectedKind::Request
-            } else {
-                voice::DirectedKind::FollowUp
+        }
+    } else {
+        let directed = crate::connection::directedness::classify(
+            pairing,
+            session,
+            id,
+            &context,
+            &analysis.transcript,
+            || current(app, session, admission),
+        )
+        .await?;
+        app.state::<Runtime>().performance.record(
+            crate::performance::Operation::Voice,
+            crate::performance::Stage::EndpointToDirectedness,
+            endpoint.elapsed(),
+            crate::performance::Outcome::Complete,
+        );
+        app.state::<Runtime>()
+            .qualification
+            .directed_current(admission.session, &directed.binding)?;
+        use avesra_contracts::directedness::Category;
+        match directed.category {
+            Category::Request | Category::FollowUp => voice::DirectedIntent::Directed {
+                adapter_revision: directed.binding.adapter_revision,
+                utterance: id,
+                context: context.clone(),
+                kind: if matches!(directed.category, Category::Request) {
+                    voice::DirectedKind::Request
+                } else {
+                    voice::DirectedKind::FollowUp
+                },
             },
-        },
-        Category::Rejected => voice::DirectedIntent::Rejected {
-            adapter_revision: directed.binding.adapter_revision,
-            utterance: id,
-            context: context.clone(),
-        },
-        Category::Unknown => voice::DirectedIntent::Unknown,
+            Category::Rejected => voice::DirectedIntent::Rejected {
+                adapter_revision: directed.binding.adapter_revision,
+                utterance: id,
+                context: context.clone(),
+            },
+            Category::Unknown => voice::DirectedIntent::Unknown,
+        }
     };
     let observation = voice::Observation {
         utterance: id,
@@ -420,7 +485,11 @@ async fn process(
         asr_revision: "ebe59e5a817142986528bbbee5dba8db7b38ed50".into(),
         speaker_revision: "0f99f2d0ebe89ac095bcc5903c4dd8f72b367286".into(),
         started,
-        completed: Instant::now(),
+        completed: if admission.kind == voice::AdmissionKind::Personal {
+            endpoint
+        } else {
+            Instant::now()
+        },
         transcript: analysis.transcript,
         embedding: analysis.embedding,
         signal: voice::SignalEvidence::Measured {
@@ -435,18 +504,27 @@ async fn process(
             context: context.clone(),
             detected: overlap > 0,
         },
-        echo: voice::AudioCondition::Measured {
-            adapter_revision: crate::qualification::OUTPUT_REVISION.into(),
-            utterance: id,
-            context: context.clone(),
-            detected: false,
+        echo: match &proof {
+            InputProof::Personal(value) => voice::AudioCondition::PersonalReference {
+                utterance: id,
+                context: context.clone(),
+                known: value.known,
+                output_overlap: value.output,
+                near_end: value.near_end,
+            },
+            InputProof::Quiet(_) => voice::AudioCondition::Measured {
+                adapter_revision: crate::qualification::OUTPUT_REVISION.into(),
+                utterance: id,
+                context: context.clone(),
+                detected: false,
+            },
         },
         directed,
     };
     let state = app.state::<Runtime>();
     let accepted = {
         let local = state.local.lock().map_err(|_| "Local state unavailable")?;
-        if !state.media.no_output_current(&quiet, &local) {
+        if !proof.current(&state, &local) {
             return Err("Assistant output changed before gate admission".into());
         }
         state
@@ -473,6 +551,7 @@ async fn process(
     let _caller = crate::output::Caller(withdrawn.clone());
     let authority_app = app.clone();
     let authority_context = context.clone();
+    let can_learn = matches!(&proof, InputProof::Personal(value) if !value.output && value.known);
     let receiver = state
         .effects
         .accept_conversation(
@@ -489,7 +568,7 @@ async fn process(
                     .local
                     .lock()
                     .map_err(|_| avesra_contracts::ErrorCode::Unavailable)?;
-                if !state.media.no_output_current(&quiet, &local) {
+                if !proof.current(&state, &local) {
                     return Err(avesra_contracts::ErrorCode::Stale);
                 }
                 state
@@ -522,6 +601,19 @@ async fn process(
         action_epoch: context.action_epoch,
         active: true,
     };
+    if admission.kind == voice::AdmissionKind::Personal {
+        playback.interrupt(app);
+        if can_learn
+            && let Some(embedding) = learned_embedding
+            && let Err(error) =
+                crate::qualification::learn_personal(app, &context, id, voiced, embedding).await
+        {
+            let _ = app.emit(
+                "runtime-error",
+                format!("Voice learning was not saved: {error}"),
+            );
+        }
+    }
     // This boundary owns an already durable turn. Failure here is not evidence
     // that speaker qualification failed, and must never replay that turn.
     let reply_result = async {
@@ -534,9 +626,18 @@ async fn process(
                 let _ = app.emit("runtime-error", message);
             }
             crate::tasks::AcceptedResult::Reply(reply) => {
+                if admission.kind == voice::AdmissionKind::Personal {
+                    playback
+                        .retire(app)
+                        .await
+                        .map_err(|error| (ReplyStage::Playback, error))?;
+                }
+                let output_session = current_output_session(app, session, admission)
+                    .await
+                    .map_err(|error| (ReplyStage::VoiceStatus, error))?;
                 let status = tokio::time::timeout(
                     Duration::from_secs(2),
-                    crate::connection::greeting_voice_status(pairing, session),
+                    crate::connection::greeting_voice_status(pairing, output_session),
                 )
                 .await
                 .map_err(|_| {
@@ -552,9 +653,13 @@ async fn process(
                     && status.selected == status.active_voice
                     && let Some(voice) = status.selected
                 {
-                    crate::speech::speak(app.clone(), *reply, voice)
-                        .await
-                        .map_err(|error| (ReplyStage::Playback, error))?;
+                    if admission.kind == voice::AdmissionKind::Personal {
+                        playback.start(app.clone(), *reply, voice);
+                    } else {
+                        crate::speech::speak(app.clone(), *reply, voice)
+                            .await
+                            .map_err(|error| (ReplyStage::Playback, error))?;
+                    }
                 } else {
                     return Err((
                         ReplyStage::VoiceStatus,
@@ -604,6 +709,37 @@ enum ReplyStage {
     Task,
     VoiceStatus,
     Playback,
+}
+async fn current_output_session(
+    app: &tauri::AppHandle,
+    expected: SessionIdentity,
+    admission: &Admission,
+) -> Result<SessionIdentity, String> {
+    let started = Instant::now();
+    loop {
+        current(app, expected, admission)?;
+        {
+            let state = app.state::<Runtime>();
+            let local = state.local.lock().map_err(|_| "Local state unavailable")?;
+            if let Some(ack) = *state
+                .acknowledged_session
+                .lock()
+                .map_err(|_| "Session unavailable")?
+                && ack.id == expected.id
+                && ack.device == expected.device
+                && ack.generation == expected.generation
+                && ack.epoch == expected.epoch
+                && ack.action_epoch == expected.action_epoch
+                && ack.playback_epoch == local.playback_epoch
+            {
+                return Ok(ack);
+            }
+        }
+        if started.elapsed() >= Duration::from_secs(2) {
+            return Err("Current output session acknowledgment expired".into());
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
 }
 impl ReplyStage {
     fn label(&self) -> &'static str {

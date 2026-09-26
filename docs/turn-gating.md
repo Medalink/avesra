@@ -1,5 +1,18 @@
 # Native accepted conversation boundary
 
+## Personal conversation policy
+
+The owner explicitly chose launch/listen/learn personal operation. Native Personal
+admission uses the [personal startup contract](enrollment.md#personal-conversation-startup-current-owner-directed-product-policy),
+not an invented qualification result. The gate accepts a distinct Personal intent
+only for its corresponding private profile kind, while retaining actual fresh
+ASR/embedding, signal, overlap, native output and exact session/actor checks.
+Greetings and short conversation continuations need no strict directedness model
+classification in this mode. Personal affinity and endpoint defaults are explicitly
+provisional. Other admission kinds retain their existing model classification,
+follow-up invitations and measured review. All modes use the same durable accepted
+conversation, planner, scope grants, protected approvals and normal speech output.
+
 ## Development admission and release qualification
 
 Following the owner's explicit shipping-policy revision, automatic personal
@@ -130,4 +143,11 @@ An accepted conversation token has private fields and is consumed once with a fr
 
 This token is pre-commit admission. The native effects owner calls the durable conversation transaction with a final current-context, profile and retained no-output check before accepted text reaches planning. The five-second freshness and capture-epoch checks apply before that boundary. After durable task acceptance, mic mute does not silently delete the task: it stays visible/cancellable and follows the durable controller's independent action authorization/cancellation policy.
 
-Current source connects measured endpoint PCM to ASR/speaker analysis, the live reasoner-backed directedness adapter, the qualified gate and durable accepted task dispatch. Actual owner-held-out evidence is still absent. The explicit playback trial supplies conservative native output-overlap rejection evidence, while normal capture defers during output. Acoustic replay/echo detection remains absent; unknown outcomes cannot satisfy negative coverage. Follow-up invitations also require a real accepted conversational invitation source and currently abstain. These are explicit remaining product/evidence gates, not passed M3 criteria.
+Current source connects measured endpoint PCM to ASR/speaker analysis, the live reasoner-backed directedness adapter, the qualified gate and durable accepted task dispatch. Actual owner-held-out evidence is still absent. The explicit playback trial supplies conservative native output-overlap rejection evidence, while non-Personal capture defers during output. Release-grade acoustic replay/echo qualification remains absent; Personal uses the provisional reference filter described below, and unknown outcomes cannot satisfy negative coverage. Follow-up invitations also require a real accepted conversational invitation source and currently abstain. These are explicit remaining product/evidence gates, not passed M3 criteria.
+# Continuous Personal input
+
+Personal mode owns the chosen microphone continuously while its native context is current, including reasoning and selected-output playback. Eight-second activity transport windows retire and reopen without resetting the microphone sequence, utterance owner, PCM timeline, or endpoint timestamps. A bounded queue retains at most one completed pending utterance; overload/expiry is reported, never replayed with a new timestamp. Analysis and actions remain serial; the previous spoken reply has a separate retained output owner and can be interrupted after a new actual owner-affine utterance is admitted.
+
+Personal postmix evidence is a distinct provisional gate input, never qualified echo-clean evidence. It covers the original captured span, requires known selected-output reference continuity, and requires a preexisting voice anchor plus non-echo residual when output overlaps. First-speaker learning and updates occur only without assistant-output overlap. The original raw clipping count remains in signal evidence even when filtering reduces its amplitude. Unknown reference abstains for that utterance while continuous capture continues. Only the selected input and Avesra's own selected-output postmix participate.
+
+Personal endpointing retains additional genuinely captured quiet if necessary to reach the analysis backend's one-second minimum span, counting only available real pre-roll. It never pads samples or changes the original endpoint clock. The initial incomplete utterance suppression remains: capture joining speech already in progress waits for a real quiet boundary.

@@ -163,7 +163,16 @@ class Driver:
             return {"outcome": "discarded"}
         raise ValueError("invalid_voice_operation")
 
-    def request(self, envelope, emit):
+    def retire_stream(self):
+        # Called only in the actual single model worker after request unwind.
+        if self.stream is not None:
+            self.stream.close()
+            self.stream = None
+        self.torch.cuda.synchronize()
+
+    def request(self, envelope, emit, cancelled=lambda: False):
+        from .cancellation import check
+        check(cancelled)
         if envelope["operation"] in {"create_voice", "voice_status", "select_voice", "clear_voice", "discard_voice", "preview_voice"}:
             return self.voice_request(envelope["operation"], envelope["payload"])
         if self.lane == "tts" and self.voices is not None:
@@ -176,7 +185,7 @@ class Driver:
                 raise ValueError("selected_voice_required")
             from .streaming_tts import synthesize
             selected = dict(self.selected_voice)
-            result = synthesize(self.model, self.prompt, self.torch, text(envelope["payload"]["text"], 512), envelope["deadline"], lambda chunk: emit(dict(chunk, voice=selected)))
+            result = synthesize(self.model, self.prompt, self.torch, text(envelope["payload"]["text"], 512), envelope["deadline"], lambda chunk: emit(dict(chunk, voice=selected)), cancelled)
             result["voice"] = selected
             return result
         if envelope["operation"] != "stream":
@@ -201,7 +210,7 @@ class Driver:
                 raise ValueError("stream_active")
             if self.lane == "activity":
                 from .streaming_activity import StreamingActivity
-                self.stream = StreamingActivity(self.model, self.torch, envelope["deadline"])
+                self.stream = StreamingActivity(self.model, self.torch, envelope["deadline"], cancelled)
             else:
                 self.stream = StreamingAsr(self.model, self.torch, envelope["deadline"])
         if self.stream is None:

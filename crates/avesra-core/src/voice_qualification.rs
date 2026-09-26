@@ -208,8 +208,8 @@ impl Report {
         profile.valid_until = Instant::now() + Duration::from_secs(12 * 3600);
         let report = Self {
             version: 2,
-            candidate: profile.candidate.id,
-            candidate_revision: profile.candidate.revision,
+            candidate: profile.candidate.as_ref().ok_or(ErrorCode::Malformed)?.id,
+            candidate_revision: profile.candidate_revision(),
             qualification: profile.qualification_revision,
             point,
             counts: [Count::default(); 9],
@@ -349,7 +349,8 @@ impl Qualification {
         Ok(Self {
             profile: QualifiedProfile {
                 kind: super::AdmissionKind::ReleaseQualified,
-                candidate,
+                candidate: Some(candidate),
+                personal: None,
                 actor: point.actor,
                 grant_revision: point.grant_revision,
                 qualification_revision: Uuid::new_v4(),
@@ -439,7 +440,7 @@ impl Qualification {
                     && *utterance == value.utterance
                     && context == current
             }
-            super::DirectedIntent::Unknown => false,
+            super::DirectedIntent::Unknown | super::DirectedIntent::Personal { .. } => false,
         };
         let signal_known = matches!(&value.signal, super::SignalEvidence::Measured {
             adapter_revision, voiced_samples, total_samples, clipped_samples,
@@ -544,8 +545,8 @@ impl Qualification {
         let profile = &self.profile;
         Ok(Report {
             version: 1,
-            candidate: profile.candidate.id,
-            candidate_revision: profile.candidate.revision,
+            candidate: profile.candidate.as_ref().ok_or(ErrorCode::Malformed)?.id,
+            candidate_revision: profile.candidate_revision(),
             qualification: profile.qualification_revision,
             point: OperatingPoint {
                 actor: profile.actor,

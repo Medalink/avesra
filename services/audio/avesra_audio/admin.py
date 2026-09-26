@@ -55,7 +55,7 @@ def main():
             revision = response["model_revision"]
             if not isinstance(revision, str) or len(revision) != 40 or any(c not in "0123456789abcdef" for c in revision):
                 raise RuntimeError("Invalid model revision")
-            if type(response["streaming"]) is not bool or (response["streaming"] and response["lane"] not in {"asr", "tts", "activity"}) or response["permission_authority"] is not False or type(response["busy"]) is not bool or response["cancellation"] != "terminate_process":
+            if type(response["streaming"]) is not bool or (response["streaming"] and response["lane"] not in {"asr", "tts", "activity"}) or response["permission_authority"] is not False or type(response["busy"]) is not bool or (response["cancellation"] not in {"terminate_process", "cooperative_reset_or_terminate"} or (response["cancellation"] == "cooperative_reset_or_terminate" and response["lane"] not in {"activity", "tts"})):
                 raise RuntimeError("Unexpected service capabilities")
             if type(response["successful_inferences"]) is not int or response["successful_inferences"] < 0:
                 raise RuntimeError("Invalid inference count")

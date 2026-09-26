@@ -59,6 +59,43 @@ pub(crate) fn identity(directory: &Path) -> Result<(Uuid, Uuid), ErrorCode> {
         status.revision.ok_or(ErrorCode::Denied)?,
     ))
 }
+/// Normal personal startup only, under the retained native owner coordinator.
+/// Existing or corrupt owners are never replaced by a voice or first-run guess.
+pub(crate) fn personal_identity(
+    directory: &Path,
+    authorize: &mut dyn FnMut() -> Result<(), ErrorCode>,
+) -> Result<(Uuid, Uuid), ErrorCode> {
+    let path = directory.join("owner.db");
+    if avesra_core::owner::load(&path)?.is_some() {
+        return identity(directory);
+    }
+    authorize()?;
+    let record = Record {
+        version: 1,
+        actor: Uuid::new_v4(),
+        revision: Uuid::new_v4(),
+        principal: avesra_windows::principal::current_user()?,
+    };
+    let protected = avesra_windows::credentials::protect(
+        &serde_json::to_vec(&record).map_err(|_| ErrorCode::Malformed)?,
+    )?;
+    avesra_core::owner::create(
+        &path,
+        &ProtectedOwner {
+            actor: record.actor,
+            revision: record.revision,
+            protected,
+        },
+        &mut || {
+            authorize()?;
+            if avesra_windows::principal::current_user()? != record.principal {
+                return Err(ErrorCode::Unauthenticated);
+            }
+            Ok(())
+        },
+    )?;
+    identity(directory)
+}
 pub fn matches_actor(directory: &Path, actor: Uuid) -> bool {
     read(&directory.join("owner.db")).is_ok_and(|v| v.actor == Some(actor))
 }
