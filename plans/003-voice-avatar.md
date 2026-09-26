@@ -2,12 +2,16 @@
 
 ## Status and intent
 
-- Status: PROPOSED (owner request, 2026-09-26). Nothing is implemented yet.
+- Status: IN PROGRESS (implementation explicitly authorized by the owner, 2026-09-26). Native avatar/portrait implementation and live proof are still outstanding; this is not a completion claim.
 - Priority: P2 product identity. Effort: M, staged. Risk: low to medium; it touches protected speaker storage and enrollment capture, not action authority.
 - Depends on: Plan 001's protected owner and enrollment flow (`docs/owner-identity.md`, `docs/enrollment.md`) and the People & Voice ID screen in the design mockups.
 - Owner request: generate a unique-to-the-user "avatar" graph and animation of their voice, built from their real voice. The same user must get the same avatar every time. Suggested starting point: have them say about 20 words.
 
 The avatar is a portrait, not a password. It makes the owner's voice identity visible and personal. It never authenticates anyone, grants anything or replaces the speaker check.
+
+## Owner delivery requirements (2026-09-26)
+
+The owner requires complete functional implementation, exact matching to the authoritative design mockups in the real app, actual evidence, and PRs as work proceeds. Compare matching states at the same scale. Simulated mock data must be replaced with actual native state, never copied as success evidence. Preserve the simple Personal conversation startup: optional portrait creation must not become a new prerequisite to talking. Instrument portrait capture/extraction/render preparation with bounded content-free timings, including failures/cancellation; biometric inputs and render parameters are excluded from metrics. Live capture and repeatability evidence remain unrun.
 
 ## The core problem: unique and reproducible pull in opposite directions
 
