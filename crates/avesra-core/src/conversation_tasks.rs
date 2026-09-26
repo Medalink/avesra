@@ -155,11 +155,15 @@ struct LegacyAppLink {
 }
 /// Native-only result retains unresolved authority for an explicit planner or clarification.
 pub enum TaskResolution {
-    Linked(LinkedTask),
+    Linked(Box<LinkedTask>),
     NeedsInput(DurableTurn),
 }
 #[derive(Serialize)]
 pub struct LinkedTask {
+    #[serde(skip)]
+    pub observation_reply: Option<super::planner::ObservationClaim>,
+    #[serde(skip)]
+    pub pending_approval: Option<Action>,
     pub turn: Uuid,
     pub task: Uuid,
     pub step: Uuid,
@@ -241,10 +245,34 @@ fn read_link(db: &Connection, turn: Uuid) -> Result<Option<Link>, ErrorCode> {
         || link.target.id() != link.action.target_id
         || link.target.operation() != link.action.payload.operation()
         || !match (&link.target, &link.action.payload) {
+            (TaskTarget::XReady { scope, account }, ActionPayload::OpenX { account: expected }) => {
+                account == expected && scope.actor.uuid() == link.actor
+            }
             (
                 TaskTarget::BrowserRead { scope },
                 ActionPayload::InspectBrowserProvider { provider },
             ) => scope.origin.as_str() == provider.origin() && scope.actor.uuid() == link.actor,
+            (
+                TaskTarget::Download {
+                    context,
+                    configuration: false,
+                },
+                ActionPayload::DiagnoseDownload {
+                    context: id,
+                    revision,
+                },
+            )
+            | (
+                TaskTarget::Download {
+                    context,
+                    configuration: true,
+                },
+                ActionPayload::FlushDownloadDns {
+                    context: id,
+                    revision,
+                    ..
+                },
+            ) => context.id == *id && context.revision == *revision && context.actor == link.actor,
             (TaskTarget::Vpn { profile }, ActionPayload::ConnectVpn { profile_id }) => {
                 profile.id == *profile_id && profile.actor == link.actor
             }
@@ -297,6 +325,8 @@ pub(super) fn linked(db: &Connection, record: &Record) -> Result<Option<LinkedTa
         return Err(ErrorCode::Malformed);
     }
     Ok(Some(LinkedTask {
+        observation_reply: None,
+        pending_approval: link.action.approval_id.map(|_| link.action.clone()),
         turn: record.id,
         task: link.action.task_id,
         step: link.action.step_id,
@@ -340,6 +370,17 @@ pub(crate) fn validate_dispatch(
     {
         return Err(ErrorCode::Stale);
     }
+    if let (
+        TaskTarget::Download {
+            context,
+            configuration: true,
+        },
+        ActionPayload::FlushDownloadDns { evidence, .. },
+    ) = (&link.target, &action.payload)
+        && crate::download::evidence(db, context, session, wall_time()?)? != *evidence
+    {
+        return Err(ErrorCode::Stale);
+    }
     Ok(())
 }
 fn phrase(text: &str) -> Result<String, ErrorCode> {
@@ -349,7 +390,11 @@ fn phrase(text: &str) -> Result<String, ErrorCode> {
     {
         return Err(ErrorCode::Unsupported);
     }
-    let text = text.trim_matches(' ').to_lowercase();
+    let text = text
+        .trim_matches(' ')
+        .trim_end_matches(['.', '!', '?'])
+        .trim_end_matches(' ')
+        .to_lowercase();
     let text = text
         .strip_prefix("avesra, ")
         .or_else(|| text.strip_prefix("avesra "))
@@ -394,6 +439,9 @@ pub struct TaskView {
     pub payload: ActionPayload,
     pub outcome: Option<avesra_contracts::Outcome>,
     pub diagnostic: Option<crate::diagnostics::Report>,
+    pub action_revision: Uuid,
+    pub expires_at_ms: u64,
+    pub download: Option<crate::download::Report>,
     pub vpn: Option<crate::vpn::Report>,
     pub created_ms: u64,
 }
@@ -404,7 +452,11 @@ fn volume_percent(text: &str) -> Option<u8> {
     {
         return None;
     }
-    let text = text.trim_matches(' ').to_ascii_lowercase();
+    let text = text
+        .trim_matches(' ')
+        .trim_end_matches(['.', '!', '?'])
+        .trim_end_matches(' ')
+        .to_ascii_lowercase();
     let text = text
         .strip_prefix("avesra, ")
         .or_else(|| text.strip_prefix("avesra "))
@@ -417,15 +469,39 @@ fn volume_percent(text: &str) -> Option<u8> {
     }
     number.parse::<u8>().ok().filter(|v| *v <= 100)
 }
+fn download_request(text: &str) -> Option<bool> {
+    let text = text
+        .trim_matches(' ')
+        .trim_end_matches(['.', '!', '?'])
+        .trim_end_matches(' ')
+        .to_ascii_lowercase();
+    let text = text
+        .strip_prefix("avesra, ")
+        .or_else(|| text.strip_prefix("avesra "))
+        .unwrap_or(&text);
+    match text {
+        "diagnose download" => Some(false),
+        "clear download dns cache" => Some(true),
+        _ => None,
+    }
+}
 fn vpn_request(text: &str) -> bool {
-    let text = text.trim_matches(' ').to_ascii_lowercase();
+    let text = text
+        .trim_matches(' ')
+        .trim_end_matches(['.', '!', '?'])
+        .trim_end_matches(' ')
+        .to_ascii_lowercase();
     matches!(
         text.as_str(),
         "connect work vpn" | "avesra connect work vpn" | "avesra, connect work vpn"
     )
 }
 fn diagnostic_request(text: &str) -> Option<crate::diagnostics::Catalog> {
-    let text = text.trim_matches(' ').to_ascii_lowercase();
+    let text = text
+        .trim_matches(' ')
+        .trim_end_matches(['.', '!', '?'])
+        .trim_end_matches(' ')
+        .to_ascii_lowercase();
     let text = text
         .strip_prefix("avesra, ")
         .or_else(|| text.strip_prefix("avesra "))
@@ -522,6 +598,29 @@ impl Store {
             } else {
                 None
             };
+            let download = if matches!(link.action.payload, ActionPayload::DiagnoseDownload { .. })
+            {
+                let row:Option<(Vec<u8>,String)>=self.connection.query_row("SELECT substr(CAST(o.body AS BLOB),1,65537),f.outcome FROM native_observations o JOIN native_finalizations f ON f.dispatch_id=o.dispatch_id AND f.action_revision=o.action_revision AND f.target_id=o.target_id AND f.at_ms=o.at_ms WHERE f.actor_id=?1 AND f.action_revision=?2",params![actor.to_string(),link.action.revision.to_string()],|r|Ok((r.get(0)?,r.get(1)?))).optional().map_err(|_|ErrorCode::Storage)?;
+                match row {
+                    Some((body, outcome)) if body.len() <= 65536 => {
+                        let observation: crate::execution::EffectObservation =
+                            serde_json::from_slice(&body).map_err(|_| ErrorCode::Malformed)?;
+                        observation.validate(
+                            &link.action,
+                            serde_json::from_str(&outcome).map_err(|_| ErrorCode::Malformed)?,
+                        )?;
+                        let crate::execution::EffectObservation::Download { report } = observation
+                        else {
+                            return Err(ErrorCode::Malformed);
+                        };
+                        Some(*report)
+                    }
+                    Some(_) => return Err(ErrorCode::Malformed),
+                    None => None,
+                }
+            } else {
+                None
+            };
             let vpn = if matches!(link.action.payload, ActionPayload::ConnectVpn { .. }) {
                 let row:Option<(Vec<u8>,String)>=self.connection.query_row("SELECT substr(CAST(o.body AS BLOB),1,8193),f.outcome FROM native_observations o JOIN native_finalizations f ON f.dispatch_id=o.dispatch_id AND f.action_revision=o.action_revision AND f.target_id=o.target_id AND f.at_ms=o.at_ms WHERE f.actor_id=?1 AND f.action_revision=?2",params![actor.to_string(),link.action.revision.to_string()],|r|Ok((r.get(0)?,r.get(1)?))).optional().map_err(|_|ErrorCode::Storage)?;
                 match row {
@@ -551,6 +650,9 @@ impl Store {
                 None
             };
             result.push(TaskView {
+                action_revision: link.action.revision,
+                expires_at_ms: link.action.expires_at_ms,
+                download,
                 cancellation: super::CancellationTarget {
                     actor,
                     source: record.source,
@@ -654,7 +756,41 @@ impl Store {
         } else {
             None
         };
-        let (target, payload, name) = if let Some(origin) = read_origin {
+        let open_x = matches!(
+            record
+                .text
+                .trim()
+                .trim_end_matches('.')
+                .to_ascii_lowercase()
+                .as_str(),
+            "open x"
+                | "open x so i can post about my new app"
+                | "avesra, open x"
+                | "avesra, open x so i can post about my new app"
+        );
+        let (target, payload, name) = if open_x {
+            let matches: Vec<_> = permissions
+                .iter()
+                .filter(|p| {
+                    !p.revoked
+                        && matches!(&p.permission.target,
+                TaskTarget::XReady { scope, .. } if scope.actor.uuid() == record.actor)
+                })
+                .collect();
+            if matches.len() != 1 {
+                return Ok(TaskResolution::NeedsInput(request.turn));
+            }
+            let TaskTarget::XReady { account, .. } = &matches[0].permission.target else {
+                return Err(ErrorCode::Malformed);
+            };
+            (
+                matches[0].permission.target.clone(),
+                ActionPayload::OpenX {
+                    account: account.clone(),
+                },
+                "x".to_owned(),
+            )
+        } else if let Some(origin) = read_origin {
             let matches:Vec<_>=permissions.iter().filter(|p|!p.revoked && matches!(&p.permission.target,TaskTarget::BrowserRead{scope} if scope.origin==origin && scope.actor.uuid()==record.actor)).collect();
             if matches.len() != 1 {
                 return Ok(TaskResolution::NeedsInput(request.turn));
@@ -703,6 +839,54 @@ impl Store {
                 entry.source.payload.clone(),
                 matches[0].permission.name.clone(),
             )
+        } else if download_request(&record.text) == Some(false)
+            && !permissions.iter().any(|p| {
+                !p.revoked
+                    && matches!(
+                        p.permission.target,
+                        TaskTarget::Download {
+                            configuration: false,
+                            ..
+                        }
+                    )
+            })
+        {
+            (
+                TaskTarget::Diagnostic {
+                    catalog: crate::diagnostics::Catalog::HostResources,
+                },
+                ActionPayload::Diagnostic {
+                    catalog_entry: crate::diagnostics::HOST,
+                },
+                crate::diagnostics::Catalog::HostResources.name().to_owned(),
+            )
+        } else if let Some(configuration) = download_request(&record.text) {
+            let candidates:Vec<_>=permissions.iter().filter(|p|!p.revoked && matches!(&p.permission.target,TaskTarget::Download{context,configuration:c} if *c==configuration && context.actor==record.actor)).collect();
+            if candidates.len() != 1 {
+                return Ok(TaskResolution::NeedsInput(request.turn));
+            }
+            let target = candidates[0].permission.target.clone();
+            let TaskTarget::Download { context, .. } = &target else {
+                return Err(ErrorCode::Malformed);
+            };
+            let payload = if configuration {
+                ActionPayload::FlushDownloadDns {
+                    context: context.id,
+                    revision: context.revision,
+                    evidence: crate::download::evidence(
+                        &self.connection,
+                        context,
+                        &request.session,
+                        wall_time()?,
+                    )?,
+                }
+            } else {
+                ActionPayload::DiagnoseDownload {
+                    context: context.id,
+                    revision: context.revision,
+                }
+            };
+            (target, payload, candidates[0].permission.name.clone())
         } else if vpn_request(&record.text) {
             let matches:Vec<_>=permissions.iter().filter(|p|!p.revoked && matches!(&p.permission.target,TaskTarget::Vpn{profile} if profile.actor==record.actor)).collect();
             if matches.len() != 1 {
@@ -789,7 +973,7 @@ impl Store {
             )
             .map_err(|_| ErrorCode::Storage)?;
         }
-        let result = linked(&tx, &record)?.ok_or(ErrorCode::Malformed)?;
+        let mut result = linked(&tx, &record)?.ok_or(ErrorCode::Malformed)?;
         request.current()?;
         authorize(&TaskAuthority {
             session: &request.session,
@@ -801,7 +985,13 @@ impl Store {
         request.current()?;
         link.action.validate(wall_time()?)?;
         tx.commit().map_err(|_| ErrorCode::Storage)?;
-        Ok(TaskResolution::Linked(result))
+        result.observation_reply = super::planner::ObservationClaim::from_live_resolution(
+            &record,
+            link.action,
+            request.session,
+            request.started,
+        );
+        Ok(TaskResolution::Linked(Box::new(result)))
     }
 }
 
@@ -847,8 +1037,12 @@ fn insert_link(
         grant_id,
         revision: Uuid::new_v4(),
         intent_revision: Uuid::new_v4(),
+        approval_id: if matches!(payload, ActionPayload::FlushDownloadDns { .. }) {
+            Some(Uuid::new_v4())
+        } else {
+            None
+        },
         payload,
-        approval_id: None,
         issued_at_ms: now,
         expires_at_ms: now
             .checked_add(budget_ms.min(avesra_contracts::MAX_ACTION_AGE_MS))
@@ -860,7 +1054,7 @@ fn insert_link(
     }
     let mut grant: Grant = serde_json::from_slice(&body).map_err(|_| ErrorCode::Malformed)?;
     grant.revoked |= revoked;
-    PolicyContext {
+    let policy = PolicyContext {
         actor_id: record.actor,
         accepted_task_id: action.task_id,
         intent_revision: action.intent_revision,
@@ -871,9 +1065,33 @@ fn insert_link(
         explicit_submit: false,
         session_active: session.active,
     }
-    .authorize(&action)?;
+    .authorize(&action);
+    if action.approval_id.is_some() {
+        if policy != Err(ErrorCode::ApprovalRequired) {
+            return Err(ErrorCode::Denied);
+        }
+        let TaskTarget::Download {
+            context,
+            configuration: true,
+        } = &target
+        else {
+            return Err(ErrorCode::Denied);
+        };
+        let ActionPayload::FlushDownloadDns { evidence, .. } = &action.payload else {
+            return Err(ErrorCode::Denied);
+        };
+        if crate::download::evidence(tx, context, session, now)? != *evidence {
+            return Err(ErrorCode::Stale);
+        }
+    } else {
+        policy?;
+    }
     if tx.execute("UPDATE accepted_conversations SET state='planning' WHERE id=?1 AND revision=?2 AND actor=?3 AND state=?4",params![record.id.to_string(),record.revision.to_string(),record.actor.to_string(), previous_state]).map_err(|_|ErrorCode::Storage)?!=1{return Err(ErrorCode::Stale);}
-    let queued = encode(&TaskState::Queued)?;
+    let queued = encode(&if action.approval_id.is_some() {
+        TaskState::AwaitingApproval
+    } else {
+        TaskState::Queued
+    })?;
     tx.execute(
         "INSERT INTO tasks(id,actor_id,state,updated_ms) VALUES(?1,?2,?3,?4)",
         params![
@@ -1109,5 +1327,112 @@ fn proposal_grounded(text: &str, proposal: &avesra_contracts::planner::Proposal)
                     .parse::<u8>()
                     .is_ok_and(|value| value <= 100 && value == *percent)
         }
+    }
+}
+
+impl Store {
+    pub fn approve_download_action(
+        &mut self,
+        revision: Uuid,
+        session: &DispatchSession,
+        authorize: &mut dyn FnMut() -> Result<(), ErrorCode>,
+    ) -> Result<(), ErrorCode> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| ErrorCode::Storage)?;
+        let turn:String=tx.query_row("SELECT c.turn FROM conversation_tasks c JOIN steps s ON s.task_id=c.task JOIN action_heads h ON h.step_id=s.id WHERE h.revision=?1",[revision.to_string()],|r|r.get(0)).map_err(|_|ErrorCode::Stale)?;
+        let link = read_link(
+            &tx,
+            Uuid::parse_str(&turn).map_err(|_| ErrorCode::Malformed)?,
+        )?
+        .ok_or(ErrorCode::Stale)?;
+        let action = &link.action;
+        if action.revision != revision
+            || !matches!(action.payload, ActionPayload::FlushDownloadDns { .. })
+        {
+            return Err(ErrorCode::Denied);
+        }
+        validate_dispatch(&tx, action, session)?;
+        let pending:bool=tx.query_row("SELECT s.state='\"awaiting_approval\"' AND i.sealed AND NOT i.cancel_requested AND NOT a.cancel_requested AND a.dispatch_id IS NULL FROM steps s JOIN accepted_intents i ON i.task_id=s.task_id JOIN action_revisions a ON a.step_id=s.id WHERE a.revision=?1",[revision.to_string()],|r|r.get(0)).map_err(|_|ErrorCode::Storage)?;
+        if !pending {
+            return Err(ErrorCode::Stale);
+        }
+        let (body, revoked): (Vec<u8>, bool) = tx
+            .query_row(
+                "SELECT substr(CAST(body AS BLOB),1,8193),revoked FROM ledger_grants WHERE id=?1",
+                [action.grant_id.to_string()],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .map_err(|_| ErrorCode::Denied)?;
+        if body.len() > 8192 {
+            return Err(ErrorCode::Malformed);
+        }
+        let mut grant: Grant = serde_json::from_slice(&body).map_err(|_| ErrorCode::Malformed)?;
+        grant.revoked |= revoked;
+        let now = wall_time()?;
+        let approval = crate::policy::Approval {
+            id: action.approval_id.ok_or(ErrorCode::ApprovalRequired)?,
+            actor_id: action.actor_id,
+            task_id: action.task_id,
+            step_id: action.step_id,
+            target_id: action.target_id,
+            action_revision: action.revision,
+            intent_revision: action.intent_revision,
+            payload: action.payload.clone(),
+            expires_at_ms: action.expires_at_ms,
+            authenticated_local: true,
+        };
+        PolicyContext {
+            actor_id: session.actor_id,
+            accepted_task_id: action.task_id,
+            intent_revision: action.intent_revision,
+            permitted_payloads: std::slice::from_ref(&action.payload),
+            now_ms: now,
+            grant: &grant,
+            approval: Some(&approval),
+            explicit_submit: false,
+            session_active: session.active,
+        }
+        .authorize(action)?;
+        tx.execute(
+            "INSERT INTO ledger_approvals(id,action_revision,body) VALUES(?1,?2,?3)",
+            params![
+                approval.id.to_string(),
+                revision.to_string(),
+                encode(&approval)?
+            ],
+        )
+        .map_err(|_| ErrorCode::Storage)?;
+        tx.execute(
+            "UPDATE steps SET state=?2,updated_ms=?3 WHERE id=?1",
+            params![
+                action.step_id.to_string(),
+                encode(&TaskState::Queued)?,
+                now as i64
+            ],
+        )
+        .map_err(|_| ErrorCode::Storage)?;
+        tx.execute(
+            "UPDATE tasks SET state=?2,updated_ms=?3 WHERE id=?1",
+            params![
+                action.task_id.to_string(),
+                encode(&TaskState::Queued)?,
+                now as i64
+            ],
+        )
+        .map_err(|_| ErrorCode::Storage)?;
+        tx.execute(
+            "INSERT INTO ledger_events(task_id,step_id,kind,at_ms) VALUES(?1,?2,'approved',?3)",
+            params![
+                action.task_id.to_string(),
+                action.step_id.to_string(),
+                now as i64
+            ],
+        )
+        .map_err(|_| ErrorCode::Storage)?;
+        action.validate(wall_time()?)?;
+        authorize()?;
+        tx.commit().map_err(|_| ErrorCode::Storage)
     }
 }

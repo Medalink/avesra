@@ -178,6 +178,9 @@ pub enum ActionPayload {
     InspectBrowserProvider {
         provider: browser::provider::Provider,
     },
+    OpenX {
+        account: String,
+    },
     FillPrompt {
         app_id: Uuid,
         project_id: Uuid,
@@ -190,6 +193,15 @@ pub enum ActionPayload {
     },
     Diagnostic {
         catalog_entry: Uuid,
+    },
+    DiagnoseDownload {
+        context: Uuid,
+        revision: Uuid,
+    },
+    FlushDownloadDns {
+        context: Uuid,
+        revision: Uuid,
+        evidence: Uuid,
     },
     ConnectVpn {
         profile_id: Uuid,
@@ -211,9 +223,12 @@ impl ActionPayload {
             Self::Navigate { .. } => Operation::Navigate,
             Self::ReadPage { .. } => Operation::ReadPage,
             Self::InspectBrowserProvider { .. } => Operation::ReadPage,
+            Self::OpenX { .. } => Operation::Navigate,
             Self::FillPrompt { .. } => Operation::FillPrompt,
             Self::SubmitPrompt { .. } => Operation::SubmitPrompt,
             Self::Diagnostic { .. } => Operation::Diagnostic,
+            Self::DiagnoseDownload { .. } => Operation::Diagnostic,
+            Self::FlushDownloadDns { .. } => Operation::ChangeConfiguration,
             Self::ConnectVpn { .. } => Operation::ConnectVpn,
             Self::ApprovedProposal { operation, .. } => *operation,
         }
@@ -228,6 +243,7 @@ impl ActionPayload {
                 message_limit,
             } => canonical_https(origin, true) && (1..=100).contains(message_limit),
             Self::InspectBrowserProvider { .. } => true,
+            Self::OpenX { account } => browser::provider::x_account(account),
             Self::FillPrompt {
                 app_id,
                 project_id,
@@ -246,6 +262,12 @@ impl ActionPayload {
                     && expected_text.len() <= 16_384
             }
             Self::Diagnostic { catalog_entry } => !catalog_entry.is_nil(),
+            Self::DiagnoseDownload { context, revision } => !context.is_nil() && !revision.is_nil(),
+            Self::FlushDownloadDns {
+                context,
+                revision,
+                evidence,
+            } => !context.is_nil() && !revision.is_nil() && !evidence.is_nil(),
             Self::ConnectVpn { profile_id } => !profile_id.is_nil(),
             Self::ApprovedProposal {
                 operation,
@@ -451,6 +473,8 @@ impl Envelope {
 #[serde(rename_all = "snake_case")]
 pub enum Outcome {
     Success,
+    /// Native evidence proves the exact requested state without a write.
+    AlreadySatisfied,
     Failed,
     NeedsInput,
     Cancelled,

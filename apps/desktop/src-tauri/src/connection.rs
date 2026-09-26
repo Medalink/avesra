@@ -88,6 +88,69 @@ pub async fn actor_operation(
         .map_err(|_| "Stale actor reply")?;
     Ok(reply)
 }
+pub async fn trace_query(
+    record: &PairingRecord,
+    request: &avesra_core::trace::Query,
+) -> Result<avesra_core::trace::Remote, String> {
+    request.validate().map_err(|_| "Invalid trace query")?;
+    let mut response = actor_client(record, 7)?
+        .post(
+            endpoint(&record.url)?
+                .join("traces")
+                .map_err(|_| "Trace endpoint unavailable")?,
+        )
+        .bearer_auth(&record.credential)
+        .json(request)
+        .send()
+        .await
+        .map_err(|_| "Controller traces unavailable")?;
+    if !response.status().is_success() {
+        return Err("Controller traces unavailable or registration changed".into());
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| "Trace reply interrupted")?
+    {
+        if bytes.len() + chunk.len() > 8 * 1024 * 1024 {
+            return Err("Trace reply exceeds bound".into());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    let reply: avesra_core::trace::Remote =
+        serde_json::from_slice(&bytes).map_err(|_| "Invalid trace reply")?;
+    reply
+        .binding
+        .validate()
+        .map_err(|_| "Invalid trace binding")?;
+    reply
+        .snapshot
+        .validate(
+            avesra_core::trace::Host::Controller,
+            request.actor,
+            record.device_id,
+            request.turn,
+        )
+        .map_err(|_| "Invalid controller trace metadata")?;
+    if reply.request != request.request
+        || reply.binding.revoked
+        || reply.binding.device != record.device_id
+        || reply.binding.actor != request.actor
+        || reply.binding.owner_revision != request.owner_revision
+        || reply.binding.registered_by != request.registered_by
+        || reply.snapshot.version != 1
+        || reply.snapshot.records.len() > 2048
+        || reply.snapshot.records.iter().any(|r| {
+            r.link.actor != request.actor
+                || r.link.device != record.device_id
+                || request.turn.is_some_and(|id| r.link.turn != id)
+        })
+    {
+        return Err("Trace reply context changed".into());
+    }
+    Ok(reply)
+}
 pub async fn actor_cancel(
     record: &PairingRecord,
     request: &avesra_contracts::actors::Cancel,

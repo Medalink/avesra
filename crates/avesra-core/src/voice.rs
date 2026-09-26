@@ -122,7 +122,7 @@ pub struct QualifiedProfile {
     endpoint_policy: utterance::Policy,
     minimum_voiced_samples: u32,
     maximum_clipped_fraction: f32,
-    valid_until: Instant,
+    valid_until: Option<Instant>,
 }
 impl QualifiedProfile {
     pub fn kind(&self) -> AdmissionKind {
@@ -147,7 +147,10 @@ impl QualifiedProfile {
         self.endpoint_policy.clone()
     }
     pub fn valid(&self) -> bool {
-        Instant::now() < self.valid_until
+        match self.valid_until {
+            Some(until) => Instant::now() < until,
+            None => self.kind == AdmissionKind::Personal,
+        }
     }
     fn microphone(&self) -> &str {
         self.candidate.as_ref().map_or_else(
@@ -267,7 +270,7 @@ impl AcceptedConversation {
             && self.qualification_revision == profile.qualification_revision
             && context.grant_revision == Some(profile.grant_revision)
             && context.actor == Some(profile.actor)
-            && Instant::now() < profile.valid_until
+            && profile.valid()
             && self.accepted.elapsed() < Duration::from_secs(5)
     }
     pub fn invite_follow_up(
@@ -386,7 +389,7 @@ impl TurnGate {
             || profile.microphone() != current.microphone
             || profile.speaker_revision() != observation.speaker_revision
             || profile.asr_revision != observation.asr_revision
-            || now >= profile.valid_until
+            || !profile.valid()
             || !profile.threshold.is_finite()
             || !(-1.0..=1.0).contains(&profile.threshold)
             || !profile.held_out_margin.is_finite()

@@ -335,11 +335,20 @@ impl Driver {
             messages.push(serde_json::json!({"role":"assistant", "content":content}));
         }
         messages.push(current);
-        self.generate(body, request.remaining_ms, admitted, authority, true)
-            .await?
-            .stream
-            .ok_or(ErrorCode::Unavailable)?
-            .response()
+        self.generate(
+            body,
+            request.remaining_ms,
+            admitted,
+            authority,
+            (
+                true,
+                Some(avesra_core::trace::Link::planner(&request.context)),
+            ),
+        )
+        .await?
+        .stream
+        .ok_or(ErrorCode::Unavailable)?
+        .response()
     }
     pub async fn directedness(
         self: &Arc<Self>,
@@ -366,7 +375,7 @@ impl Driver {
                 request.remaining_ms,
                 admitted,
                 authority,
-                request.utterance().is_some(),
+                (request.utterance().is_some(), None),
             )
             .await?;
         let category = generated
@@ -421,8 +430,9 @@ impl Driver {
         remaining_ms: u64,
         admitted: Instant,
         authority: Authorization,
-        infer: bool,
+        mode: (bool, Option<avesra_core::trace::Link>),
     ) -> Result<Generated, ErrorCode> {
+        let (infer, trace) = mode;
         if admitted > Instant::now() {
             return Err(ErrorCode::Denied);
         }
@@ -438,142 +448,172 @@ impl Driver {
         let caller = Caller(Arc::new(AtomicBool::new(true)));
         let present = caller.0.clone();
         let driver = self.clone();
+        let queued = Instant::now();
         let result = tokio::spawn(async move {
-            let _permit = permit;
-            left(deadline)?;
-            if !present.load(Ordering::SeqCst) {
-                return Err(ErrorCode::Stale);
-            }
-            authorize(&authority, deadline).await?;
-            let path = driver.config.credential_file.clone();
-            let (key, inference_key) = tokio::task::spawn_blocking(move || {
-                Ok::<_, ErrorCode>((
-                    credential(&path, "LOCAL_STUDIO_API_KEY=")?,
-                    credential(&path, "INFERENCE_API_KEY=")?,
-                ))
-            })
-            .await
-            .map_err(|_| ErrorCode::Unavailable)??;
-            left(deadline)?;
-            if !present.load(Ordering::SeqCst) {
-                return Err(ErrorCode::Stale);
-            }
-            let incarnation = driver.metadata(&key, deadline).await?;
-            let fingerprint = incarnation.fingerprint()?;
-            let container = incarnation.container_id().to_owned();
-            let observed = driver
-                .observe(
-                    &container,
-                    &inference_key,
-                    body.clone(),
-                    None,
-                    false,
-                    deadline,
-                )
-                .await?;
-            if observed.stream.is_some() {
-                return Err(ErrorCode::Malformed);
-            }
-            let qualification = Arc::new(QualifiedDeployment {
-                config: driver.digest,
-                incarnation: fingerprint,
-                artifact_revision: driver.config.artifact_revision.clone(),
-                model: driver.config.expected.model.clone(),
-                engine: observed.identity,
-                artifact: observed.artifact,
-                quality: observed.quality,
-                container,
-                issued: admitted,
+            let span = trace.map(|link| {
+                let mut span =
+                    avesra_core::trace::begin(link, avesra_core::trace::Stage::Reasoning);
+                span.queued(queued);
+                span
             });
-            // Refresh owner liveness after tokenizer I/O without renewing the
-            // qualification or original accepted request deadline.
-            let incarnation = driver.metadata(&key, deadline).await?;
-            if incarnation.fingerprint()? != qualification.incarnation
-                || !qualification.valid(&driver)
-                || !present.load(Ordering::SeqCst)
-            {
-                return Err(ErrorCode::Stale);
-            }
-            if !infer {
+            let result = async {
+                let _permit = permit;
+                left(deadline)?;
+                if !present.load(Ordering::SeqCst) {
+                    return Err(ErrorCode::Stale);
+                }
+                authorize(&authority, deadline).await?;
+                let path = driver.config.credential_file.clone();
+                let (key, inference_key) = tokio::task::spawn_blocking(move || {
+                    Ok::<_, ErrorCode>((
+                        credential(&path, "LOCAL_STUDIO_API_KEY=")?,
+                        credential(&path, "INFERENCE_API_KEY=")?,
+                    ))
+                })
+                .await
+                .map_err(|_| ErrorCode::Unavailable)??;
+                left(deadline)?;
+                if !present.load(Ordering::SeqCst) {
+                    return Err(ErrorCode::Stale);
+                }
+                let incarnation = driver.metadata(&key, deadline).await?;
+                let fingerprint = incarnation.fingerprint()?;
+                let container = incarnation.container_id().to_owned();
+                let observed = driver
+                    .observe(
+                        &container,
+                        &inference_key,
+                        body.clone(),
+                        None,
+                        false,
+                        deadline,
+                    )
+                    .await?;
+                if observed.stream.is_some() {
+                    return Err(ErrorCode::Malformed);
+                }
+                let qualification = Arc::new(QualifiedDeployment {
+                    config: driver.digest,
+                    incarnation: fingerprint,
+                    artifact_revision: driver.config.artifact_revision.clone(),
+                    model: driver.config.expected.model.clone(),
+                    engine: observed.identity,
+                    artifact: observed.artifact,
+                    quality: observed.quality,
+                    container,
+                    issued: admitted,
+                });
+                // Refresh owner liveness after tokenizer I/O without renewing the
+                // qualification or original accepted request deadline.
+                let incarnation = driver.metadata(&key, deadline).await?;
+                if incarnation.fingerprint()? != qualification.incarnation
+                    || !qualification.valid(&driver)
+                    || !present.load(Ordering::SeqCst)
+                {
+                    return Err(ErrorCode::Stale);
+                }
+                if !infer {
+                    authorize(&authority, deadline).await?;
+                    if !present.load(Ordering::SeqCst) || !qualification.valid(&driver) {
+                        return Err(ErrorCode::Stale);
+                    }
+                    return Ok(Generated {
+                        stream: None,
+                        artifact: qualification.artifact_revision.clone(),
+                        engine: qualification.observed_incarnation(),
+                        quality: qualification.quality.clone(),
+                    });
+                }
+                let mut jobs = driver
+                    .jobs
+                    .clone()
+                    .try_lock_owned()
+                    .map_err(|_| ErrorCode::Unavailable)?;
+                let write_qualification = qualification.clone();
+                let write_present = present.clone();
+                let write_driver = driver.clone();
+                let job = tokio::task::spawn_blocking(move || {
+                    let lease = jobs.begin(&incarnation, &mut || {
+                        left(deadline)?;
+                        if !write_present.load(Ordering::SeqCst)
+                            || !write_qualification.valid(&write_driver)
+                        {
+                            return Err(ErrorCode::Stale);
+                        }
+                        Ok(())
+                    })?;
+                    Ok::<_, ErrorCode>((jobs, lease))
+                })
+                .await
+                .map_err(|_| ErrorCode::Unavailable)??;
+                let (mut jobs, lease) = job;
+                let private_span = trace.map(|link| {
+                    let mut span = avesra_core::trace::begin(
+                        link.child(lease.request()),
+                        avesra_core::trace::Stage::PrivateReasoning,
+                    );
+                    span.deployment(avesra_core::trace::Deployment::observed(
+                        &qualification.artifact_revision,
+                        "",
+                        &hex::encode(qualification.config),
+                    ));
+                    span
+                });
+                // Persisted ownership precedes the first possible model send. Any
+                // subsequent early exit conservatively retains the blocking row.
+                let authorized = authorize(&authority, deadline).await;
+                let stream = if authorized.is_ok()
+                    && qualification.valid(&driver)
+                    && present.load(Ordering::SeqCst)
+                    && left(deadline).is_ok()
+                {
+                    driver
+                        .stream(&inference_key, &qualification, &lease, body, deadline)
+                        .await
+                } else {
+                    Err(ErrorCode::Stale)
+                };
+                let completed = tokio::task::spawn_blocking(move || match stream {
+                    Ok(stream) => jobs.complete(lease, stream),
+                    Err(error) => {
+                        jobs.uncertain(lease)?;
+                        Err(error)
+                    }
+                })
+                .await
+                .map_err(|_| ErrorCode::Unavailable)?;
+                if let Some(span) = private_span {
+                    span.result(&completed);
+                }
+                let completed = completed?;
+                left(deadline)?;
+                if !present.load(Ordering::SeqCst) {
+                    return Err(ErrorCode::Stale);
+                }
+                let observed = driver.metadata(&key, deadline).await?;
+                if observed.fingerprint()? != qualification.incarnation
+                    || !qualification.valid(&driver)
+                    || !present.load(Ordering::SeqCst)
+                {
+                    return Err(ErrorCode::Stale);
+                }
                 authorize(&authority, deadline).await?;
                 if !present.load(Ordering::SeqCst) || !qualification.valid(&driver) {
                     return Err(ErrorCode::Stale);
                 }
-                return Ok(Generated {
-                    stream: None,
+                left(deadline)?;
+                Ok(Generated {
+                    stream: Some(completed),
                     artifact: qualification.artifact_revision.clone(),
                     engine: qualification.observed_incarnation(),
                     quality: qualification.quality.clone(),
-                });
+                })
             }
-            let mut jobs = driver
-                .jobs
-                .clone()
-                .try_lock_owned()
-                .map_err(|_| ErrorCode::Unavailable)?;
-            let write_qualification = qualification.clone();
-            let write_present = present.clone();
-            let write_driver = driver.clone();
-            let job = tokio::task::spawn_blocking(move || {
-                let lease = jobs.begin(&incarnation, &mut || {
-                    left(deadline)?;
-                    if !write_present.load(Ordering::SeqCst)
-                        || !write_qualification.valid(&write_driver)
-                    {
-                        return Err(ErrorCode::Stale);
-                    }
-                    Ok(())
-                })?;
-                Ok::<_, ErrorCode>((jobs, lease))
-            })
-            .await
-            .map_err(|_| ErrorCode::Unavailable)??;
-            let (mut jobs, lease) = job;
-            // Persisted ownership precedes the first possible model send. Any
-            // subsequent early exit conservatively retains the blocking row.
-            let authorized = authorize(&authority, deadline).await;
-            let stream = if authorized.is_ok()
-                && qualification.valid(&driver)
-                && present.load(Ordering::SeqCst)
-                && left(deadline).is_ok()
-            {
-                driver
-                    .stream(&inference_key, &qualification, &lease, body, deadline)
-                    .await
-            } else {
-                Err(ErrorCode::Stale)
-            };
-            let completed = tokio::task::spawn_blocking(move || match stream {
-                Ok(stream) => jobs.complete(lease, stream),
-                Err(error) => {
-                    jobs.uncertain(lease)?;
-                    Err(error)
-                }
-            })
-            .await
-            .map_err(|_| ErrorCode::Unavailable)??;
-            left(deadline)?;
-            if !present.load(Ordering::SeqCst) {
-                return Err(ErrorCode::Stale);
+            .await;
+            if let Some(span) = span {
+                span.result(&result);
             }
-            let observed = driver.metadata(&key, deadline).await?;
-            if observed.fingerprint()? != qualification.incarnation
-                || !qualification.valid(&driver)
-                || !present.load(Ordering::SeqCst)
-            {
-                return Err(ErrorCode::Stale);
-            }
-            authorize(&authority, deadline).await?;
-            if !present.load(Ordering::SeqCst) || !qualification.valid(&driver) {
-                return Err(ErrorCode::Stale);
-            }
-            left(deadline)?;
-            Ok(Generated {
-                stream: Some(completed),
-                artifact: qualification.artifact_revision.clone(),
-                engine: qualification.observed_incarnation(),
-                quality: qualification.quality.clone(),
-            })
+            result
         })
         .await
         .map_err(|_| ErrorCode::Unavailable)?;

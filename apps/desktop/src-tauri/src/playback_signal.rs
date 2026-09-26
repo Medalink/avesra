@@ -269,6 +269,7 @@ impl Telemetry {
             )
         };
         if reference.speech {
+            avesra_core::trace::submitted(reference.utterance, reference.submitted);
             self.app
                 .state::<crate::Runtime>()
                 .performance

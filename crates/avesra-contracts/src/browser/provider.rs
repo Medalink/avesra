@@ -8,6 +8,78 @@ use std::collections::HashSet;
 pub const MAX_CHOICES: usize = 64;
 pub const MAX_ATTRIBUTES: usize = 4;
 
+/// Canonical configured X handle, without '@'. Configuration is not login proof.
+pub fn x_account(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 15
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum XInputReason {
+    LoginRequired,
+    AccountMismatch,
+    UnsupportedPage,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct XNeedsInput {
+    pub document: Candidate,
+    pub dom_revision: u64,
+    pub account: String,
+    pub created: bool,
+    pub reason: XInputReason,
+}
+impl XNeedsInput {
+    pub fn validate(&self) -> Result<(), ErrorCode> {
+        self.document
+            .validate(&Origin::parse(Provider::X.origin())?)?;
+        let url = url::Url::parse(&self.document.url).map_err(|_| ErrorCode::Malformed)?;
+        if !x_account(&self.account)
+            || self.dom_revision == 0
+            || self.dom_revision > MAX_SAFE_COUNTER
+            || match self.reason {
+                XInputReason::LoginRequired => url.path() != "/i/flow/login",
+                _ => url.path() != "/home" || url.query().is_some() || url.fragment().is_some(),
+            }
+        {
+            return Err(ErrorCode::Malformed);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct XReady {
+    pub document: Candidate,
+    pub dom_revision: u64,
+    pub account: String,
+    pub focused: bool,
+    pub created: bool,
+}
+impl XReady {
+    pub fn validate(&self) -> Result<(), ErrorCode> {
+        self.document
+            .validate(&Origin::parse(Provider::X.origin())?)?;
+        let url = url::Url::parse(&self.document.url).map_err(|_| ErrorCode::Malformed)?;
+        if !x_account(&self.account)
+            || !self.focused
+            || url.path() != "/home"
+            || url.query().is_some()
+            || url.fragment().is_some()
+            || self.dom_revision == 0
+            || self.dom_revision > MAX_SAFE_COUNTER
+        {
+            return Err(ErrorCode::Malformed);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Provider {

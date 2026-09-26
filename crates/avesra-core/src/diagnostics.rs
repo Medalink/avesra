@@ -55,6 +55,20 @@ pub enum Reading<T> {
     Available { value: T },
     Unavailable { reason: Unavailable },
 }
+impl<T> Default for Reading<T> {
+    fn default() -> Self {
+        Self::Unavailable {
+            reason: Unavailable::Missing,
+        }
+    }
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DefaultRoute {
+    pub interface_index: u32,
+    pub ipv6: bool,
+    pub route_metric: u32,
+}
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Network {
@@ -95,6 +109,10 @@ pub enum Report {
         system_drive_space: Reading<DiskSpace>,
         /// No app/disk utilization provider is guessed from unrelated counters.
         disk_pressure: Reading<u16>,
+        #[serde(default)]
+        default_routes: Reading<Vec<DefaultRoute>>,
+        #[serde(default)]
+        ipv4_dns_servers: Reading<u16>,
     },
     CiscoVpnStatus {
         state: Reading<VpnState>,
@@ -114,8 +132,15 @@ impl Report {
             network,
             system_drive_space,
             disk_pressure,
+            default_routes,
+            ipv4_dns_servers,
         } = self
         {
+            if matches!(default_routes,Reading::Available{value} if value.len()>64 || value.iter().any(|v|v.interface_index==0))
+                || matches!(ipv4_dns_servers,Reading::Available{value} if *value>64)
+            {
+                return Err(ErrorCode::Malformed);
+            }
             if !(500..=5000).contains(interval_ms)
                 || matches!(cpu_busy_basis_points, Reading::Available { value } if *value > 10_000)
                 || matches!(disk_pressure, Reading::Available { value } if *value > 10_000)

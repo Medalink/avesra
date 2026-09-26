@@ -63,6 +63,7 @@ impl Shared {
 }
 /// One native preparation offer. Dropping withdraws, never releases resources.
 pub struct Offer {
+    scope: avesra_core::browser_scopes::Grant,
     shared: Arc<Shared>,
     reply: Option<SyncSender<Prepared>>,
     completed: bool,
@@ -178,7 +179,17 @@ pub struct WorkerPreparation {
     released: bool,
 }
 impl WorkerOwner {
-    pub fn offer(&self, execution: &mut ReadExecution<'_>) -> Result<WorkerPreparation, ErrorCode> {
+    pub fn offer(
+        &self,
+        execution: &mut ReadExecution<'_>,
+        scope: avesra_core::browser_scopes::Grant,
+    ) -> Result<WorkerPreparation, ErrorCode> {
+        scope.validate()?;
+        if scope.id.uuid() != execution.permit().action.target_id
+            || scope.actor.uuid() != execution.permit().action.actor_id
+        {
+            return Err(ErrorCode::Denied);
+        }
         let preparation = execution.take_preparation()?;
         if let Err(error) = preparation.remaining_ms() {
             preparation.withdraw();
@@ -195,6 +206,7 @@ impl WorkerOwner {
         let (reply, receive) = mpsc::sync_channel(1);
         let (content_send, content) = mpsc::sync_channel(1);
         let offer = Offer {
+            scope,
             shared: shared.clone(),
             reply: Some(reply),
             completed: false,
@@ -227,6 +239,9 @@ impl PreparationReceiver {
     }
 }
 impl Offer {
+    pub fn scope(&self) -> &avesra_core::browser_scopes::Grant {
+        &self.scope
+    }
     pub fn withdrawal(&self) -> Withdrawal {
         Withdrawal(self.shared.clone())
     }

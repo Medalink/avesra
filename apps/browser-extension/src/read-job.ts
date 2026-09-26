@@ -4,6 +4,9 @@ import { acquireBrowserJob, type BrowserJob } from "./browser-job.js";
 import { ObservationAuthority } from "./authority.js";
 import { beginPageExcerpt, finishPageExcerpt, type Extracted } from "./page-excerpt.js";
 import { probe } from "./provider.js";
+import { observeXReady, type XObservation, type XInputObservation } from "./x-ready.js";
+import { XDocument } from "./x-document.js";
+import type { Candidate } from "./documents.js";
 
 // Survives connection-owner disposal, but never persists or retains page text.
 // The lease also excludes metadata until durable native acknowledgement.
@@ -20,24 +23,25 @@ export function pendingSettlement(pairing: p.Pairing): r.Settlement | null {
 }
 
 type Job = {
-  request: r.Request; owner: ReturnType<ObservationAuthority["snapshot"]>;
+  request: r.Request; document:Candidate|null; creation:XDocument|null; owner: ReturnType<ObservationAuthority["snapshot"]>;
   deadline: number; withdrawn: boolean; sent: boolean;
-  extracted: Extracted | null; reply: r.Reply | null;
+  extracted: Extracted | XObservation | XInputObservation | null; reply: r.Reply | null;
+  focusTab:boolean; focusWindow:boolean; focusVacancy:boolean; focused:boolean; focusUncertain:boolean;
 };
 
 function text(value: unknown, maximum: number): value is string {
   return typeof value === "string" && new TextEncoder().encode(value).length <= maximum
     && !/[\p{Cc}\p{Cs}]/u.test(value.replace(/[\n\t]/g, ""));
 }
-function extracted(value: unknown, request: r.Request): value is Extracted {
+function extracted(value: unknown, request: r.Request, document:Candidate): value is Extracted {
   if (p.object(value,["started","state","dom_revision","provider","complete","choices"])) {
-    return value.started === true && value.state === "provider_inspection" && request.mode.kind === "provider_inspection"
-      && value.provider === request.mode.provider && probe({provider:value.provider,scope:"provider_header",document:request.document,
+    return value.started === true && value.state === "provider_inspection" && (request.mode.kind === "provider_inspection" || request.mode.kind === "x_ready")
+      && value.provider === (request.mode.kind === "x_ready" ? "x" : request.mode.provider) && probe({provider:value.provider,scope:"provider_header",document,
         dom_revision:value.dom_revision,complete:value.complete,choices:value.choices});
   }
   if (p.object(value, ["started", "state", "request", "url", "guard_absent"])) {
     return value.started === false && value.state === "unavailable" && value.guard_absent === true
-      && value.request === request.context.request && value.url === request.document.url;
+      && value.request === request.context.request && value.url === document.url;
   }
   if (p.object(value, ["started", "state"])) {
     return (value.started === "unknown" && value.state === "unavailable")
@@ -59,7 +63,7 @@ function extracted(value: unknown, request: r.Request): value is Extracted {
   return bytes <= 4096;
 }
 function result<T>(values: chrome.scripting.InjectionResult<T>[], job: Job): unknown {
-  if (values.length !== 1 || values[0].frameId !== 0 || values[0].documentId !== job.request.document.document) {
+  if (values.length !== 1 || values[0].frameId !== 0 || values[0].documentId !== job.document!.document) {
     throw new Error("Read document result mismatch");
   }
   return values[0].result;
@@ -75,11 +79,34 @@ export class ReadJob {
   constructor(private readonly authority: ObservationAuthority, private readonly connected: () => boolean,
     private readonly revision: () => number, private readonly failed: () => void) {}
 
+  creationEvent(event:Parameters<XDocument["event"]>[0]):boolean { return this.job?.creation?.event(event)??false; }
+  expectedUpdate(tab:number,change:object,info:chrome.tabs.Tab):boolean {
+    const job=this.job,document=job?.document;
+    return !!job&&!!document&&this.current(job)&&job.request.mode.kind==="x_ready"&&tab===document.tab
+      &&info.id===document.tab&&info.windowId===document.window&&info.url===document.url&&!info.incognito
+      &&!info.discarded&&!info.frozen&&info.status==="complete"&&!info.pendingUrl
+      &&Object.keys(change).length>0&&Object.keys(change).every(key=>key==="title"||key==="favIconUrl");
+  }
   invalidate() {
     clearTimeout(this.expiry); this.expiry = undefined;
     if (this.job) { this.job.withdrawn = true; this.job.extracted = null; this.job.reply = null; }
   }
   dispose() { this.disposed = true; this.invalidate(); }
+  // Only the two exact expected focus notifications may belong to this job.
+  // Navigation/tab replacement and any other activation still withdraw it.
+  expectedActivation(tab:number,window:number):boolean {
+    const job=this.job;
+    if(!job||!this.current(job)||!job.focusTab||job.request.mode.kind!=="x_ready"
+      ||tab!==job.document!.tab||window!==job.document!.window)return false;
+    job.focusTab=false;return true;
+  }
+  expectedFocus(window:number):boolean {
+    const job=this.job;
+    if(!job||!this.current(job)||!job.focusWindow||job.request.mode.kind!=="x_ready")return false;
+    if(window===chrome.windows.WINDOW_ID_NONE&&job.focusVacancy){job.focusVacancy=false;return true;}
+    if(window!==job.document!.window)return false;
+    job.focusWindow=false;return true;
+  }
   private current(job: Job) {
     const context = job.request.context;
     return !this.disposed && this.connected() && this.job === job && !job.withdrawn
@@ -115,8 +142,8 @@ export class ReadJob {
     if (this.seen.has(value.context.request) || this.seen.size >= 64) throw new Error("Read identity reused or exhausted");
     this.seen.add(value.context.request);
     if (this.running || outbox) throw new Error("Read owner occupied");
-    const job: Job = { request: value, owner: this.authority.snapshot(), deadline: performance.now() + value.remaining_ms,
-      withdrawn: false, sent: false, extracted: null, reply: null };
+    const job: Job = { request: value, document:value.document, creation:null, owner: this.authority.snapshot(), deadline: performance.now() + value.remaining_ms,
+      withdrawn: false, sent: false, extracted: null, reply: null,focusTab:false,focusWindow:false,focusVacancy:false,focused:false,focusUncertain:false };
     this.job = job;
     this.check(job);
     this.arm(job);
@@ -136,7 +163,8 @@ export class ReadJob {
       if (!cleanup) this.check(job);
       else if (!this.current(job)) { job.withdrawn = true; job.extracted = null; job.reply = null; }
     };
-    const request = job.request, document = request.document;
+    const request = job.request, document = job.document;
+    if(!document)throw new Error("Document unavailable");
     check();
     const permitted = await chrome.permissions.contains({ origins: [request.origin + "/*"] }); check();
     if (!permitted) throw new Error("Read permission unavailable");
@@ -160,38 +188,79 @@ export class ReadJob {
     let injected = false, settled = false;
     let outcome: r.Outcome = { state: "unavailable" };
     try {
+      if(!job.document){
+        if(job.request.mode.kind!=="x_ready")throw new Error("Unselected read document");
+        job.creation=new XDocument(()=>this.check(job));
+        job.document=await job.creation.create();this.check(job);
+      }
       await this.verify(job); this.check(job);
       injected = true; // Rejection or loss after this point cannot prove absence.
       const values = await chrome.scripting.executeScript({
-        target: { tabId: job.request.document.tab, documentIds: [job.request.document.document] },
+        target: { tabId: job.document!.tab, documentIds: [job.document!.document] },
         world: "ISOLATED", func: beginPageExcerpt,
-        args: [{ request: job.request.context.request, url: job.request.document.url,
+        args: [{ request: job.request.context.request, url: job.document!.url,
           maxBlocks: Math.min(16, job.request.message_limit), budgetMs: Math.max(1, Math.floor(job.deadline - performance.now())),
-          provider: job.request.mode.kind === "provider_inspection" ? job.request.mode.provider : null }],
+          provider: job.request.mode.kind === "provider_inspection" ? job.request.mode.provider : job.request.mode.kind === "x_ready" ? "x" : null,
+          xReady:job.request.mode.kind==="x_ready" }],
       });
       const value = result(values, job);
-      if (!extracted(value, job.request)) throw new Error("Malformed read result");
+      if (!extracted(value, job.request, job.document!)) throw new Error("Malformed read result");
       if (value.started === false) settled = true; // Correlated explicit absent-guard proof only.
       if (this.current(job)) job.extracted = value;
       this.check(job);
       await this.verify(job); this.check(job);
+      if(job.request.mode.kind==="x_ready"){
+        const observed=await chrome.scripting.executeScript({target:{tabId:job.document!.tab,documentIds:[job.document!.document]},world:"ISOLATED",func:observeXReady,
+          args:[job.request.context.request,job.document!.url,job.request.mode.account]});
+        this.check(job);const ready=result(observed,job);
+        if(p.object(ready,["started","state","dom_revision","account","reason"])&&ready.started===true&&ready.state==="x_needs_input"
+          &&p.counter(ready.dom_revision)&&ready.account===job.request.mode.account&&["login_required","account_mismatch","unsupported_page"].includes(String(ready.reason))){
+          job.extracted=ready as XInputObservation;
+        }else{
+        if(!p.object(ready,["started","state","dom_revision","account"])||ready.started!==true||ready.state!=="x_ready"
+          ||!p.counter(ready.dom_revision)||ready.account!==job.request.mode.account)throw new Error("X account or compose state unavailable");
+        job.extracted=ready as XObservation;
+        // Mutation is one-shot and held by the original actual job/deadline.
+        job.focusTab=true;
+        job.focusUncertain=true;
+        const active=await chrome.tabs.update(job.document!.tab,{active:true});
+        if(!active||active.id!==job.document!.tab||active.windowId!==job.document!.window||!active.active)throw new Error("X activation uncertain");
+        job.focusUncertain=false;this.check(job);
+        job.focusWindow=true;job.focusVacancy=true;
+        job.focusUncertain=true;
+        const focused=await chrome.windows.update(job.document!.window,{focused:true});
+        if(focused.id!==job.document!.window||!focused.focused)throw new Error("X focus uncertain");
+        job.focusUncertain=false;this.check(job);
+        await this.verify(job);this.check(job);
+        const tab=await chrome.tabs.get(job.document!.tab);this.check(job);
+        const window=await chrome.windows.get(job.document!.window);this.check(job);
+        if(!tab.active||tab.windowId!==window.id||!window.focused)throw new Error("X focus changed");
+        const confirmed=await chrome.scripting.executeScript({target:{tabId:job.document!.tab,documentIds:[job.document!.document]},world:"ISOLATED",func:observeXReady,
+          args:[job.request.context.request,job.document!.url,job.request.mode.account]});
+        this.check(job);
+        if(JSON.stringify(result(confirmed,job))!==JSON.stringify(ready))throw new Error("X readiness changed after focus");
+        job.focused=true;
+        }
+      }
     } catch {
       job.extracted = null;
     }
+
+    if(job.creation&&!await job.creation.settle())throw new Error("Created browser work settlement unknown");
 
     if (injected && !settled) {
       // Do not abandon any cleanup promise, including after disposal/deadline.
       // If current validation fails, this separate pass permits cleanup only.
       await this.verify(job, true);
       const values = await chrome.scripting.executeScript({
-        target: { tabId: job.request.document.tab, documentIds: [job.request.document.document] },
+        target: { tabId: job.document!.tab, documentIds: [job.document!.document] },
         world: "ISOLATED", func: finishPageExcerpt,
-        args: [job.request.context.request, job.request.document.url],
+        args: [job.request.context.request, job.document!.url],
       });
       const finish = result(values, job);
       if (!p.object(finish, ["state", "request", "url", "dom_revision", "unchanged"])
         || finish.state !== "settled" || finish.request !== job.request.context.request
-        || finish.url !== job.request.document.url || !p.counter(finish.dom_revision)
+        || finish.url !== job.document!.url || !p.counter(finish.dom_revision)
         || typeof finish.unchanged !== "boolean") throw new Error("Read cleanup unknown");
       settled = true;
       // Finish is the final awaited operation: the DOM guard spans every real
@@ -199,12 +268,16 @@ export class ReadJob {
       const value = job.extracted;
       if (this.current(job) && value?.started === true && finish.unchanged) {
         if (value.state === "excerpt" && value.dom_revision === finish.dom_revision) {
-          outcome = { state: "excerpt", excerpt: { coverage: "partial", document: job.request.document,
+          outcome = { state: "excerpt", excerpt: { coverage: "partial", document: job.document!,
             dom_revision: value.dom_revision, title: value.title, blocks: value.blocks,
             truncated: value.truncated, excluded_content: value.excluded_content } };
+        } else if (value.state === "x_ready" && value.dom_revision === finish.dom_revision && job.focused) {
+          outcome={state:"x_ready",ready:{document:job.document!,dom_revision:value.dom_revision,account:value.account,focused:true,created:job.request.document===null}};
+        } else if (value.state === "x_needs_input" && value.dom_revision === finish.dom_revision) {
+          outcome={state:"x_needs_input",evidence:{document:job.document!,dom_revision:value.dom_revision,account:value.account,reason:value.reason,created:job.request.document===null}};
         } else if (value.state === "empty" && value.dom_revision === finish.dom_revision) outcome = { state: "empty" };
         else if (value.state === "provider_inspection" && value.dom_revision === finish.dom_revision) {
-          outcome = {state:"provider_inspection",probe:{provider:value.provider,scope:"provider_header",document:job.request.document,
+          outcome = {state:"provider_inspection",probe:{provider:value.provider,scope:"provider_header",document:job.document!,
             dom_revision:value.dom_revision,complete:value.complete,choices:value.choices}};
         }
       } else if (value?.started === true) outcome = { state: "changed" };
@@ -212,7 +285,9 @@ export class ReadJob {
     // No injection occurred, or exact cleanup/absence has completed. Every API
     // above has returned. Transfer only metadata and the exclusion lease.
     if (injected && !settled) throw new Error("Read ownership unknown");
+    if(job.focusUncertain)throw new Error("Browser focus settlement unknown");
     job.extracted = null;
+    job.focusTab=false;job.focusWindow=false;job.focusVacancy=false;
     if (this.current(job)) job.reply = { context: job.request.context, outcome };
     if (outbox) throw new Error("Settlement owner occupied");
     outbox = { settlement: { context: job.request.context, kind: "actual_job_settled" }, actual };

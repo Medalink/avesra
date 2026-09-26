@@ -62,7 +62,7 @@ impl Context {
 pub struct Request {
     pub context: Context,
     pub origin: Origin,
-    pub document: Candidate,
+    pub document: Option<Candidate>,
     pub message_limit: u16,
     pub mode: Mode,
     /// Reduced from the original owner deadline; repeated status never renews it.
@@ -73,11 +73,23 @@ pub struct Request {
 pub enum Mode {
     Excerpt,
     ProviderInspection { provider: super::provider::Provider },
+    XReady { account: String },
 }
 impl Request {
     pub fn validate(&self) -> Result<(), ErrorCode> {
         self.context.validate()?;
-        self.document.validate(&self.origin)?;
+        if let Some(document) = &self.document {
+            document.validate(&self.origin)?;
+        } else if !matches!(self.mode, Mode::XReady { .. }) {
+            return Err(ErrorCode::Malformed);
+        }
+        if let Mode::XReady { account } = &self.mode
+            && (!super::provider::x_account(account)
+                || self.origin.as_str() != super::provider::Provider::X.origin()
+                || self.message_limit != 1)
+        {
+            return Err(ErrorCode::Malformed);
+        }
         if let Mode::ProviderInspection { provider } = self.mode
             && (self.origin.as_str() != provider.origin() || self.message_limit != 1)
         {
@@ -106,6 +118,11 @@ impl Request {
                 ActionPayload::InspectBrowserProvider { provider },
                 Mode::ProviderInspection { provider: expected },
             ) if provider == expected => (provider.origin(), 1),
+            (ActionPayload::OpenX { account }, Mode::XReady { account: expected })
+                if account == expected =>
+            {
+                (super::provider::Provider::X.origin(), 1)
+            }
             _ => return Err(ErrorCode::Denied),
         };
         if action.task_id != self.context.task.uuid()
@@ -143,8 +160,18 @@ pub struct Excerpt {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Outcome {
-    Excerpt { excerpt: Excerpt },
-    ProviderInspection { probe: super::provider::Probe },
+    Excerpt {
+        excerpt: Excerpt,
+    },
+    ProviderInspection {
+        probe: super::provider::Probe,
+    },
+    XReady {
+        ready: super::provider::XReady,
+    },
+    XNeedsInput {
+        evidence: super::provider::XNeedsInput,
+    },
     Empty,
     Changed,
     Expired,
@@ -164,13 +191,46 @@ impl Reply {
             return Err(ErrorCode::Stale);
         }
         match (&request.mode, &self.outcome) {
+            (Mode::XReady { account }, Outcome::XNeedsInput { evidence }) => {
+                evidence.validate()?;
+                if evidence.account != *account
+                    || evidence.created != request.document.is_none()
+                    || request
+                        .document
+                        .as_ref()
+                        .is_some_and(|document| evidence.document != *document)
+                {
+                    return Err(ErrorCode::Stale);
+                }
+            }
+            (Mode::XReady { account }, Outcome::XReady { ready }) => {
+                ready.validate()?;
+                if ready.account != *account
+                    || ready.created != request.document.is_none()
+                    || request
+                        .document
+                        .as_ref()
+                        .is_some_and(|document| ready.document != *document)
+                {
+                    return Err(ErrorCode::Stale);
+                }
+            }
+            (
+                Mode::XReady { .. },
+                Outcome::Excerpt { .. } | Outcome::ProviderInspection { .. } | Outcome::Empty,
+            )
+            | (
+                Mode::Excerpt | Mode::ProviderInspection { .. },
+                Outcome::XReady { .. } | Outcome::XNeedsInput { .. },
+            ) => return Err(ErrorCode::Malformed),
             (Mode::Excerpt, Outcome::ProviderInspection { .. })
             | (Mode::ProviderInspection { .. }, Outcome::Excerpt { .. } | Outcome::Empty) => {
                 return Err(ErrorCode::Malformed);
             }
             (Mode::ProviderInspection { provider }, Outcome::ProviderInspection { probe }) => {
                 probe.validate()?;
-                if probe.provider != *provider || probe.document != request.document {
+                if probe.provider != *provider || Some(&probe.document) != request.document.as_ref()
+                {
                     return Err(ErrorCode::Stale);
                 }
             }
@@ -178,7 +238,7 @@ impl Reply {
         }
         if let Outcome::Excerpt { excerpt } = &self.outcome {
             excerpt.document.validate(&request.origin)?;
-            if excerpt.document != request.document
+            if Some(&excerpt.document) != request.document.as_ref()
                 || excerpt.dom_revision == 0
                 || excerpt.dom_revision > MAX_SAFE_COUNTER
             {

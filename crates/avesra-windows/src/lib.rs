@@ -8,6 +8,8 @@ pub mod credentials;
 #[cfg(windows)]
 pub mod diagnostics;
 #[cfg(windows)]
+pub mod download;
+#[cfg(windows)]
 pub mod effects;
 #[cfg(windows)]
 pub mod output_recording;

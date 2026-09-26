@@ -376,6 +376,8 @@ async fn run(
 /// Called only by an eventual qualified native producer holding a durable claim.
 /// Reading saved history or passing arbitrary text cannot invoke this signature.
 pub async fn answer(app: tauri::AppHandle, claim: PlannerClaim) -> Result<PublishedReply, String> {
+    let link = avesra_core::trace::Link::planner(claim.context());
+    let queued = Instant::now();
     let cancellation = claim.cancellation();
     let withdrawn = Arc::new(AtomicBool::new(false));
     let mut caller = Caller {
@@ -384,6 +386,8 @@ pub async fn answer(app: tauri::AppHandle, claim: PlannerClaim) -> Result<Publis
         cancellation: cancellation.clone(),
     };
     let result = tauri::async_runtime::spawn(async move {
+        let mut span = avesra_core::trace::begin(link, avesra_core::trace::Stage::NativePlanner);
+        span.queued(queued);
         let retirement = claim.retirement();
         let owner = app.state::<Runtime>().planner.reserve(
             claim.context().clone(),
@@ -403,6 +407,14 @@ pub async fn answer(app: tauri::AppHandle, claim: PlannerClaim) -> Result<Publis
         }
         owner.completed = result.is_ok();
         drop(owner);
+        span.finish(
+            if result.is_ok() {
+                avesra_core::trace::Outcome::Complete
+            } else {
+                avesra_core::trace::Outcome::Failed
+            },
+            None,
+        );
         result
     })
     .await

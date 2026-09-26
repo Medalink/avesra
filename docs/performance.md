@@ -52,3 +52,12 @@ server internals, persistence/export and cross-host tracing remain out of scope.
 No new callback allocation/locking, retry, permissive fallback or device operation
 is introduced. Under the owner override, verification uses source review and
 coordinated static/build checks, with no tests, fixtures or harnesses.
+
+Accepted-turn drilldown and redacted export are now a separate observer described
+in [accepted tracing](accepted-tracing.md). It stores IDs and typed host-local
+stage spans across native/controller/private-job/output owners; it does not turn
+this older process-local preview aggregate into release performance evidence.
+The accepted view displays retained per-host stage percentiles/counts/errors/max,
+explicit unavailable queue/deployment fields, observer losses and collector starts.
+Preacceptance capture/ASR/speaker spans, detector accuracy, live hardware headroom,
+complete engine counters, and baseline/candidate report comparison remain missing.

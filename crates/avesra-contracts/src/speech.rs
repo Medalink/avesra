@@ -2,7 +2,7 @@
 use crate::{ErrorCode, browser::MAX_SAFE_COUNTER, planner, voice::VoiceIdentity};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-pub const VERSION: u16 = 3;
+pub const VERSION: u16 = 4;
 pub const MAX_TEXT_BYTES: usize = 8192;
 pub const MAX_SEGMENT_BYTES: usize = 512;
 pub const MAX_SEGMENTS: usize = 64;
@@ -55,19 +55,68 @@ pub fn text_segments(mut text: &str) -> Result<Vec<&str>, ErrorCode> {
     }
     Ok(segments)
 }
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EventKind {
+    Learning,
+    Action,
+}
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Provenance {
+    #[default]
+    Model,
+    NativeObservation {
+        dispatch: Uuid,
+        action_revision: Uuid,
+    },
+    NativeEvents {
+        event_kind: EventKind,
+        batch: Option<Uuid>,
+        events: Vec<Uuid>,
+    },
+}
+impl Provenance {
+    pub fn validate(&self) -> Result<(), ErrorCode> {
+        if let Self::NativeObservation {
+            dispatch,
+            action_revision,
+        } = self
+            && (dispatch.is_nil() || action_revision.is_nil())
+        {
+            return Err(ErrorCode::Malformed);
+        }
+        if let Self::NativeEvents { batch, events, .. } = self
+            && (batch.is_some_and(|id| id.is_nil())
+                || events.len() > 32
+                || batch.is_none() != events.is_empty()
+                || events
+                    .iter()
+                    .enumerate()
+                    .any(|(i, id)| id.is_nil() || events[..i].contains(id)))
+        {
+            return Err(ErrorCode::Malformed);
+        }
+        Ok(())
+    }
+}
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Source {
     pub planner: planner::Context,
     pub reply_revision: Uuid,
     pub response: planner::Response,
+    pub provenance: Provenance,
 }
 impl Source {
     pub fn validate(&self) -> Result<(), ErrorCode> {
         self.planner.validate()?;
+        self.provenance.validate()?;
         if self.reply_revision.is_nil()
             || matches!(self.response, planner::Response::Proposal { .. })
             || !planner::valid_text(self.response.text())
+            || (!matches!(self.provenance, Provenance::Model)
+                && !matches!(self.response, planner::Response::Answer { .. }))
         {
             return Err(ErrorCode::Malformed);
         }
@@ -99,6 +148,7 @@ impl Request {
             request: self.request,
             playback_epoch: self.playback_epoch,
             voice: self.voice.clone(),
+            provenance: self.source.provenance.clone(),
         }
     }
 }
@@ -110,10 +160,12 @@ pub struct Context {
     pub request: Uuid,
     pub playback_epoch: u64,
     pub voice: VoiceIdentity,
+    pub provenance: Provenance,
 }
 impl Context {
     pub fn validate(&self) -> Result<(), ErrorCode> {
         self.planner.validate()?;
+        self.provenance.validate()?;
         self.voice.validate()?;
         if self.reply_revision.is_nil()
             || self.request.is_nil()

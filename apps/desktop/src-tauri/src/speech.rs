@@ -83,18 +83,22 @@ impl Admission {
             Err("Accepted output permission changed or expired".into())
         }
     }
-    fn request(&self) -> speech::Request {
-        speech::Request {
+    fn request(&self) -> Result<speech::Request, String> {
+        self.reply
+            .remaining_ms()
+            .map_err(|_| "Original accepted reply expired before output registration")?;
+        Ok(speech::Request {
             version: speech::VERSION,
             source: speech::Source {
                 planner: self.reply.context().clone(),
                 reply_revision: self.reply.revision(),
                 response: self.reply.response().clone(),
+                provenance: self.reply.provenance().clone(),
             },
             request: self.id,
             playback_epoch: self.epoch.load(Ordering::SeqCst),
             voice: self.voice.clone(),
-        }
+        })
     }
 }
 async fn live<T>(
@@ -156,6 +160,7 @@ async fn run(
         planner: reply.context().clone(),
         reply_revision: reply.revision(),
         response: reply.response().clone(),
+        provenance: reply.provenance().clone(),
     }
     .validate()
     .map_err(|_| "Speech is unavailable for this reply; its full text remains saved")?;
@@ -189,6 +194,9 @@ async fn run(
         id: Uuid::new_v4(),
         deadline: started + Duration::from_secs(80),
     });
+    let _submission = avesra_core::trace::output(
+        avesra_core::trace::Link::planner(admission.reply.context()).child(admission.id),
+    );
     admission.check(app, true)?;
     let directory = app
         .path()
@@ -264,7 +272,7 @@ async fn run(
         connection::voice_socket(&pairing, MediaEndpoint::Speech),
     )
     .await?;
-    let request = admission.request();
+    let request = admission.request()?;
     request
         .validate()
         .map_err(|_| "Invalid accepted output request")?;
@@ -484,10 +492,24 @@ pub async fn speak(
     reply: PublishedReply,
     voice: VoiceIdentity,
 ) -> Result<Submitted, String> {
+    let link = avesra_core::trace::Link::planner(reply.context());
     let started = Instant::now();
     let withdrawn = Arc::new(AtomicBool::new(false));
     let _caller = crate::output::Caller(withdrawn.clone());
-    tauri::async_runtime::spawn(async move { run(&app, reply, voice, withdrawn, started).await })
-        .await
-        .map_err(|_| "Accepted output coordinator stopped")?
+    tauri::async_runtime::spawn(async move {
+        let mut span = avesra_core::trace::begin(link, avesra_core::trace::Stage::NativeOutput);
+        span.queued(started);
+        let result = run(&app, reply, voice, withdrawn, started).await;
+        span.finish(
+            if result.is_ok() {
+                avesra_core::trace::Outcome::Complete
+            } else {
+                avesra_core::trace::Outcome::Failed
+            },
+            None,
+        );
+        result
+    })
+    .await
+    .map_err(|_| "Accepted output coordinator stopped")?
 }

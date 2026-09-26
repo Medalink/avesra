@@ -33,6 +33,9 @@ mod normal_speech;
 #[path = "planner_ingress.rs"]
 mod planner_ingress;
 #[cfg(unix)]
+#[path = "trace_query.rs"]
+mod trace_query;
+#[cfg(unix)]
 #[path = "voice_activity.rs"]
 mod voice_activity;
 #[cfg(unix)]
@@ -132,6 +135,7 @@ pub fn router(
     directory: &std::path::Path,
     easy_pairing: Arc<crate::discovery::PairingWindow>,
 ) -> Result<Router, String> {
+    let _ = avesra_core::trace::initialize(directory, avesra_core::trace::Host::Controller);
     #[cfg(unix)]
     let speaker = audio_client(directory, "speaker")?;
     #[cfg(unix)]
@@ -158,6 +162,7 @@ pub fn router(
         .route("/pair-local", post(pair_local))
         .route("/control", get(control))
         .route("/actors", post(actors))
+        .route("/traces", post(traces).layer(DefaultBodyLimit::max(2048)))
         .route("/actors/cancel", post(cancel_actor))
         .route(
             "/planner",
@@ -1229,4 +1234,22 @@ async fn session(
         }
     }
     let _ = send(&mut socket, Message::Close(None)).await;
+}
+
+async fn traces(
+    State(state): State<Shared>,
+    headers: HeaderMap,
+    Json(request): Json<avesra_core::trace::Query>,
+) -> Result<Json<avesra_core::trace::Remote>, StatusCode> {
+    #[cfg(unix)]
+    {
+        trace_query::operation(state, headers, request)
+            .await
+            .map(Json)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (state, headers, request);
+        Err(StatusCode::SERVICE_UNAVAILABLE)
+    }
 }

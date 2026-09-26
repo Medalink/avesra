@@ -74,7 +74,39 @@ approval. No recorded batch means no claimed event. Deletion removes dependent
 event content without exposing a deleted fact through an old batch; retain only
 the minimum content-free tombstone needed for no-repeat behavior.
 
+The native ledger derives this answer inside the original accepted claim's final
+transaction. Its stored reply carries explicit `NativeEvents` provenance: learning
+or action, the exact last submitted batch ID and its ordered event IDs, or no batch
+and no IDs when nothing was announced. IDs are nonnil, unique and bounded to32.
+Deleted event bodies remain described as deleted. No caller supplies the answer
+text or event list, and history cannot reconstruct the opaque published handle.
+
+Speech wire4 carries this provenance through the existing normal-speech handshake
+and echoed stream context. Native-derived output is not a model completion. The
+controller authenticates the paired current actor/session/action/output context,
+consumes the genuine claim's ordinal above its session high-water mark, records
+the exact typed response/provenance/reply digest and immediately reserves its one
+output attempt under the same lock. It cannot relabel an existing model request,
+reuse an old ordinal or recover a cancelled opportunity. The actual public owner
+is retained before private work; existing private TTS retirement/uncertainty also
+holds the source. Model provenance still requires the actual model completion.
+
+This is a paired-native assertion of the PC ledger's derivation, not independent
+server verification of PC events. Only the native worker consuming a genuine
+accepted claim can mint this path; there is no frontend plaintext command, new
+debug endpoint, imported response or synthetic accepted turn. The native original
+claim lifetime is checked immediately before sending the handshake. Schema22
+marks stored reply provenance compatibility; older history defaults to Model and
+cannot gain a native-derived output handle.
+
 The overlay/settings can inspect recent scoped events without replaying sound.
 Required live evidence includes commit failure, coalescing, mute/pause, restart,
 newer silent events, exact follow-up and cancellation. Silent diagnostic media
 proves submitted output only; it must remain labeled as such.
+
+Native event answers are retrieved into later dialogue only while their exact
+submitted batch and every ordered event dependency still belong to the same
+actor/device/kind and retain unchanged content. The native claim transaction
+reconstructs the bounded answer and compares it with immutable history. Redacted,
+corrected, missing or expired dependencies exclude that pair; historical records
+remain under the separate history policy in [memory](memory.md).

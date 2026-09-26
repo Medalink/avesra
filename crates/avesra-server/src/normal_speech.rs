@@ -26,9 +26,9 @@ pub(super) async fn upgrade(
     ws: WebSocketUpgrade,
 ) -> Result<Response, StatusCode> {
     let device = authenticate_headers(auth.clone(), &headers).await?;
-    // Startup has no reasoning qualifier and therefore cannot issue the required
-    // completed source. Do not activate a TTS-only arbitrary-text route.
-    if auth.reasoning.is_none() || auth.tts.is_none() {
+    // Model sources still require an actual completed planner entry. Native
+    // event sources register their separately typed accepted-ledger assertion.
+    if auth.tts.is_none() {
         return Err(StatusCode::SERVICE_UNAVAILABLE);
     }
     let connection = auth
@@ -145,6 +145,10 @@ async fn start(
     request.validate()?;
     let reservation = planner_ingress::reserve_speech(&auth, device, &request, &admission)?;
     let context = request.stream_context();
+    let span = avesra_core::trace::begin(
+        avesra_core::trace::Link::planner(&request.source.planner).child(request.request),
+        avesra_core::trace::Stage::ControllerOutput,
+    );
     let (mut action, mut output) = {
         let sessions = auth.sessions.lock().map_err(|_| ErrorCode::Unavailable)?;
         let session = sessions
@@ -176,13 +180,15 @@ async fn start(
             }
         }
     };
-    tokio::select! { biased;
+    let result = tokio::select! { biased;
         _=action.changed()=>Err(ErrorCode::Stale),
         _=output.changed()=>Err(ErrorCode::Stale),
         result=monitor=>result,
         result=authority=>result,
         result=stream(socket,&auth,&request,&context,&inspector,deadline)=>result,
-    }
+    };
+    span.result(&result);
+    result
 }
 enum Piece {
     Audio(Vec<i16>),
@@ -210,7 +216,11 @@ where
                 Uuid::new_v4(),
                 &request.voice,
                 text,
-                Some(private.clone()),
+                Some(avesra_server::audio::synthesis::Source {
+                    retirement: private.clone(),
+                    trace: avesra_core::trace::Link::planner(&request.source.planner)
+                        .child(request.request),
+                }),
                 &mut authorize,
             )
             .await?;

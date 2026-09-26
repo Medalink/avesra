@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import AcceptedTraces from "./AcceptedTraces.svelte";
   import { command, native, type Runtime } from "./runtime";
   let { runtime }: { runtime: Runtime | null } = $props();
   type Row = { operation: string; stage: string; counts: { complete: number; failed: number; withdrawn: number; abandoned: number; missing: number }; timed: number; p50_ms: number | null; p95_ms: number | null; p99_ms: number | null; max_ms: number | null; provisional: boolean };
@@ -44,3 +45,4 @@
   <p class="av-hint">Percentiles include measured failures and abandoned operations, not only successes. A failed duration is time to failure. Missing timing is never zero. Recent observations are bounded and clear on restart.</p>
   <p class="av-hint">Submitted speech and estimated drain do not prove audible delivery. Request timing includes transport and controller work; it is not pure GPU inference time. Owner accuracy, accepted-request latency, server queue time and release qualification remain unmeasured here.</p>
 </section>
+<AcceptedTraces {runtime} />

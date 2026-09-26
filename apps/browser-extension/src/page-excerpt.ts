@@ -6,7 +6,7 @@ type Guard = {
   current(): boolean; finish(): boolean;
 };
 type Realm = typeof globalThis & { __avesraReadGuard1?: Guard };
-export type ReadParameters = { request: string; url: string; maxBlocks: number; budgetMs: number; provider: Provider | null };
+export type ReadParameters = { request: string; url: string; maxBlocks: number; budgetMs: number; provider: Provider | null; xReady: boolean };
 export type Extracted = { started: true; state: "excerpt"; dom_revision: number; title: string; blocks: string[]; truncated: boolean; excluded_content: boolean }
   | { started: true; state: "provider_inspection"; dom_revision: number; provider: Provider; complete: boolean; choices: Choice[] }
   | { started: true; state: "empty"; dom_revision: number }
@@ -38,7 +38,7 @@ export function beginPageExcerpt(input: ReadParameters): Extracted {
       request, url, deadline: performance.now() + lifetime, revision: 1, settled: false,
       current() {
         if (performance.now() >= guard.deadline || location.href !== url || document.readyState !== "complete") retire(true);
-        if (!guard.settled && observer.takeRecords().length) retire(true);
+        if (!guard.settled && observer.takeRecords().some(relevant)) retire(true);
         return !guard.settled && !dirty;
       },
       finish() {
@@ -47,7 +47,16 @@ export function beginPageExcerpt(input: ReadParameters): Extracted {
         return unchanged;
       },
     };
-    const observer = new MutationObserver(() => retire(true));
+    // X readiness deliberately excludes the feed. Changes strictly within an
+    // excluded article/feed cannot change the observed account/composer. All
+    // structural changes outside those subtrees, including their replacement,
+    // remain invalidating. Generic excerpt behavior is unchanged.
+    function relevant(record: MutationRecord): boolean {
+      if(!input.xReady)return true;
+      const target=record.target instanceof Element?record.target:record.target.parentElement;
+      return !target?.closest('article,[role="article"],[role="feed"]');
+    }
+    const observer = new MutationObserver(records => {if(records.some(relevant))retire(true);});
     function changed() { retire(true); }
     function retire(changed: boolean) {
       if (changed) { dirty = true; guard.revision = 2; }

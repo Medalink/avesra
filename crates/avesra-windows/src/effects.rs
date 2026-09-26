@@ -4,9 +4,10 @@ use avesra_contracts::{Action, ActionPayload, ErrorCode, Outcome};
 use avesra_core::{
     action_permissions::{PermissionView, Selection, TaskTarget},
     conversations::{
-        CancellationTarget, DurableTurn, ExactTaskRequest, PlannerAuthority, PlannerCancellation,
-        PlannerClaim, PlannerRequest, PlannerRetirement, Source as ConversationSource, StoredReply,
-        Summary as ConversationSummary, TaskAuthority, TaskResolution,
+        CancellationTarget, DurableTurn, ExactTaskRequest, ObservationRequest, PlannerAuthority,
+        PlannerCancellation, PlannerClaim, PlannerRequest, PlannerRetirement,
+        Source as ConversationSource, StoredReply, Summary as ConversationSummary, TaskAuthority,
+        TaskResolution,
     },
     execution::{
         Cancellation, EffectAdapter, EffectObservation, EffectResult, ExecutionController,
@@ -70,6 +71,12 @@ impl Management {
     }
 }
 enum Command {
+    ObservationAnswer {
+        request: Box<ObservationRequest>,
+        dispatch: Uuid,
+        authorize: PlannerAuthorization,
+        reply: SyncSender<Result<StoredReply, ErrorCode>>,
+    },
     EventAnswer {
         claim: Box<PlannerClaim>,
         authorize: PlannerAuthorization,
@@ -194,6 +201,11 @@ pub type PlannerAuthorization =
     Box<dyn FnMut(&PlannerAuthority<'_>) -> Result<(), ErrorCode> + Send>;
 pub type TaskAuthorization = Box<dyn FnMut(&TaskAuthority<'_>) -> Result<(), ErrorCode> + Send>;
 pub enum ActionManagement {
+    ApproveDownload {
+        revision: Uuid,
+        session: DispatchSession,
+        authorize: CatalogAuthorization,
+    },
     BindPrompt {
         actor: Uuid,
         alias: Uuid,
@@ -339,6 +351,7 @@ impl Drop for WorkerOwnership {
 }
 
 struct NativeAdapter {
+    downloads: HashMap<Uuid, Box<avesra_core::download::Context>>,
     vpns: HashMap<Uuid, Box<avesra_core::vpn::Profile>>,
     targets: HashMap<Uuid, VolumeTarget>,
     apps: avesra_core::apps::AppCatalog,
@@ -350,13 +363,49 @@ impl EffectAdapter for NativeAdapter {
         permit: &DispatchPermit,
         authority: &mut avesra_core::execution::EffectAuthority<'_>,
     ) -> Result<EffectResult, ErrorCode> {
+        if let ActionPayload::DiagnoseDownload { context, revision }
+        | ActionPayload::FlushDownloadDns {
+            context, revision, ..
+        } = permit.action.payload
+        {
+            let selected = self.downloads.get(&context).ok_or(ErrorCode::Stale)?;
+            if selected.revision != revision
+                || selected.actor != permit.action.actor_id
+                || permit.action.target_id != context
+            {
+                return Err(ErrorCode::Stale);
+            }
+            if let ActionPayload::FlushDownloadDns { evidence, .. } = permit.action.payload {
+                let command_completed = crate::download::flush(authority)?;
+                return Ok(EffectResult {
+                    outcome: if command_completed {
+                        Outcome::Success
+                    } else {
+                        Outcome::UnknownEffect
+                    },
+                    observation: Some(EffectObservation::DnsFlush {
+                        context,
+                        revision,
+                        evidence,
+                        command_completed,
+                    }),
+                });
+            }
+            let report = crate::download::run(selected, &mut || authority.current())?;
+            return Ok(EffectResult {
+                outcome: Outcome::Success,
+                observation: Some(EffectObservation::Download {
+                    report: Box::new(report),
+                }),
+            });
+        }
         if let ActionPayload::ConnectVpn { profile_id } = permit.action.payload {
             let profile = self.vpns.get(&profile_id).ok_or(ErrorCode::Stale)?;
             let report = crate::vpn::connect(profile, &permit.action, authority)?;
-            let outcome = if report.state == avesra_core::vpn::State::Connected {
-                Outcome::Success
-            } else {
-                Outcome::NeedsInput
+            let outcome = match report.state {
+                avesra_core::vpn::State::Connected => Outcome::Success,
+                avesra_core::vpn::State::AlreadyConnected => Outcome::AlreadySatisfied,
+                _ => Outcome::NeedsInput,
             };
             return Ok(EffectResult {
                 outcome,
@@ -440,6 +489,7 @@ impl EffectAdapter for NativeAdapter {
     }
 }
 struct Job {
+    queued: std::time::Instant,
     step: Uuid,
     session: DispatchSession,
     cancellation: Cancellation,
@@ -461,6 +511,7 @@ pub type ReadPublication = Box<
 /// Losing the original native caller withdraws immediately, independently of
 /// the worker's Store/Chrome cleanup. This owner never releases worker resources.
 pub struct ExecutionWaiter {
+    settled: AtomicBool,
     receive: Receiver<Result<ExecutionReceipt, ErrorCode>>,
     cancellation: Cancellation,
 }
@@ -472,12 +523,18 @@ impl ExecutionWaiter {
         &self,
         timeout: std::time::Duration,
     ) -> Result<Result<ExecutionReceipt, ErrorCode>, mpsc::RecvTimeoutError> {
-        self.receive.recv_timeout(timeout)
+        let result = self.receive.recv_timeout(timeout);
+        if result.is_ok() {
+            self.settled.store(true, Ordering::SeqCst);
+        }
+        result
     }
 }
 impl Drop for ExecutionWaiter {
     fn drop(&mut self) {
-        self.cancellation.cancel();
+        if !self.settled.load(Ordering::SeqCst) {
+            self.cancellation.cancel();
+        }
     }
 }
 /// Native publication proof with continuous source withdrawal ownership.
@@ -486,6 +543,9 @@ pub struct PublishedReply {
     reply: StoredReply,
 }
 impl PublishedReply {
+    pub fn provenance(&self) -> &avesra_contracts::speech::Provenance {
+        self.reply.provenance()
+    }
     pub fn proposed_task(&self) -> Option<&avesra_core::conversations::LinkedTask> {
         self.reply.proposed_task()
     }
@@ -641,7 +701,7 @@ fn execute_read(
         execution.finish_unpublished(None, Outcome::Unsupported)?;
         return Ok(receipt);
     };
-    let mut preparation = match owner.offer(&mut execution) {
+    let mut preparation = match owner.offer(&mut execution, consumer.scope.clone()) {
         Ok(value) => value,
         Err(error) => {
             execution.finish_unpublished(None, Outcome::Failed)?;
@@ -686,6 +746,12 @@ fn execute_read(
             || context.browser_app.id != expected.browser_app
             || context.browser_app.revision != expected.browser_revision
             || request.origin != expected.origin
+            || (matches!(
+                request.mode,
+                avesra_contracts::browser::reading::Mode::XReady { .. }
+            ) && !expected
+                .operations
+                .contains(&avesra_contracts::browser::ScopeOperation::Navigate))
             || !expected
                 .operations
                 .contains(&avesra_contracts::browser::ScopeOperation::Read)
@@ -793,6 +859,46 @@ pub struct NativeEffects {
     state: Arc<Mutex<State>>,
 }
 impl NativeEffects {
+    pub fn observation_answer(
+        &self,
+        request: ObservationRequest,
+        dispatch: Uuid,
+        authorize: PlannerAuthorization,
+    ) -> Result<Receiver<Result<StoredReply, ErrorCode>>, ErrorCode> {
+        let target = request.target();
+        let epoch = request.action_epoch();
+        let cancellation = request.cancellation();
+        let mut state = self.state.lock().map_err(|_| ErrorCode::Unavailable)?;
+        state.planners.retain(|(_, c)| !c.cancelled());
+        state.replies.retain(|s| !s.signal.cancelled());
+        if cancellation.cancelled()
+            || !state.allowed
+            || state.action_epoch != epoch
+            || state.pending_cancellations.contains(&target)
+            || state.planners.len() + state.replies.len() >= 16
+            || state.planners.iter().any(|(t, _)| *t == target)
+            || state.replies.iter().any(|s| s.target == target)
+        {
+            return Err(ErrorCode::Stale);
+        }
+        state.planners.push((target, cancellation.clone()));
+        let (reply, receive) = mpsc::sync_channel(1);
+        if self
+            .send
+            .try_send(Command::ObservationAnswer {
+                request: Box::new(request),
+                dispatch,
+                authorize,
+                reply,
+            })
+            .is_err()
+        {
+            cancellation.cancel();
+            state.planners.retain(|(t, _)| *t != target);
+            return Err(ErrorCode::Unavailable);
+        }
+        Ok(receive)
+    }
     pub fn event_answer(
         &self,
         claim: PlannerClaim,
@@ -922,7 +1028,9 @@ impl NativeEffects {
                 };
                 let mut prompts=HashMap::new();
                 let mut vpns=HashMap::new();
+                let mut downloads=HashMap::new();
                 for permission in permissions.into_iter().filter(|v| !v.revoked) {
+                    if let TaskTarget::Download{context,..}=&permission.permission.target {downloads.insert(context.id,context.clone());}
                     if let TaskTarget::Vpn{profile}=&permission.permission.target {vpns.insert(profile.id,profile.clone());}
                     if let TaskTarget::Prompt{binding}=&permission.permission.target {prompts.insert(binding.id,binding.clone());}
                     if let TaskTarget::Volume { target, endpoint } = permission.permission.target {
@@ -943,6 +1051,7 @@ impl NativeEffects {
                 );
                 let mut controller = ExecutionController::new(store);
                 let mut adapter = NativeAdapter {
+                    downloads,
                     vpns,
                     targets: registry,
                     apps,
@@ -971,16 +1080,17 @@ impl NativeEffects {
                         let _ = completion.reply.try_send(result);
                     }
                     let mut job = match command {
+                        Command::ObservationAnswer{request,dispatch,mut authorize,reply}=>{
+                            let target=request.target();let epoch=request.action_epoch();let cancellation=request.cancellation();
+                            let result=(||{planner_current(&owned,target,epoch)?;controller.management().finish_observation_answer(*request,dispatch,&mut|authority|{planner_current(&owned,target,epoch)?;authorize(authority)?;planner_current(&owned,target,epoch)})})();
+                            if result.is_err(){cancellation.cancel();if let Ok(mut state)=owned.lock(){state.planners.retain(|(t,_)|*t!=target);}}
+                            let _=reply.try_send(result);continue;
+                        }
                         Command::EventAnswer { claim, mut authorize, reply }=>{
                             let target=claim.target();let epoch=claim.context().action_epoch;
                             let result=(||{
                                 planner_current(&owned,target,epoch)?;
-                                let request=claim.transport()?;
-                                let kind=avesra_core::notifications::question_kind(&request.text).ok_or(ErrorCode::Unsupported)?;
-                                let events=controller.management().last_announced(request.context.actor,request.context.device,kind)?;
-                                let text=avesra_core::notifications::describe_last(kind,&events)?;
-                                let result=avesra_contracts::planner::Reply{version:avesra_contracts::planner::VERSION,context:request.context,terminal:avesra_contracts::planner::Terminal::Complete,response:avesra_contracts::planner::Response::Answer{text}};
-                                controller.management().finish_planner(*claim,result,&adapter.apps,&mut |authority|{planner_current(&owned,target,epoch)?;authorize(authority)?;planner_current(&owned,target,epoch)})
+                                controller.management().finish_event_answer(*claim,&adapter.apps,&mut |authority|{planner_current(&owned,target,epoch)?;authorize(authority)?;planner_current(&owned,target,epoch)})
                             })();
                             if result.is_err()&&let Ok(mut state)=owned.lock(){state.planners.retain(|(t,_)|*t!=target);}
                             let _=reply.try_send(result);continue;
@@ -1062,6 +1172,9 @@ impl NativeEffects {
                                         )?;
                                         actor
                                     }
+                                    ActionManagement::ApproveDownload { revision, session, mut authorize } => {
+                                        controller.management().approve_download_action(revision,&session,&mut authorize)?;session.actor_id
+                                    },
                                     ActionManagement::Read { actor } => actor,
                                     ActionManagement::Grant {
                                         actor,
@@ -1084,6 +1197,7 @@ impl NativeEffects {
                                                 authorize()
                                             },
                                         )?;
+                                        if let TaskTarget::Download{context,..}=&permission.target {adapter.downloads.insert(context.id,context.clone());}
                                         if let TaskTarget::Vpn{profile}=&permission.target {adapter.vpns.insert(profile.id,profile.clone());}
                                         if let TaskTarget::Volume { target, endpoint } =
                                             permission.target
@@ -1310,10 +1424,12 @@ impl NativeEffects {
                             continue;
                         }
                     };
+                    let mut trace_link=None;
                     let binding = controller
                         .management()
                         .conversation_for_step(job.step)
                         .and_then(|conversation| {
+                            if let Some(source)=conversation && source.actor==job.session.actor_id && source.source.device==job.session.device_id {trace_link=Some(avesra_core::trace::Link{turn:source.id,actor:source.actor,device:source.source.device,operation:job.step,parent:Some(source.id)});}
                             let mut state = owned.lock().map_err(|_| ErrorCode::Unavailable)?;
                             let cancelled = conversation
                                 .is_some_and(|value| state.pending_cancellations.contains(&value));
@@ -1328,6 +1444,7 @@ impl NativeEffects {
                             }
                             Ok(())
                         });
+                    let trace_span=trace_link.map(|link|{let mut span=avesra_core::trace::begin(link,avesra_core::trace::Stage::ToolDispatch);span.queued(job.queued);span});
                     let result = binding.and_then(|()| {
                         if controller.management().action_is_browser_read(job.step)? {
                             execute_read(
@@ -1347,6 +1464,8 @@ impl NativeEffects {
                             )
                         }
                     });
+                    if let Some(span)=trace_span {match &result {Ok(receipt)=>span.effect(receipt.outcome),Err(error)=>span.finish(avesra_core::trace::Outcome::Failed,Some(*error))}}
+                    if let (Some(link),Ok(receipt))=(trace_link,&result){avesra_core::trace::begin(link.child(receipt.dispatch_id),avesra_core::trace::Stage::ToolResult).effect(receipt.outcome);}
                     // Ownership ends only after native calls AND durable finalization
                     // have returned. A dropped receiver cannot overlap another job.
                     if let Ok(mut state) = owned.lock() {
@@ -1740,6 +1859,7 @@ impl NativeEffects {
         if self
             .send
             .try_send(Command::Execute(Job {
+                queued: std::time::Instant::now(),
                 step,
                 session,
                 cancellation: cancellation.clone(),
@@ -1752,6 +1872,7 @@ impl NativeEffects {
             return Err(ErrorCode::Unavailable);
         }
         Ok(ExecutionWaiter {
+            settled: AtomicBool::new(false),
             receive,
             cancellation,
         })

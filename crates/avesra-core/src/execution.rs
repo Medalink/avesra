@@ -23,6 +23,15 @@ pub struct VolumeLevel {
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum EffectObservation {
+    Download {
+        report: Box<crate::download::Report>,
+    },
+    DnsFlush {
+        context: uuid::Uuid,
+        revision: uuid::Uuid,
+        evidence: uuid::Uuid,
+        command_completed: bool,
+    },
     Vpn {
         report: Box<crate::vpn::Report>,
     },
@@ -72,6 +81,9 @@ impl EffectObservation {
         action: &avesra_contracts::Action,
         outcome: Outcome,
     ) -> Result<(), ErrorCode> {
+        if outcome == Outcome::AlreadySatisfied && !matches!(self, Self::Vpn { .. }) {
+            return Err(ErrorCode::Malformed);
+        }
         if matches!(self, Self::BrowserRead { .. })
             && serde_json::to_vec(self)
                 .map_err(|_| ErrorCode::Malformed)?
@@ -81,6 +93,40 @@ impl EffectObservation {
             return Err(ErrorCode::TooLarge);
         }
         match self {
+            Self::Download { report } => {
+                report.validate()?;
+                if action.payload
+                    != (avesra_contracts::ActionPayload::DiagnoseDownload {
+                        context: report.context,
+                        revision: report.revision,
+                    })
+                    || action.target_id != report.context
+                    || outcome != Outcome::Success
+                {
+                    return Err(ErrorCode::Malformed);
+                }
+                Ok(())
+            }
+            Self::DnsFlush {
+                context,
+                revision,
+                evidence,
+                command_completed,
+            } => {
+                if action.payload
+                    != (avesra_contracts::ActionPayload::FlushDownloadDns {
+                        context: *context,
+                        revision: *revision,
+                        evidence: *evidence,
+                    })
+                    || action.target_id != *context
+                    || (outcome == Outcome::Success && !command_completed)
+                    || !matches!(outcome, Outcome::Success | Outcome::UnknownEffect)
+                {
+                    return Err(ErrorCode::Malformed);
+                }
+                Ok(())
+            }
             Self::Vpn { report } => report.validate(action, outcome),
             Self::PromptDraft {
                 app_id,
@@ -251,6 +297,7 @@ impl EffectAuthority<'_> {
             self.permit.action.payload,
             avesra_contracts::ActionPayload::ReadPage { .. }
                 | avesra_contracts::ActionPayload::InspectBrowserProvider { .. }
+                | avesra_contracts::ActionPayload::OpenX { .. }
         ) {
             return Err(ErrorCode::Unsupported);
         }
@@ -276,6 +323,7 @@ impl EffectAuthority<'_> {
             || matches!(
                 self.permit.action.payload,
                 avesra_contracts::ActionPayload::Diagnostic { .. }
+                    | avesra_contracts::ActionPayload::DiagnoseDownload { .. }
             )
         {
             return Err(ErrorCode::Denied);
@@ -370,11 +418,20 @@ impl ExecutionController {
         let read = matches!(
             permit.action.payload,
             avesra_contracts::ActionPayload::Diagnostic { .. }
+                | avesra_contracts::ActionPayload::DiagnoseDownload { .. }
         );
         // Preserve the evidence that the adapter itself obtained admission. The
         // final publication check must not manufacture a previously missing read.
         let read_admitted = authority.read_admitted;
-        if read && result.is_ok() {
+        let already_satisfied = !authority.committed
+            && matches!(
+                permit.action.payload,
+                avesra_contracts::ActionPayload::ConnectVpn { .. }
+            )
+            && result
+                .as_ref()
+                .is_ok_and(|v| v.outcome == Outcome::AlreadySatisfied);
+        if (read || already_satisfied) && result.is_ok() {
             result = result.and_then(|value| {
                 authority.current()?;
                 Ok(value)
@@ -389,7 +446,9 @@ impl ExecutionController {
             if let Some(observation) = &value.observation {
                 observation.validate(&permit.action, value.outcome)?;
             }
-            if value.outcome == Outcome::Success && value.observation.is_none() {
+            if matches!(value.outcome, Outcome::Success | Outcome::AlreadySatisfied)
+                && value.observation.is_none()
+            {
                 return Err(ErrorCode::Malformed);
             }
             Ok(value.outcome)
@@ -399,6 +458,9 @@ impl ExecutionController {
             (true, _) => Outcome::UnknownEffect,
             (false, _) if cancellation.is_cancelled() => Outcome::Cancelled,
             (false, Ok(Outcome::Success)) if read && read_admitted => Outcome::Success,
+            (false, Ok(Outcome::AlreadySatisfied)) if already_satisfied && read_admitted => {
+                Outcome::AlreadySatisfied
+            }
             (false, Ok(Outcome::Unsupported)) => Outcome::Unsupported,
             (false, Ok(Outcome::NeedsInput)) => Outcome::NeedsInput,
             (false, _) => Outcome::Failed,
@@ -407,7 +469,7 @@ impl ExecutionController {
         // lease was cancelled after commit. It does not authorize another effect.
         let observation =
             observation.filter(|value| value.validate(&permit.action, outcome).is_ok());
-        if read && outcome == Outcome::Success {
+        if (read && outcome == Outcome::Success) || outcome == Outcome::AlreadySatisfied {
             let mut current = || {
                 let elapsed =
                     u64::try_from(started.elapsed().as_millis()).map_err(|_| ErrorCode::Expired)?;

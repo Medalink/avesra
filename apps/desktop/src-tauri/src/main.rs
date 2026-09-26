@@ -23,6 +23,7 @@ mod sound;
 pub mod speech;
 mod startup_greeting;
 pub mod tasks;
+mod traces;
 mod voice;
 mod voice_check;
 mod voices;
@@ -656,6 +657,7 @@ fn main() {
                 )
             })?;
             app.manage(instance_lock);
+            let _ = avesra_core::trace::initialize(&directory, avesra_core::trace::Host::Native);
             let mut store = Store::open(&directory.join("avesra.db"))?;
             let mut settings = store.settings()?;
             if (settings.microphone.is_none() || settings.speaker.is_none())
@@ -933,6 +935,9 @@ fn main() {
             catalog::forget_app_alias,
             tasks::open_action_panel,
             performance::performance_snapshot,
+            traces::accepted_traces,
+            traces::export_accepted_traces,
+            traces::set_trace_retention,
             tasks::close_action_panel,
             tasks::action_status,
             tasks::grant_app_action,
@@ -940,6 +945,9 @@ fn main() {
             tasks::grant_diagnostic_action,
             tasks::inspect_vpn_profile,
             tasks::grant_vpn_action,
+            tasks::download::grant_download_diagnosis,
+            tasks::download::grant_download_fix,
+            tasks::download::approve_download_fix,
             tasks::grant_browser_read_action,
             tasks::change_private_memory,
             tasks::inspect_prompt_surface,

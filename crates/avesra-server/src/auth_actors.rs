@@ -134,6 +134,25 @@ fn read(db: &Connection, device: Uuid) -> Result<Option<Binding>, ErrorCode> {
 }
 #[cfg(unix)]
 impl AuthStore {
+    pub fn trace_binding(
+        &self,
+        device: Uuid,
+        request: &avesra_core::trace::Query,
+    ) -> Result<Binding, ErrorCode> {
+        request.validate()?;
+        if !self.active(device).map_err(|_| ErrorCode::Storage)? {
+            return Err(ErrorCode::Denied);
+        }
+        let binding = read(&self.connection, device)?.ok_or(ErrorCode::Denied)?;
+        if binding.revoked
+            || binding.actor != request.actor
+            || binding.owner_revision != request.owner_revision
+            || binding.registered_by != request.registered_by
+        {
+            return Err(ErrorCode::Denied);
+        }
+        Ok(binding)
+    }
     pub fn planner_binding(
         &self,
         context: &avesra_contracts::planner::Context,

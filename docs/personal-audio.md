@@ -1,5 +1,20 @@
 # Personal conversation during native playback
 
+Personal admission follows its live native session instead of expiring after
+twelve hours. Its private profile lifetime has no wall-clock deadline; only the
+Personal kind permits that representation. This does not make saved identity or
+speech permanent authority: every existing owner, selected device, model, session,
+epoch and grant check still applies, as do mute, deafen, pause, lock, revocation,
+disconnect and diagnostic-mode capture suppression. No periodic timer restarts
+capture or discards an unfinished utterance. Restart restores actual protected
+observations through the existing current-owner revalidation path.
+
+Development and ReleaseQualified profiles retain their existing finite deadlines,
+including the bounded collection period and twelve-hour reviewed/restored lifetime.
+Original utterance freshness, accepted-turn deadlines, learning bounds and private
+transport deadlines are unchanged. Personal recognition remains provisional;
+continuous lifetime is not a release qualification claim.
+
 Personal capture may continue while Avesra speaks. It uses native post-format
 stereo mixed output (speech, effects and background) as a provisional echo
 reference. This is not `NoOutput`, acoustic-clean proof, release qualification,

@@ -55,6 +55,19 @@ not deleted text. Existing offline backups are separately retained and must not
 be described as erased. Deletion of one actor's record cannot delete another
 actor's independent evidence.
 
+A historical native event answer remains an immutable conversation record, but
+it is not an unconditional retrieval copy. Before adding it to a later planner
+request, the same claim transaction revalidates its exact submitted batch,
+ordered event IDs, actor/device/kind and current event bodies, and requires the
+reconstructed answer to equal the stored text. Deleted/corrected bodies, expired
+batches or missing/mismatched dependencies exclude that pair from model context.
+An empty, content-free no-announcement answer needs no event dependency. Legacy
+answers without typed provenance are excluded only when their original accepted
+question matches the exact native event-question grammar. No historical reply is
+erased or heuristically searched for deleted text. This does not erase old model
+answers that separately repeated a fact, original tasks or retained backups, and
+is not proof of the complete A16 deletion workflow.
+
 Native Settings inspection and deletion require the existing owner-management
 boundary. Spoken remember/correct/delete requests require an actually accepted
 turn and the ordinary exact proposal/approval rules. No arbitrary transcript or

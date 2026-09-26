@@ -2,7 +2,6 @@
 use super::{AdmissionKind, Context, QualifiedProfile, utterance};
 use avesra_contracts::ErrorCode;
 use serde::{Deserialize, Serialize};
-use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 pub const AFFINITY: f32 = 0.65;
@@ -187,7 +186,7 @@ impl Voice {
             endpoint_policy: utterance::Policy::measured(Uuid::new_v4(), 0.5, 0.5, 10)?,
             minimum_voiced_samples: 1280,
             maximum_clipped_fraction: 0.01,
-            valid_until: Instant::now() + Duration::from_secs(12 * 3600),
+            valid_until: None,
         })
     }
 }

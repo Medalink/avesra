@@ -1,7 +1,7 @@
 //! One durable planner claim per opaque accepted turn, with no replay handle recovery.
 use super::{DurableTurn, Record, Store};
 use crate::ledger::DispatchSession;
-use avesra_contracts::{ErrorCode, actors::Binding, planner};
+use avesra_contracts::{ErrorCode, actors::Binding, planner, speech::Provenance};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -12,6 +12,10 @@ use std::{
     time::{Duration, Instant},
 };
 use uuid::Uuid;
+#[path = "conversation_observation.rs"]
+mod observation;
+pub use observation::{ObservationClaim, ObservationRequest};
+
 const MAX_BODY: usize = 65_536;
 pub(crate) const PLAN_SCHEMA: &str = "CREATE TABLE conversation_plans(turn TEXT PRIMARY KEY NOT NULL REFERENCES accepted_conversations(id),request TEXT UNIQUE NOT NULL,actor TEXT NOT NULL,body TEXT NOT NULL CHECK(length(CAST(body AS BLOB))<=65536),state TEXT NOT NULL CHECK(state IN ('pending','replied','cancelled','suspended')))";
 pub(crate) const REPLY_SCHEMA: &str = "CREATE TABLE conversation_replies(turn TEXT PRIMARY KEY NOT NULL REFERENCES conversation_plans(turn),revision TEXT UNIQUE NOT NULL,request TEXT UNIQUE NOT NULL REFERENCES conversation_plans(request),body TEXT NOT NULL CHECK(length(CAST(body AS BLOB))<=65536))";
@@ -317,6 +321,8 @@ impl PlannerClaim {
 struct ReplyRecord {
     revision: Uuid,
     reply: planner::Reply,
+    #[serde(default)]
+    provenance: Provenance,
 }
 /// Only a successful current ledger commit constructs this normal-output source.
 pub struct StoredReply {
@@ -326,6 +332,7 @@ pub struct StoredReply {
     reply: planner::Reply,
     task: Option<super::tasks::LinkedTask>,
     started: Instant,
+    provenance: Provenance,
 }
 impl Drop for StoredReply {
     fn drop(&mut self) {
@@ -333,6 +340,9 @@ impl Drop for StoredReply {
     }
 }
 impl StoredReply {
+    pub fn provenance(&self) -> &Provenance {
+        &self.provenance
+    }
     pub fn proposed_task(&self) -> Option<&super::tasks::LinkedTask> {
         self.task.as_ref()
     }
@@ -365,6 +375,7 @@ pub struct PlannerSummary {
     pub request: Uuid,
     pub state: String,
     pub reply_revision: Option<Uuid>,
+    pub provenance: Option<Provenance>,
 }
 fn remaining(started: Instant) -> Result<u64, ErrorCode> {
     let remaining = Duration::from_millis(planner::MAX_BUDGET_MS)
@@ -427,6 +438,26 @@ fn read_reply(db: &Connection, plan: &Plan) -> Result<Option<ReplyRecord>, Error
         return Err(ErrorCode::Malformed);
     }
     let value: ReplyRecord = serde_json::from_slice(&body).map_err(|_| ErrorCode::Malformed)?;
+    value.provenance.validate()?;
+    if let Provenance::NativeEvents { event_kind, .. } = &value.provenance {
+        let expected = match crate::notifications::question_kind(&plan.request.text) {
+            Some(crate::notifications::Kind::Learning) => {
+                avesra_contracts::speech::EventKind::Learning
+            }
+            Some(crate::notifications::Kind::Action) => avesra_contracts::speech::EventKind::Action,
+            None => return Err(ErrorCode::Malformed),
+        };
+        if *event_kind != expected
+            || !matches!(value.reply.response, planner::Response::Answer { .. })
+        {
+            return Err(ErrorCode::Malformed);
+        }
+    }
+    if matches!(value.provenance, Provenance::NativeObservation { .. })
+        && !matches!(value.reply.response, planner::Response::Answer { .. })
+    {
+        return Err(ErrorCode::Malformed);
+    }
     if value.reply.version != plan.request.version {
         return Err(ErrorCode::Version);
     }
@@ -466,6 +497,7 @@ pub(super) fn summary(
     Ok(Some(PlannerSummary {
         request: plan.request.context.request,
         state,
+        provenance: reply.as_ref().map(|r| r.provenance.clone()),
         reply_revision: reply.map(|r| r.revision),
     }))
 }
@@ -527,6 +559,26 @@ fn recent_dialogue(
         let reply = read_reply(db, &plan)?.ok_or(ErrorCode::Malformed)?;
         if matches!(reply.reply.response, planner::Response::Proposal { .. }) {
             continue;
+        }
+        match &reply.provenance {
+            Provenance::NativeEvents { .. } => {
+                if !crate::notifications::answer_current(
+                    db,
+                    record.actor,
+                    record.source.device,
+                    &reply.provenance,
+                    reply.reply.response.text(),
+                )? {
+                    continue;
+                }
+            }
+            Provenance::Model if crate::notifications::question_kind(&record.text).is_some() => {
+                // Legacy local answers have no exact dependency provenance.
+                // Keep their history, but do not retrieve potentially deleted content.
+                continue;
+            }
+            Provenance::Model => {}
+            Provenance::NativeObservation { .. } => continue,
         }
         let pair_bytes = record.text.len() + reply.reply.response.text().len();
         if bytes + pair_bytes > planner::MAX_DIALOGUE_BYTES {
@@ -659,8 +711,27 @@ impl Store {
     }
     pub fn finish_planner(
         &mut self,
-        mut claim: PlannerClaim,
+        claim: PlannerClaim,
         reply: planner::Reply,
+        apps: &crate::apps::AppCatalog,
+        authorize: &mut dyn FnMut(&PlannerAuthority<'_>) -> Result<(), ErrorCode>,
+    ) -> Result<StoredReply, ErrorCode> {
+        self.finish_reply(claim, Some(reply), apps, authorize)
+    }
+    /// Derives only the last native announced batch, under the original claim.
+    /// No external response/provenance parameter can enter this constructor.
+    pub fn finish_event_answer(
+        &mut self,
+        claim: PlannerClaim,
+        apps: &crate::apps::AppCatalog,
+        authorize: &mut dyn FnMut(&PlannerAuthority<'_>) -> Result<(), ErrorCode>,
+    ) -> Result<StoredReply, ErrorCode> {
+        self.finish_reply(claim, None, apps, authorize)
+    }
+    fn finish_reply(
+        &mut self,
+        mut claim: PlannerClaim,
+        reply: Option<planner::Reply>,
         apps: &crate::apps::AppCatalog,
         authorize: &mut dyn FnMut(&PlannerAuthority<'_>) -> Result<(), ErrorCode>,
     ) -> Result<StoredReply, ErrorCode> {
@@ -675,15 +746,20 @@ impl Store {
     fn finish_planner_inner(
         &mut self,
         claim: &PlannerClaim,
-        reply: planner::Reply,
+        reply: Option<planner::Reply>,
         apps: &crate::apps::AppCatalog,
         authorize: &mut dyn FnMut(&PlannerAuthority<'_>) -> Result<(), ErrorCode>,
     ) -> Result<StoredReply, ErrorCode> {
         claim.cancellation.check()?;
         remaining(claim.started)?;
-        reply.validate(&claim.plan.request.context)?;
-        let permissions = if matches!(reply.response, planner::Response::Proposal { .. }) {
-            self.action_permissions(Some(reply.context.actor))?
+        if let Some(value) = &reply {
+            value.validate(&claim.plan.request.context)?;
+        }
+        let permissions = if reply
+            .as_ref()
+            .is_some_and(|v| matches!(v.response, planner::Response::Proposal { .. }))
+        {
+            self.action_permissions(Some(claim.context().actor))?
         } else {
             Vec::new()
         };
@@ -701,9 +777,31 @@ impl Store {
         {
             return Err(ErrorCode::Stale);
         }
+        let (reply, provenance) = match reply {
+            Some(reply) => (reply, Provenance::Model),
+            None => {
+                let kind = crate::notifications::question_kind(&record.text)
+                    .ok_or(ErrorCode::Unsupported)?;
+                let (provenance, events) =
+                    crate::notifications::announced(&tx, record.actor, record.source.device, kind)?;
+                let text = crate::notifications::describe_last(kind, &events)?;
+                (
+                    planner::Reply {
+                        version: planner::VERSION,
+                        context: claim.context().clone(),
+                        terminal: planner::Terminal::Complete,
+                        response: planner::Response::Answer { text },
+                    },
+                    provenance,
+                )
+            }
+        };
+        reply.validate(claim.context())?;
+        provenance.validate()?;
         let result = ReplyRecord {
             revision: Uuid::new_v4(),
             reply,
+            provenance,
         };
         tx.execute(
             "INSERT INTO conversation_replies(turn,revision,request,body) VALUES(?1,?2,?3,?4)",
@@ -716,7 +814,10 @@ impl Store {
         )
         .map_err(|_| ErrorCode::Storage)?;
         let stored = read_reply(&tx, &plan)?.ok_or(ErrorCode::Malformed)?;
-        if stored.revision != result.revision || stored.reply != result.reply {
+        if stored.revision != result.revision
+            || stored.reply != result.reply
+            || stored.provenance != result.provenance
+        {
             return Err(ErrorCode::Malformed);
         }
         tx.execute(
@@ -764,6 +865,7 @@ impl Store {
             reply: result.reply,
             task,
             started: claim.started,
+            provenance: result.provenance,
         })
     }
 }

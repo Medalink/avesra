@@ -9,11 +9,11 @@ use uuid::Uuid;
 mod planner;
 #[path = "conversation_tasks.rs"]
 mod tasks;
-pub(crate) use planner::{PLAN_SCHEMA, REPLY_SCHEMA, SEQUENCE_SCHEMA};
 pub use planner::{
-    PlannerAuthority, PlannerCancellation, PlannerClaim, PlannerRequest, PlannerRetirement,
-    PlannerSummary, StoredReply,
+    ObservationClaim, ObservationRequest, PlannerAuthority, PlannerCancellation, PlannerClaim,
+    PlannerRequest, PlannerRetirement, PlannerSummary, StoredReply,
 };
+pub(crate) use planner::{PLAN_SCHEMA, REPLY_SCHEMA, SEQUENCE_SCHEMA};
 pub(crate) use tasks::verified_task_source;
 pub use tasks::{ExactTaskRequest, LinkedTask, TaskAuthority, TaskResolution, TaskView};
 pub(crate) use tasks::{SCHEMA as TASK_SCHEMA, validate_dispatch as validate_linked_dispatch};

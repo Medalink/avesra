@@ -37,7 +37,7 @@ pub(super) struct Target {
     observation_revision: u64,
     resource_generation: u64,
     target_generation: u64,
-    candidate: wire::Candidate,
+    candidate: Option<wire::Candidate>,
     retired: bool,
 }
 impl Target {
@@ -63,7 +63,7 @@ impl Target {
             observation_revision: pending.observation_revision,
             resource_generation: pending.resource_generation,
             target_generation: pending.target_generation,
-            candidate,
+            candidate: Some(candidate),
             retired: false,
         })
     }
@@ -102,6 +102,17 @@ fn resolve_target_resource(
         .iter()
         .find(|v| v.reference == reference)
         .ok_or(ErrorCode::Stale)?;
+    validate_target(state, local, inner, target, actor, reservation)
+}
+fn validate_target(
+    state: &Runtime,
+    local: &avesra_core::state::LocalState,
+    inner: &Inner,
+    target: &Target,
+    actor: Uuid,
+    reservation: Option<(&Withdrawal, u64)>,
+) -> Result<Target, ErrorCode> {
+    let attempt = inner.attempt.as_ref().ok_or(ErrorCode::Stale)?;
     if target.retired
         || target.actor != actor
         || !local.connected
@@ -140,7 +151,9 @@ fn resolve_target_resource(
     {
         return Err(ErrorCode::Stale);
     }
-    target.candidate.validate(&target.grant.origin)?;
+    if let Some(candidate) = &target.candidate {
+        candidate.validate(&target.grant.origin)?;
+    }
     Ok(target.clone())
 }
 /// Exact private metadata plus this offer's own resource transition. Not a grant.
@@ -155,6 +168,41 @@ pub(super) fn reserve_target(
     offer: &Offer,
 ) -> Result<PreparedTarget, ErrorCode> {
     let action = &offer.permit().action;
+    if matches!(
+        action.payload,
+        avesra_contracts::ActionPayload::OpenX { .. }
+    ) {
+        let scope = offer.scope();
+        scope.validate()?;
+        if scope.origin.as_str() != avesra_contracts::browser::provider::Provider::X.origin()
+            || scope.operations != [ScopeOperation::Read, ScopeOperation::Navigate]
+            || scope.id.uuid() != action.target_id
+            || scope.actor.uuid() != action.actor_id
+        {
+            return Err(ErrorCode::Denied);
+        }
+        let attempt = inner.attempt.as_ref().ok_or(ErrorCode::Stale)?;
+        let target = Target {
+            reference: ScopeRef {
+                id: Id::new(Uuid::new_v4())?,
+                revision: Id::new(Uuid::new_v4())?,
+            },
+            actor: action.actor_id,
+            grant: scope.clone(),
+            session: attempt.session.ok_or(ErrorCode::Stale)?,
+            transport: inner.generation,
+            connection: attempt.connection,
+            observation_revision: attempt.observation_revision,
+            resource_generation: state.effects.browser_work_generation()?,
+            target_generation: attempt.target_generation,
+            candidate: None,
+            retired: false,
+        };
+        validate_target(state, local, inner, &target, action.actor_id, None)?;
+        let generation = offer.reserve(target.resource_generation)?;
+        state.browser.documents.invalidate();
+        return Ok(PreparedTarget { target, generation });
+    }
     let mut matches = inner
         .attempt
         .as_ref()
@@ -170,10 +218,20 @@ pub(super) fn reserve_target(
     let origin = match &action.payload {
         avesra_contracts::ActionPayload::ReadPage { origin, .. } => origin.as_str(),
         avesra_contracts::ActionPayload::InspectBrowserProvider { provider } => provider.origin(),
+        avesra_contracts::ActionPayload::OpenX { .. } => {
+            avesra_contracts::browser::provider::Provider::X.origin()
+        }
         _ => return Err(ErrorCode::Denied),
     };
     if avesra_contracts::browser::Origin::parse(origin)? != target.grant.origin {
         return Err(ErrorCode::Stale);
+    }
+    if matches!(
+        action.payload,
+        avesra_contracts::ActionPayload::OpenX { .. }
+    ) && !target.grant.operations.contains(&ScopeOperation::Navigate)
+    {
+        return Err(ErrorCode::Denied);
     }
     let generation = offer.reserve(target.resource_generation)?;
     state.browser.documents.invalidate();
@@ -187,6 +245,17 @@ impl PreparedTarget {
         inner: &Inner,
         signal: &Withdrawal,
     ) -> Result<(), ErrorCode> {
+        if self.target.candidate.is_none() {
+            return validate_target(
+                state,
+                local,
+                inner,
+                &self.target,
+                self.target.actor,
+                Some((signal, self.generation)),
+            )
+            .map(|_| ());
+        }
         resolve_target_resource(
             state,
             local,
@@ -236,13 +305,22 @@ impl PreparedTarget {
         remaining_ms: u64,
     ) -> Result<avesra_contracts::browser::reading::Request, ErrorCode> {
         use avesra_contracts::browser::reading::{Context, Mode, Request, Source};
-        let (message_limit, mode) = match permit.action.payload {
+        let (message_limit, mode) = match &permit.action.payload {
             avesra_contracts::ActionPayload::ReadPage { message_limit, .. } => {
-                (message_limit, Mode::Excerpt)
+                (*message_limit, Mode::Excerpt)
             }
-            avesra_contracts::ActionPayload::InspectBrowserProvider { provider } => {
-                (1, Mode::ProviderInspection { provider })
-            }
+            avesra_contracts::ActionPayload::InspectBrowserProvider { provider } => (
+                1,
+                Mode::ProviderInspection {
+                    provider: *provider,
+                },
+            ),
+            avesra_contracts::ActionPayload::OpenX { account } => (
+                1,
+                Mode::XReady {
+                    account: account.clone(),
+                },
+            ),
             _ => return Err(ErrorCode::Denied),
         };
         let action = &permit.action;
@@ -804,7 +882,7 @@ pub(super) fn reply(
                     let phase = Phase::Selected {
                         identity: target.reference.id,
                         revision: target.reference.revision,
-                        candidate: target.candidate.clone(),
+                        candidate: target.candidate.clone().ok_or(ErrorCode::Malformed)?,
                     };
                     // An explicit new selection replaces only inactive metadata
                     // for this scope; actual owner admission already excludes a

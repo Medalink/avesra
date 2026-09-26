@@ -92,8 +92,10 @@ GetSystemTimes scope. Network deltas are per interface, not a sum that double
 counts virtual/VPN traffic. Added/changed/reset counters are unavailable. Disk
 space is explicitly the Windows system drive's caller-visible quota, not the
 download destination or disk utilization. Disk pressure remains unsupported.
-DNS, endpoint latency, per-app throughput/throttling and download destination are
-not inferred from these observations and remain separate catalog work.
+DNS configuration and default-route metadata are read locally. The selected-endpoint
+path below adds bounded DNS/TCP observations and optional fixed-disk destination
+space. Per-app throughput/throttling and disk utilization remain unavailable;
+aggregate counters do not establish those facts.
 
 The Cisco reader pins the independently observed Authenticode-valid Cisco Systems
 binary, version `5, 1, 20, 333`, 145,968 bytes, SHA-256
@@ -121,10 +123,10 @@ The native source uses Microsoft's documented [interface table ownership](https:
 [CPU timing scope](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getsystemtimes)
 and [caller-visible disk space](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getdiskfreespaceexw).
 
-The required future catalog scope includes current adapter/link properties, cumulative network
-byte counters with a second host-local monotonic sample, CPU/disk pressure and
-free space, selected VPN state, and bounded DNS/reachability to the particular
-endpoint implicated by the accepted request. It does not scan unrelated hosts,
+The implemented catalog includes current adapter/link properties, cumulative
+network byte counters with a second host-local monotonic sample, CPU usage/free
+space, selected VPN state, and bounded DNS/TCP observations to the specifically
+selected endpoint. Disk utilization remains unavailable. It does not scan unrelated hosts,
 download speed-test data, reset networking or invoke model-authored scripts.
 Where a required Windows counter is inaccessible or resets between samples,
 report unavailable with its fixed reason; never substitute zero.
@@ -211,3 +213,155 @@ and valid signature. The 746-byte global preferences document has one nonempty
 default name and one numeric IPv4 peer with explicit port 443. No actual values
 or other preference fields were printed or retained. This inspection did not
 invoke connect, authentication, routing changes or credential operations.
+
+
+## Observed already-satisfied result (schema 20)
+
+An exact granted VPN request whose fresh native stats already show the selected
+peer connected completes with `already_satisfied`, without issuing a connect,
+consuming a write boundary, or asking for input. It is distinct from a successful
+connection change. The original current authority, cancellation and deadline are
+checked again inside finalization's transaction. Only the exact validated VPN
+observation can establish this result; a model, generic adapter result, missing
+observation or reconciliation cannot create it. Task state is succeeded, while
+its immutable outcome and event retain the no-change distinction. It does not
+become verified-action memory or an action-completion notification. Legacy rows
+retain their original outcomes; schema 20 prevents older readers opening the new
+variant. Package schema declarations must match the actual binary.
+
+## Bounded slow-download extension contract
+
+The existing granted Computer performance scope supports `diagnose download`
+without additional setup. Native local counters, default routes and IPv4 DNS
+configuration are observed automatically. Only selected-endpoint probes need an
+actual endpoint; application, displayed rate/unit, throttle and destination drive
+are optional owner-reported context. These are reported
+context, not measured throughput or diagnosis. Native observations bind the exact
+context revision and accepted task. Only the selected endpoint is queried; no
+unrelated DNS cache names, browsing history, credentials or request URLs are
+collected. Interface deltas remain interface traffic, never per-app speed.
+Endpoint DNS, route and connection evidence report measured results or fixed
+unavailable reasons separately from hypotheses. Windows counters cannot prove a
+source server or app throttle caused slow throughput.
+
+The only proposed configuration action in this slice is flushing the Windows DNS
+resolver cache after a fresh measured DNS failure for that exact endpoint. DNS
+failure does not establish that the cache is stale and a flush is not promised to
+fix it. A proposal discloses the system-wide cache scope and expected temporary
+DNS lookup cost. A fresh exact owner approval binds original diagnostic evidence,
+action/intent revision, actor, session, endpoint/context and fixed payload before
+any write. Changed, expired or cancelled evidence/approval cannot execute. There
+is no arbitrary command, DNS-server change, network reset, proxy or VPN-policy
+mutation, automated elevation or retry. Actual flush and any postcondition are
+separate observations; no call is made during source/static development.
+
+Entry-point inventory: the existing native Settings diagnostic-context setup,
+accepted-turn resolver and effect worker are the intended observation path;
+protected exact approval is the only configuration path. Model proposals and
+frontend observations cannot supply measured evidence. Existing host/VPN read
+catalog entries remain unchanged. Source progress must not be described as a
+completed download diagnosis or approved fix until those entry points are wired
+and their actual result is observed. No automated tests are created under the
+owner's explicit override; independent source review and build checks apply.
+
+
+### Concrete download entry points and current evidence boundary
+
+Optional Settings endpoint scope stores one selected endpoint (ASCII hostname
+or numeric address) and port80/443. Application label, destination drive and
+reported rate/unit/throttle are optional and remain unavailable when omitted. The protected read grant is distinct from the
+optional protected DNS-cache proposal scope. The exact whole requests are
+`diagnose download` and, after a measured same-context DNS failure,
+`clear download dns cache`. Fixed VPN, volume, app-open and diagnostic commands accept
+terminal `.`, `!` or `?` sentence punctuation. No embedded clauses are removed;
+quoted prompt text and browser URLs are not normalized by this rule. Only the
+whole app-open request gets terminal sentence punctuation removed; embedded
+punctuation/clauses remain part of the exact alias and cannot select another app.
+
+The retained worker performs selected A and AAAA queries using Microsoft's
+[asynchronous DNS API](https://learn.microsoft.com/en-us/windows/win32/api/windns/nf-windns-dnsqueryex),
+keeping query/cancellation buffers until the actual completion callback after a
+cancellation request. There is a five-second DNS budget within a ten-second
+observation budget. A DNS-stage timeout is reported explicitly while prior
+resource observations are retained if actual action authority is still current.
+TCP stage failures/timeouts similarly remain unavailable measurements. Neither
+can enable a flush. If Windows cannot complete cancellation, the actual worker
+remains occupied; buffers are not freed or a replacement admitted. At most four
+returned non-loopback endpoints receive route lookup and a500ms TCP connection
+attempt with no application payload. TCP timing does not establish TLS, source
+throughput or a cause of slowness. Interface rates and primary-group CPU scope
+retain the existing one-second measured interval; disk utilization remains
+explicitly unsupported and destination disk quota is reported separately.
+
+A DNS-cache proposal requires both address-family queries to return an actual
+negative/server-failure/refusal/no-record result, no resolved endpoints, and a
+successful diagnostic finalization no older than120seconds in the same actor,
+device, session and action epoch. Unavailable/cancelled queries cannot propose a
+flush. Revoking/changing the diagnosis scope invalidates the evidence. The later
+accepted request creates AwaitingApproval with the fixed payload and evidence
+identity; the original native coordinator waits while Settings displays the
+exact revision. Approval does not renew either the action deadline or the
+conservative30second accepted-coordinator lifetime. Caller loss, task cancel,
+lock/disconnect or expiry prevents dispatch; stale pending approvals cannot be
+recovered from history. No approval is inferred from the spoken request alone.
+
+The fixed write is the documented Microsoft
+[`ipconfig /flushdns`](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/ipconfig).
+The installed binary was inspected read-only on2026-09-26: version10.0.26100.1,
+61440bytes, Authenticode Valid/Microsoft Windows, SHA256
+`8a013c65ff778cf8341cd0b3404f6e323c5ff91b5059ac47f3bfe2cd6208f6a1`.
+A read handle denies replacement through actual child retirement. No shell,
+stdin, output capture, elevation, credentials or extra arguments are used.
+The original authority is checked before its single commit boundary; timeout
+or loss after that boundary remains an unknown effect. Exit-zero records command
+completion only, never a repaired download or successful subsequent lookup.
+An OS failure to kill/reap retains the worker rather than claiming retirement.
+
+No DNS query, connection attempt, cache flush or VPN mutation was performed as
+part of this source implementation. Native accepted diagnosis/approval and its
+negative authority cases still require direct owner-authorized runtime proof.
+
+
+Local configuration additions use bounded GetIpForwardTable2 default routes and
+GetNetworkParams IPv4 DNS-server count; host/domain/scope strings in that API
+buffer are not retained or displayed. Route metrics are not combined interface
+metrics, and IPv4 DNS configuration is not a claim about IPv6 resolvers. Missing
+endpoint context falls back to the current HostResources grant; it never fabricates
+an endpoint or runs a probe. Missing app/rate/throttle/drive does not block this
+local diagnosis. The optional selected-endpoint form is not an activation step.
+
+Optional destination-space observations are limited to a Windows fixed local disk;
+removable, mapped-network and unknown drive types are explicitly unsupported.
+An internal route/TCP stage timeout preserves collected local facts and any route
+already observed, provided the original action authority remains current.
+
+## Grounded spoken diagnostic result
+
+A successful native resolution of a C7 accepted task may issue one opaque
+observation-reply continuation. Reading historical task rows cannot create it.
+The continuation retains the original task, action revision, native accepted
+source and monotonic budget; the native coordinator binds the current actor
+registration and original withdrawal signal before dispatch. After actual
+finalization, the same Store worker derives a bounded spoken explanation from
+that exact immutable finalization and typed observation, inside the reply
+transaction. No frontend text, model response or copied report is accepted.
+
+The reply receives NativeObservation provenance (dispatch and action revision),
+a fresh durable monotonic reply ordinal, and the original accepted-turn context.
+It is published at most once via the existing normal reply owner and streamed
+TTS path. It cannot revive an expired or cancelled action, renew its lifetime,
+change its outcome or become another effect. Failures and unknown outcomes are
+spoken only if the original live owner still allows output; otherwise their
+existing task report remains the durable result. Historical observation replies
+are not retrieved as current diagnostic evidence in later model prompts.
+
+Host-only download diagnosis summarizes CPU and per-interface observations,
+local DNS/default-route presence and system-drive free space. It explicitly says
+that the selected download endpoint, app rate, throttle and destination are
+unknown and asks for the endpoint only when endpoint-specific evidence would
+help. A selected-endpoint report distinguishes DNS resolution, transport timing,
+and local counters: none alone establishes download throughput or stale cache.
+A completed flush is described solely as command completion, with remeasurement
+needed. VPN output distinguishes already connected, newly observed target match,
+owner authentication, other connection and unresolved state; it never claims
+Spark reachability from VPN state alone.

@@ -21,6 +21,7 @@ struct Completed {
     digest: [u8; 32],
     at: Instant,
     output: Option<Output>,
+    provenance: speech::Provenance,
 }
 struct Output {
     context: speech::Context,
@@ -216,6 +217,11 @@ pub(super) async fn operation(
     if !current(&state, &context) || Instant::now() >= deadline {
         return Err(StatusCode::CONFLICT);
     }
+    let span = avesra_core::trace::begin(
+        avesra_core::trace::Link::planner(&context),
+        avesra_core::trace::Stage::ControllerPlanner,
+    );
+    let result=async {
     let driver = state
         .reasoning
         .as_ref()
@@ -290,10 +296,29 @@ pub(super) async fn operation(
             digest,
             at: Instant::now(),
             output: None,
+            provenance: speech::Provenance::Model,
         });
         owner.completed = true;
     }
     Ok(reply)
+    }.await;
+    span.finish(
+        if result.is_ok() {
+            avesra_core::trace::Outcome::Complete
+        } else {
+            avesra_core::trace::Outcome::Failed
+        },
+        result.as_ref().err().map(|status| {
+            if *status == StatusCode::CONFLICT {
+                ErrorCode::Stale
+            } else if *status == StatusCode::REQUEST_TIMEOUT {
+                ErrorCode::Expired
+            } else {
+                ErrorCode::Unavailable
+            }
+        }),
+    );
+    result
 }
 pub(super) fn cancel(
     state: Shared,
@@ -359,6 +384,16 @@ fn response_digest(response: &planner::Response) -> Result<[u8; 32], ErrorCode> 
     let encoded = serde_json::to_vec(response).map_err(|_| ErrorCode::Malformed)?;
     Ok(Sha256::digest(encoded).into())
 }
+fn source_digest(source: &speech::Source) -> Result<[u8; 32], ErrorCode> {
+    if source.provenance == speech::Provenance::Model {
+        response_digest(&source.response)
+    } else {
+        // Local derivation binds its exact ledger revision and provenance too;
+        // there is no model-result digest to borrow or relabel.
+        let encoded = serde_json::to_vec(source).map_err(|_| ErrorCode::Malformed)?;
+        Ok(Sha256::digest(encoded).into())
+    }
+}
 /// Consumes the server completion's one output opportunity. This is paired
 /// native assertion, not permission for frontend text or history reconstruction.
 pub(super) fn reserve_speech(
@@ -372,7 +407,7 @@ pub(super) fn reserve_speech(
     if device != context.device {
         return Err(ErrorCode::Denied);
     }
-    let digest = response_digest(&request.source.response)?;
+    let digest = source_digest(&request.source)?;
     let mut sessions = state.sessions.lock().map_err(|_| ErrorCode::Unavailable)?;
     let session = sessions.get_mut(&context.session).ok_or(ErrorCode::Stale)?;
     if session.device != device
@@ -391,6 +426,30 @@ pub(super) fn reserve_speech(
     {
         return Err(ErrorCode::Stale);
     }
+    if !matches!(request.source.provenance, speech::Provenance::Model) {
+        session.planner_requests.retain(|_, entry| !entry.retired());
+        if context.ordinal <= session.planner_ordinal
+            || session.planner_requests.len() >= 64
+            || collides(&session.planner_requests, context)
+        {
+            return Err(ErrorCode::Stale);
+        }
+        session.planner_ordinal = context.ordinal;
+        session.planner_requests.insert(
+            context.request,
+            Entry {
+                context: context.clone(),
+                live: Arc::new(AtomicBool::new(true)),
+                owner: Arc::downgrade(owner),
+                completed: Some(Completed {
+                    digest,
+                    at: Instant::now(),
+                    output: None,
+                    provenance: request.source.provenance.clone(),
+                }),
+            },
+        );
+    }
     let entry = session
         .planner_requests
         .get_mut(&context.request)
@@ -400,6 +459,7 @@ pub(super) fn reserve_speech(
     }
     let completed = entry.completed.as_mut().ok_or(ErrorCode::Stale)?;
     if completed.output.is_some()
+        || completed.provenance != request.source.provenance
         || completed.at.elapsed() >= Duration::from_secs(10)
         || !bool::from(completed.digest.ct_eq(&digest))
     {

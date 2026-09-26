@@ -103,6 +103,8 @@ pub struct TtsStream {
     complete: bool,
     voice: VoiceIdentity,
     retirement: Retirement,
+    trace: Option<avesra_core::trace::Span>,
+    first: Option<avesra_core::trace::Span>,
 }
 // The source roster may compact only after actual private retirement. A failed
 // cancellation intentionally leaves a nonzero uncertainty count, without leaking
@@ -137,6 +139,10 @@ impl Drop for Retirement {
         }
     }
 }
+pub struct Source {
+    pub retirement: Arc<AtomicUsize>,
+    pub trace: avesra_core::trace::Link,
+}
 impl AudioClient {
     pub async fn synthesize<F, Fut>(
         self: &Arc<Self>,
@@ -144,14 +150,15 @@ impl AudioClient {
         utterance_id: Uuid,
         voice: &VoiceIdentity,
         text: &str,
-        retirement: Option<Arc<AtomicUsize>>,
+        source: Option<Source>,
         authorize: F,
     ) -> Result<TtsStream, ErrorCode>
     where
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = Result<(), ErrorCode>>,
     {
-        let retirement = Retirement::new(retirement)?;
+        let trace = source.as_ref().map(|s| s.trace);
+        let retirement = Retirement::new(source.map(|s| s.retirement))?;
         voice.validate()?;
         if utterance_id.is_nil() || epoch != self.epoch.load(Ordering::SeqCst) {
             return Err(ErrorCode::Stale);
@@ -190,6 +197,18 @@ impl AudioClient {
             recent.insert(utterance_id, Instant::now() + Duration::from_secs(31));
         }
         let request_id = Uuid::new_v4();
+        let link = trace.map(|v| v.child(request_id));
+        let trace = link.map(|link| {
+            let mut span = avesra_core::trace::begin(link, avesra_core::trace::Stage::PrivateTts);
+            span.deployment(avesra_core::trace::Deployment::observed(
+                &health.model_revision,
+                "",
+                "",
+            ));
+            span
+        });
+        let first =
+            link.map(|link| avesra_core::trace::begin(link, avesra_core::trace::Stage::FirstAudio));
         let mut request = self.request("tts_stream", request_id, epoch, 30_000)?;
         let issued = request["issued_at_ms"]
             .as_u64()
@@ -213,6 +232,8 @@ impl AudioClient {
             complete: false,
             voice: voice.clone(),
             retirement,
+            trace,
+            first,
         };
         tokio::time::timeout(Duration::from_secs(3), async {
             let mut socket = UnixStream::connect(&self.socket)
@@ -357,6 +378,10 @@ impl TtsStream {
                     return Err(ErrorCode::Malformed);
                 }
                 self.complete = true;
+                if let Some(span) = self.trace.take() {
+                    span.finish(avesra_core::trace::Outcome::Complete, None);
+                }
+
                 self.socket.take();
                 self.permit.take();
                 self.retirement.confirm();
@@ -372,6 +397,11 @@ impl TtsStream {
             }
         };
         self.failed = false;
+        if matches!(event, SpeechEvent::Audio { .. })
+            && let Some(span) = self.first.take()
+        {
+            span.finish(avesra_core::trace::Outcome::Complete, None);
+        }
         Ok(event)
     }
 }
@@ -388,6 +418,7 @@ impl Drop for TtsStream {
         let request = self.request_id;
         let remaining = Duration::from_secs(31).saturating_sub(self.started.elapsed());
         let mut retirement = std::mem::take(&mut self.retirement);
+        let trace = self.trace.take();
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             runtime.spawn(async move {
                 let _permit = permit;
@@ -397,6 +428,9 @@ impl Drop for TtsStream {
                     tokio::time::sleep(remaining).await;
                 } else {
                     retirement.confirm();
+                    if let Some(span) = trace {
+                        span.finish(avesra_core::trace::Outcome::Withdrawn, None);
+                    }
                 }
             });
         } else {

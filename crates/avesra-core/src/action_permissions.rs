@@ -55,11 +55,19 @@ pub(crate) fn check_schema(db: &Connection, version: u64) -> Result<(), ErrorCod
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TaskTarget {
+    Download {
+        context: Box<crate::download::Context>,
+        configuration: bool,
+    },
     Vpn {
         profile: Box<crate::vpn::Profile>,
     },
     BrowserRead {
         scope: Box<crate::browser_scopes::Grant>,
+    },
+    XReady {
+        scope: Box<crate::browser_scopes::Grant>,
+        account: String,
     },
     Prompt {
         binding: Box<crate::workflows::PromptBinding>,
@@ -81,8 +89,10 @@ pub enum TaskTarget {
 impl TaskTarget {
     pub fn id(&self) -> Uuid {
         match self {
+            Self::Download { context, .. } => context.id,
             Self::Vpn { profile } => profile.id,
             Self::BrowserRead { scope } => scope.id.uuid(),
+            Self::XReady { scope, .. } => scope.id.uuid(),
             Self::Prompt { binding } => binding.id,
             Self::Diagnostic { catalog } => catalog.id(),
             Self::Application { app, .. } => *app,
@@ -91,8 +101,16 @@ impl TaskTarget {
     }
     pub fn operation(&self) -> Operation {
         match self {
+            Self::Download { configuration, .. } => {
+                if *configuration {
+                    Operation::ChangeConfiguration
+                } else {
+                    Operation::Diagnostic
+                }
+            }
             Self::Vpn { .. } => Operation::ConnectVpn,
             Self::BrowserRead { .. } => Operation::ReadPage,
+            Self::XReady { .. } => Operation::Navigate,
             Self::Prompt { .. } => Operation::FillPrompt,
             Self::Diagnostic { .. } => Operation::Diagnostic,
             Self::Application { .. } => Operation::LaunchApp,
@@ -101,7 +119,19 @@ impl TaskTarget {
     }
     pub fn validate(&self) -> Result<(), ErrorCode> {
         let valid = match self {
+            Self::Download { context, .. } => context.validate().is_ok(),
             Self::Vpn { profile } => profile.validate().is_ok(),
+            Self::XReady { scope, account } => {
+                scope.validate().is_ok()
+                    && scope.origin.as_str()
+                        == avesra_contracts::browser::provider::Provider::X.origin()
+                    && scope.operations
+                        == [
+                            avesra_contracts::browser::ScopeOperation::Read,
+                            avesra_contracts::browser::ScopeOperation::Navigate,
+                        ]
+                    && avesra_contracts::browser::provider::x_account(account)
+            }
             Self::BrowserRead { scope } => {
                 scope.validate().is_ok()
                     && scope
@@ -150,9 +180,11 @@ impl Permission {
         self.target.validate()?;
         if self.id.is_nil()
             || self.actor.is_nil()
+            || matches!(&self.target,TaskTarget::Download{context,configuration} if context.actor!=self.actor || self.name!=if *configuration { "download dns cache" } else { "download diagnosis" })
             || matches!(&self.target,TaskTarget::Vpn{profile} if profile.actor!=self.actor || self.name!="work vpn")
             || crate::apps::alias_phrase(&self.name).ok().as_ref() != Some(&self.name)
             || matches!(&self.target, TaskTarget::BrowserRead { scope } if scope.actor.uuid()!=self.actor || self.name!="browser page")
+            || matches!(&self.target, TaskTarget::XReady { scope, .. } if scope.actor.uuid()!=self.actor || self.name!="x")
             || matches!(self.target, TaskTarget::Volume { .. }) && self.name != "speakers"
             || matches!(self.target, TaskTarget::Diagnostic { catalog } if self.name != catalog.name())
             || matches!(&self.target,TaskTarget::Prompt{binding} if binding.actor!=self.actor || binding.project!=self.name)
@@ -163,6 +195,14 @@ impl Permission {
     }
 }
 pub enum Selection {
+    XReady {
+        scope: Box<crate::browser_scopes::Grant>,
+        account: String,
+    },
+    Download {
+        context: Box<crate::download::Context>,
+        configuration: bool,
+    },
     Vpn {
         profile: Box<crate::vpn::Profile>,
     },
@@ -252,6 +292,43 @@ impl Store {
             return Err(ErrorCode::TooLarge);
         }
         let (name, target) = match selection {
+            Selection::XReady { scope, account } => {
+                let app = apps.get(scope.browser_app.uuid())?;
+                let target = TaskTarget::XReady {
+                    scope: scope.clone(),
+                    account,
+                };
+                target.validate()?;
+                if scope.actor.uuid() != actor
+                    || app.selected_by != actor
+                    || app.revision != scope.browser_revision.uuid()
+                {
+                    return Err(ErrorCode::Stale);
+                }
+                ("x".to_owned(), target)
+            }
+            Selection::Download {
+                context,
+                configuration,
+            } => {
+                context.validate()?;
+                if context.actor != actor {
+                    return Err(ErrorCode::Denied);
+                }
+                if configuration && !existing.iter().any(|p| !p.revoked && matches!(&p.permission.target, TaskTarget::Download { context: saved, configuration: false } if saved==&context)) { return Err(ErrorCode::Denied); }
+                (
+                    if configuration {
+                        "download dns cache"
+                    } else {
+                        "download diagnosis"
+                    }
+                    .to_owned(),
+                    TaskTarget::Download {
+                        context,
+                        configuration,
+                    },
+                )
+            }
             Selection::Vpn { profile } => {
                 profile.validate()?;
                 if profile.actor != actor {
@@ -322,7 +399,9 @@ impl Store {
             !v.revoked
                 && v.permission.actor == actor
                 && (v.permission.target == target
+                    || matches!((&v.permission.target, &target), (TaskTarget::XReady { .. }, TaskTarget::XReady { .. }))
                     || matches!((&v.permission.target,&target),(TaskTarget::Prompt{binding:a},TaskTarget::Prompt{binding:b}) if a.app==b.app && a.project==b.project)
+                    || matches!((&v.permission.target,&target),(TaskTarget::Download{configuration:a,..},TaskTarget::Download{configuration:b,..}) if a==b)
                     || matches!(
                         (&v.permission.target, &target),
                         (TaskTarget::Vpn { .. }, TaskTarget::Vpn { .. })

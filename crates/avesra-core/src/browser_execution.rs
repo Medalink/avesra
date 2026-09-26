@@ -174,7 +174,9 @@ impl<'a> ReadExecution<'a> {
         let permit = store.claim_action(step, session, admitted_ms)?;
         if !matches!(
             permit.action.payload,
-            ActionPayload::ReadPage { .. } | ActionPayload::InspectBrowserProvider { .. }
+            ActionPayload::ReadPage { .. }
+                | ActionPayload::InspectBrowserProvider { .. }
+                | avesra_contracts::ActionPayload::OpenX { .. }
         ) {
             store.finish_action(permit.dispatch_id, session, Outcome::Unsupported, now_ms()?)?;
             return Err(ErrorCode::Unsupported);
@@ -227,7 +229,14 @@ impl<'a> ReadExecution<'a> {
             dispatch_id: self.permit.dispatch_id,
             target_id: self.permit.action.target_id,
             action_revision: self.permit.action.revision,
-            outcome: Outcome::Success,
+            outcome: match self.observation.as_ref() {
+                Some(EffectObservation::BrowserRead { observation })
+                    if observation.x_needs_input.is_some() =>
+                {
+                    Outcome::NeedsInput
+                }
+                _ => Outcome::Success,
+            },
             crossed_commit_boundary: true,
             observation: self.observation.clone(),
         })
@@ -418,7 +427,15 @@ impl<'a> ReadExecution<'a> {
                 request, reply,
             )?),
         };
-        observation.validate(&self.permit.action, Outcome::Success)?;
+        let outcome = if matches!(
+            reply.outcome,
+            avesra_contracts::browser::reading::Outcome::XNeedsInput { .. }
+        ) {
+            Outcome::NeedsInput
+        } else {
+            Outcome::Success
+        };
+        observation.validate(&self.permit.action, outcome)?;
         self.store
             .validate_dispatch(&self.permit, &self.session, now_ms()?)?;
         self.content_current()?;
@@ -438,7 +455,7 @@ impl<'a> ReadExecution<'a> {
         self.store.finish_observed_action_checked(
             self.permit.dispatch_id,
             &self.session,
-            Outcome::Success,
+            outcome,
             Some(&observation),
             now_ms()?,
             Some(crate::ledger::ReadFinalCheck {

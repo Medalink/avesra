@@ -95,6 +95,10 @@ impl Report {
             || (matches!(self.state, State::AlreadyConnected | State::OtherConnection)
                 && self.command_issued)
             || (outcome == Outcome::Success && self.state != State::Connected)
+            || (outcome == Outcome::AlreadySatisfied
+                && (self.state != State::AlreadyConnected
+                    || self.command_issued
+                    || self.owner_step.is_some()))
             || (self.command_issued
                 && !matches!(
                     outcome,

@@ -493,26 +493,105 @@ impl Store {
         device: Uuid,
         kind: Kind,
     ) -> Result<Vec<Event>, ErrorCode> {
-        let members:Option<String>=sql(self.connection.query_row("SELECT members FROM notification_batches WHERE actor=?1 AND device=?2 AND kind=?3 AND state='submitted' ORDER BY submitted_ms DESC,rowid DESC LIMIT 1",params![actor.to_string(),device.to_string(),kind.name()],|r|r.get(0)).optional())?;
-        let Some(members) = members else {
-            return Ok(Vec::new());
-        };
-        let ids: Vec<Uuid> = serde_json::from_str(&members).map_err(|_| ErrorCode::Malformed)?;
-        if ids.is_empty() || ids.len() > 32 {
-            return Err(ErrorCode::Malformed);
-        }
-        let mut values = Vec::new();
-        for id in ids {
-            let (at_ms,body):(i64,Option<String>)=sql(self.connection.query_row("SELECT at_ms,body FROM notification_events WHERE id=?1 AND actor=?2 AND device=?3 AND kind=?4",params![id.to_string(),actor.to_string(),device.to_string(),kind.name()],|r|Ok((r.get(0)?,r.get(1)?))))?;
-            values.push(Event {
-                id,
-                kind,
-                at_ms: u64::try_from(at_ms).map_err(|_| ErrorCode::Malformed)?,
-                description: body
-                    .map(|v| serde_json::from_str(&v).map_err(|_| ErrorCode::Malformed))
-                    .transpose()?,
-            });
-        }
-        Ok(values)
+        Ok(announced(&self.connection, actor, device, kind)?.1)
     }
+}
+pub(crate) fn announced(
+    db: &Connection,
+    actor: Uuid,
+    device: Uuid,
+    kind: Kind,
+) -> Result<(avesra_contracts::speech::Provenance, Vec<Event>), ErrorCode> {
+    let record:Option<(String,String)>=sql(db.query_row("SELECT id,members FROM notification_batches WHERE actor=?1 AND device=?2 AND kind=?3 AND state='submitted' ORDER BY submitted_ms DESC,rowid DESC LIMIT 1",params![actor.to_string(),device.to_string(),kind.name()],|r|Ok((r.get(0)?,r.get(1)?))).optional())?;
+    let event_kind = match kind {
+        Kind::Learning => avesra_contracts::speech::EventKind::Learning,
+        Kind::Action => avesra_contracts::speech::EventKind::Action,
+    };
+    let Some((batch, members)) = record else {
+        return Ok((
+            avesra_contracts::speech::Provenance::NativeEvents {
+                event_kind,
+                batch: None,
+                events: Vec::new(),
+            },
+            Vec::new(),
+        ));
+    };
+    let ids: Vec<Uuid> = serde_json::from_str(&members).map_err(|_| ErrorCode::Malformed)?;
+    let provenance = avesra_contracts::speech::Provenance::NativeEvents {
+        event_kind,
+        batch: Some(Uuid::parse_str(&batch).map_err(|_| ErrorCode::Malformed)?),
+        events: ids.clone(),
+    };
+    provenance.validate()?;
+    let mut values = Vec::new();
+    for id in ids {
+        let (at_ms,body):(i64,Option<String>)=sql(db.query_row("SELECT at_ms,body FROM notification_events WHERE id=?1 AND actor=?2 AND device=?3 AND kind=?4",params![id.to_string(),actor.to_string(),device.to_string(),kind.name()],|r|Ok((r.get(0)?,r.get(1)?))))?;
+        values.push(Event {
+            id,
+            kind,
+            at_ms: u64::try_from(at_ms).map_err(|_| ErrorCode::Malformed)?,
+            description: body
+                .map(|v| serde_json::from_str(&v).map_err(|_| ErrorCode::Malformed))
+                .transpose()?,
+        });
+    }
+    Ok((provenance, values))
+}
+
+/// Revalidates content-only retrieval dependencies; never alters reply history.
+pub(crate) fn answer_current(
+    db: &Connection,
+    actor: Uuid,
+    device: Uuid,
+    provenance: &avesra_contracts::speech::Provenance,
+    answer: &str,
+) -> Result<bool, ErrorCode> {
+    use avesra_contracts::speech::{EventKind, Provenance};
+    provenance.validate()?;
+    let Provenance::NativeEvents {
+        event_kind,
+        batch,
+        events,
+    } = provenance
+    else {
+        return Err(ErrorCode::Malformed);
+    };
+    let kind = match event_kind {
+        EventKind::Learning => Kind::Learning,
+        EventKind::Action => Kind::Action,
+    };
+    let Some(batch) = batch else {
+        return Ok(describe_last(kind, &[])? == answer);
+    };
+    let members: Option<String> = sql(db.query_row(
+        "SELECT members FROM notification_batches WHERE id=?1 AND actor=?2 AND device=?3 AND kind=?4 AND state='submitted'",
+        params![batch.to_string(), actor.to_string(), device.to_string(), kind.name()],
+        |r| r.get(0),
+    ).optional())?;
+    let Some(members) = members else {
+        return Ok(false);
+    };
+    let current: Vec<Uuid> = serde_json::from_str(&members).map_err(|_| ErrorCode::Malformed)?;
+    if current != *events {
+        return Ok(false);
+    }
+    let mut values = Vec::with_capacity(events.len());
+    for id in events {
+        let row: Option<(i64, Option<String>)> = sql(db.query_row(
+            "SELECT at_ms,body FROM notification_events WHERE id=?1 AND actor=?2 AND device=?3 AND kind=?4",
+            params![id.to_string(), actor.to_string(), device.to_string(), kind.name()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        ).optional())?;
+        let Some((at_ms, Some(body))) = row else {
+            return Ok(false);
+        };
+        values.push(Event {
+            id: *id,
+            kind,
+            at_ms: u64::try_from(at_ms).map_err(|_| ErrorCode::Malformed)?,
+            description: Some(serde_json::from_str(&body).map_err(|_| ErrorCode::Malformed)?),
+        });
+    }
+    Ok(describe_last(kind, &values)? == answer)
 }

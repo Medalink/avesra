@@ -213,7 +213,9 @@ pub(crate) fn validate_context(db: &Connection, context: &Context) -> Result<(),
     action.validate(action.issued_at_ms)?;
     if !matches!(
         action.payload,
-        ActionPayload::ReadPage { .. } | ActionPayload::InspectBrowserProvider { .. }
+        ActionPayload::ReadPage { .. }
+            | ActionPayload::InspectBrowserProvider { .. }
+            | avesra_contracts::ActionPayload::OpenX { .. }
     ) || action.revision != action_revision
         || action.step_id != context.step.uuid()
         || action.task_id != context.task.uuid()

@@ -31,6 +31,10 @@ pub struct Observation {
     pub coverage: avesra_contracts::browser::reading::Coverage,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<ProviderObservation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x_account_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x_needs_input: Option<avesra_contracts::browser::provider::XInputReason>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -56,16 +60,32 @@ impl Observation {
                 avesra_contracts::browser::reading::Outcome::ProviderInspection { probe } => {
                     (Some(probe.dom_revision), 0, 0, 0, !probe.complete, false)
                 }
+                avesra_contracts::browser::reading::Outcome::XReady { ready } => {
+                    (Some(ready.dom_revision), 0, 0, 0, false, false)
+                }
+                avesra_contracts::browser::reading::Outcome::XNeedsInput { evidence } => {
+                    (Some(evidence.dom_revision), 0, 0, 0, false, false)
+                }
                 _ => return Err(ErrorCode::Denied),
             };
         let body = serde_json::to_vec(reply).map_err(|_| ErrorCode::Malformed)?;
+        let document = match (&request.document, &reply.outcome) {
+            (Some(document), _) => document,
+            (None, avesra_contracts::browser::reading::Outcome::XReady { ready }) => {
+                &ready.document
+            }
+            (None, avesra_contracts::browser::reading::Outcome::XNeedsInput { evidence }) => {
+                &evidence.document
+            }
+            _ => return Err(ErrorCode::Malformed),
+        };
         Ok(Self {
             context: reply.context.clone(),
             origin: request.origin.clone(),
-            document: request.document.document,
-            tab: request.document.tab,
-            window: request.document.window,
-            url_sha256: format!("{:x}", Sha256::digest(request.document.url.as_bytes())),
+            document: document.document,
+            tab: document.tab,
+            window: document.window,
+            url_sha256: format!("{:x}", Sha256::digest(document.url.as_bytes())),
             reply_sha256: format!("{:x}", Sha256::digest(body)),
             dom_revision,
             blocks: blocks as u16,
@@ -74,6 +94,15 @@ impl Observation {
             truncated,
             excluded_content,
             coverage: avesra_contracts::browser::reading::Coverage::Partial,
+            x_account_sha256: match &reply.outcome {
+                avesra_contracts::browser::reading::Outcome::XReady { ready } => {
+                    Some(format!("{:x}", Sha256::digest(ready.account.as_bytes())))
+                }
+                avesra_contracts::browser::reading::Outcome::XNeedsInput { evidence } => {
+                    Some(format!("{:x}", Sha256::digest(evidence.account.as_bytes())))
+                }
+                _ => None,
+            },
             provider: match &reply.outcome {
                 avesra_contracts::browser::reading::Outcome::ProviderInspection { probe } => {
                     Some(ProviderObservation {
@@ -84,11 +113,32 @@ impl Observation {
                 }
                 _ => None,
             },
+            x_needs_input: match &reply.outcome {
+                avesra_contracts::browser::reading::Outcome::XNeedsInput { evidence } => {
+                    Some(evidence.reason)
+                }
+                _ => None,
+            },
         })
     }
     pub fn validate(&self, action: &Action, outcome: Outcome) -> Result<(), ErrorCode> {
         self.context.validate()?;
         let (origin, message_limit) = match (&action.payload, &self.provider) {
+            (ActionPayload::OpenX { account }, None)
+                if self.x_account_sha256.as_ref()
+                    == Some(&format!("{:x}", Sha256::digest(account.as_bytes()))) =>
+            {
+                if self.dom_revision.is_none()
+                    || self.blocks != 0
+                    || self.text_bytes != 0
+                    || self.title_bytes != 0
+                    || self.truncated
+                    || self.excluded_content
+                {
+                    return Err(ErrorCode::Malformed);
+                }
+                (avesra_contracts::browser::provider::Provider::X.origin(), 1)
+            }
             (
                 ActionPayload::ReadPage {
                     origin,
@@ -114,7 +164,12 @@ impl Observation {
             _ => return Err(ErrorCode::Denied),
         };
         let context = &self.context;
-        if outcome != Outcome::Success
+        if outcome
+            != if self.x_needs_input.is_some() {
+                Outcome::NeedsInput
+            } else {
+                Outcome::Success
+            }
             || context.task.uuid() != action.task_id
             || context.step.uuid() != action.step_id
             || context.actor.uuid() != action.actor_id
@@ -133,7 +188,11 @@ impl Observation {
             || self
                 .dom_revision
                 .is_some_and(|v| v == 0 || v > avesra_contracts::browser::MAX_SAFE_COUNTER)
+            || (self.x_account_sha256.is_some()
+                && !matches!(action.payload, ActionPayload::OpenX { .. }))
+            || (self.x_needs_input.is_some() && self.x_account_sha256.is_none())
             || (self.provider.is_none()
+                && self.x_account_sha256.is_none()
                 && self.blocks == 0
                 && (self.dom_revision.is_some()
                     || self.text_bytes != 0

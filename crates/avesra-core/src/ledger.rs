@@ -80,7 +80,9 @@ impl Store {
         }
         Ok(matches!(
             action.payload,
-            ActionPayload::ReadPage { .. } | ActionPayload::InspectBrowserProvider { .. }
+            ActionPayload::ReadPage { .. }
+                | ActionPayload::InspectBrowserProvider { .. }
+                | avesra_contracts::ActionPayload::OpenX { .. }
         ))
     }
     /// Historical evidence only. Never authorizes a new effect or claims that a
@@ -187,7 +189,7 @@ impl Store {
             return Err(ErrorCode::InvalidTransition);
         }
         let next = match proof.outcome {
-            Outcome::Success => TaskState::Succeeded,
+            Outcome::Success | Outcome::AlreadySatisfied => TaskState::Succeeded,
             Outcome::Cancelled => TaskState::Cancelled,
             _ => TaskState::Failed,
         };
@@ -721,6 +723,9 @@ impl Store {
         {
             return Err(ErrorCode::Unauthenticated);
         }
+        if outcome == Outcome::AlreadySatisfied && (validation.is_none() || observation.is_none()) {
+            return Err(ErrorCode::Denied);
+        }
         let behavior = if validation.is_some() {
             rusqlite::TransactionBehavior::Immediate
         } else {
@@ -776,7 +781,7 @@ impl Store {
             )?;
         }
         let next = match outcome {
-            Outcome::Success => TaskState::Succeeded,
+            Outcome::Success | Outcome::AlreadySatisfied => TaskState::Succeeded,
             Outcome::Failed | Outcome::Unsupported => TaskState::Failed,
             Outcome::NeedsInput => TaskState::WaitingForUser,
             Outcome::Cancelled => TaskState::Cancelled,
@@ -818,6 +823,7 @@ impl Store {
             Some(action.step_id),
             match outcome {
                 Outcome::Success => "verified_success",
+                Outcome::AlreadySatisfied => "already_satisfied",
                 Outcome::Failed => "failed",
                 Outcome::NeedsInput => "needs_input",
                 Outcome::Cancelled => "cancelled",
