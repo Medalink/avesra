@@ -2,8 +2,7 @@
 
 Trace query/snapshot version 3 also carries separate typed controller admission/TTS queue ([contract](engine-observer.md)) and cached host resource
 observations; see [resource-observer.md](resource-observer.md). They are not
-accepted spans and remain outside the OTLP span projection. Telemetry schema 5
-extends the bounded writer with engine observations (schema 4 introduced resource
+accepted spans and remain outside the OTLP span projection. Telemetry schema 7 extends the finite preferences command roster; schema 6 introduced separate local installation [app timings](app-timing.md). Both remain excluded from accepted query version 3 and remote responses. Schema 7 adds no tables or accepted span fields. Schema 5 introduced engine observations (schema 4 introduced resource
 samples/rollups); earlier stage/schema
 notes below describe their introduction rather than the current schema number.
 

@@ -197,6 +197,12 @@ pub struct Remote {
     pub snapshot: Snapshot,
 }
 enum Message {
+    AppTiming(crate::app_timing::Record),
+    ReadApp {
+        reply: mpsc::SyncSender<Result<crate::app_timing::Snapshot, ErrorCode>>,
+        deadline: Instant,
+        present: Arc<AtomicBool>,
+    },
     Record(Record),
     Resource(crate::resource_observer::Sample),
     EngineQueue(crate::engine_observer::QueueRecord),
@@ -211,6 +217,8 @@ enum Message {
     Retention(u8),
 }
 struct Sink {
+    app_loss: Arc<AtomicU64>,
+    frontend_loss: Arc<AtomicU64>,
     tx: mpsc::SyncSender<Message>,
     host: Host,
     process: Uuid,
@@ -251,7 +259,7 @@ pub fn initialize(directory: &Path, host: Host) -> Result<(), ErrorCode> {
         if occupied {
             return Err(ErrorCode::Malformed);
         }
-    } else if !matches!(version, 1..=5) {
+    } else if !matches!(version, 1..=7) {
         return Err(ErrorCode::Unsupported);
     }
 
@@ -259,14 +267,27 @@ pub fn initialize(directory: &Path, host: Host) -> Result<(), ErrorCode> {
     let (tx, rx) = mpsc::sync_channel(256);
     crate::resource_observer::initialize(&db)?;
     crate::engine_observer::initialize(&db)?;
-    sql(db.execute_batch("PRAGMA user_version=5;"))?;
+    crate::app_timing::initialize(&db)?;
+    sql(db.execute_batch("PRAGMA user_version=7;"))?;
     let loss = Arc::new(AtomicU64::new(0));
     let process = Uuid::new_v4();
     let losses = loss.clone();
+    let app_loss = Arc::new(AtomicU64::new(0));
+    let frontend_loss = Arc::new(AtomicU64::new(0));
+    let app_losses = app_loss.clone();
+    let frontend_losses = frontend_loss.clone();
     std::thread::Builder::new()
         .name("avesra-trace-writer".into())
         .spawn(move || {
             while let Ok(message) = rx.recv() {
+                let app_delta = app_losses.swap(0, Ordering::Relaxed);
+                let frontend_delta = frontend_losses.swap(0, Ordering::Relaxed);
+                if (app_delta != 0 || frontend_delta != 0)
+                    && crate::app_timing::losses(&db, app_delta, frontend_delta).is_err()
+                {
+                    app_losses.fetch_add(app_delta.saturating_add(1), Ordering::Relaxed);
+                    frontend_losses.fetch_add(frontend_delta, Ordering::Relaxed);
+                }
                 let delta = losses.swap(0, Ordering::Relaxed);
                 if delta != 0
                     && integer(delta)
@@ -278,6 +299,29 @@ pub fn initialize(directory: &Path, host: Host) -> Result<(), ErrorCode> {
                     losses.fetch_add(delta.saturating_add(1), Ordering::Relaxed);
                 }
                 match message {
+                    Message::AppTiming(record) => {
+                        if crate::app_timing::write(&mut db, &record).is_err() {
+                            app_losses.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                    Message::ReadApp {
+                        reply,
+                        deadline,
+                        present,
+                    } => {
+                        if Instant::now() < deadline && present.load(Ordering::SeqCst) {
+                            let value = crate::app_timing::read(
+                                &mut db,
+                                process,
+                                now(),
+                                app_losses.load(Ordering::Relaxed),
+                                frontend_losses.load(Ordering::Relaxed),
+                            );
+                            if Instant::now() < deadline && present.load(Ordering::SeqCst) {
+                                let _ = reply.try_send(value);
+                            }
+                        }
+                    }
                     Message::Record(r) => {
                         if write(&mut db, &r).is_err() {
                             losses.fetch_add(1, Ordering::Relaxed);
@@ -328,6 +372,8 @@ pub fn initialize(directory: &Path, host: Host) -> Result<(), ErrorCode> {
         })
         .map_err(|_| ErrorCode::Unavailable)?;
     SINK.set(Sink {
+        app_loss,
+        frontend_loss,
         tx,
         host,
         process,
@@ -935,5 +981,64 @@ impl Snapshot {
             return Err(ErrorCode::Malformed);
         }
         Ok(())
+    }
+}
+
+/// Local installation telemetry only. Never exposed through accepted trace query.
+pub fn app_snapshot() -> Result<crate::app_timing::Snapshot, ErrorCode> {
+    let sink = SINK.get().ok_or(ErrorCode::Unavailable)?;
+    let (reply, receiver) = mpsc::sync_channel(1);
+    let present = Arc::new(AtomicBool::new(true));
+    sink.tx
+        .try_send(Message::ReadApp {
+            reply,
+            deadline: Instant::now() + Duration::from_secs(2),
+            present: present.clone(),
+        })
+        .map_err(|_| ErrorCode::Unavailable)?;
+    let result = receiver
+        .recv_timeout(Duration::from_secs(2))
+        .map_err(|_| ErrorCode::Expired);
+    present.store(false, Ordering::SeqCst);
+    result?
+}
+pub fn app_frontend_loss(value: u64) {
+    if let Some(sink) = SINK.get() {
+        sink.frontend_loss
+            .fetch_add(value.min(1_000_000), Ordering::Relaxed);
+    }
+}
+pub(crate) fn app_observe(
+    operation: (crate::app_timing::Operation, Option<Uuid>),
+    stage: crate::app_timing::Stage,
+    outcome: crate::app_timing::Outcome,
+    origin: crate::app_timing::Origin,
+    started: Option<Instant>,
+    duration: Duration,
+) {
+    let Some(sink) = SINK.get() else { return };
+    if !operation.0.valid() || micros(duration) > crate::app_timing::MAX_DURATION_US {
+        sink.app_loss.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
+    let record = crate::app_timing::Record {
+        version: 1,
+        id: Uuid::new_v4(),
+        process: sink.process,
+        package_version: env!("CARGO_PKG_VERSION").into(),
+        build_fingerprint: None,
+        operation: operation.0,
+        native_operation: operation.1,
+        stage,
+        outcome,
+        origin,
+        at_ms: now(),
+        start_us: started
+            .and_then(|at| at.checked_duration_since(sink.origin))
+            .map(micros),
+        duration_us: micros(duration),
+    };
+    if sink.tx.try_send(Message::AppTiming(record)).is_err() {
+        sink.app_loss.fetch_add(1, Ordering::Relaxed);
     }
 }

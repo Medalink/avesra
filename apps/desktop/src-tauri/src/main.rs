@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod actor_registration;
+mod app_timing;
 mod browser;
 mod catalog;
 mod comparison;
@@ -686,6 +687,10 @@ fn apply_interface_scale(app: &tauri::AppHandle, percent: u16) -> tauri::Result<
     Ok(())
 }
 fn main() {
+    let startup_timing = avesra_core::app_timing::Span::start(
+        avesra_core::app_timing::Operation::NativeStartup,
+        avesra_core::app_timing::Stage::Initialize,
+    );
     #[cfg(windows)]
     if let Err(error) = avesra_windows::output_recording::configure_from_args() {
         eprintln!("{error}");
@@ -725,7 +730,7 @@ fn main() {
                 .skip_initial_state("settings")
                 .build(),
         )
-        .setup(|app| {
+        .setup(move |app| {
             let directory = app.path().app_data_dir()?;
             std::fs::create_dir_all(&directory)?;
             // Backstop simultaneous launches before the plugin's message window exists.
@@ -742,10 +747,21 @@ fn main() {
                 )
             })?;
             app.manage(instance_lock);
+            app.manage(app_timing::State::default());
             let _ = avesra_core::trace::initialize(&directory, avesra_core::trace::Host::Native);
             avesra_windows::resources::start();
-            let mut store = Store::open(&directory.join("avesra.db"))?;
-            let mut settings = store.settings()?;
+            let store_timing = avesra_core::app_timing::Span::start(
+                avesra_core::app_timing::Operation::SettingsStore,
+                avesra_core::app_timing::Stage::Work,
+            );
+            let opened = Store::open(&directory.join("avesra.db"))
+                .and_then(|store| store.settings().map(|settings| (store, settings)));
+            store_timing.finish(if opened.is_ok() {
+                avesra_core::app_timing::Outcome::Complete
+            } else {
+                avesra_core::app_timing::Outcome::Failed
+            });
+            let (mut store, mut settings) = opened?;
             if (settings.microphone.is_none() || settings.speaker.is_none())
                 && let Ok(devices) = avesra_windows::audio_devices()
             {
@@ -950,6 +966,7 @@ fn main() {
                     _ => {}
                 })
                 .build(app)?;
+            startup_timing.finish(avesra_core::app_timing::Outcome::Complete);
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -973,6 +990,10 @@ fn main() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            app_timing::begin_app_timing,
+            app_timing::observe_app_timings,
+            app_timing::app_timing_snapshot,
+            app_timing::export_app_timings,
             microphone_check::begin_microphone_check,
             microphone_check::stop_microphone_check,
             voice_check::check_saved_voice,

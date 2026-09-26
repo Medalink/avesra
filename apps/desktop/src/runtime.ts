@@ -1,3 +1,4 @@
+import { commandTiming } from "./app-timing";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 export type ShortcutAction = "mute" | "deafen" | "overlay";
 export type Chord = { control: boolean; alt: boolean; shift: boolean; key: number };
@@ -95,5 +96,7 @@ export async function command<T>(
   args?: Record<string, unknown>,
 ): Promise<T> {
   if (!native) throw new Error("Open the Windows app to use local controls.");
-  return invoke<T>(name, args);
+  const finish = commandTiming(name);
+  try { const value = await invoke<T>(name, args); finish("complete"); return value; }
+  catch (error) { finish("failed"); throw error; }
 }

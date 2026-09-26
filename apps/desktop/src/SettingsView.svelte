@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { viewTiming } from "./app-timing";
   import Performance from "./Performance.svelte";
   import Notifications from "./Notifications.svelte";
   import { onMount, tick } from "svelte";
@@ -61,11 +62,16 @@
   let section = $state(restoredSection());
   let content: HTMLElement;
   let heading: HTMLHeadingElement;
+  let navigationTiming = 0;
   async function navigate(next: string, target?: string) {
+    const serial = ++navigationTiming;
+    const observed = viewTiming(next);
     section = next;
     try { localStorage.setItem("avesra.settings.section", next); } catch { /* Navigation remains usable if persistence is unavailable. */ }
     notice = "";
     await tick();
+    observed?.commit(serial === navigationTiming ? "complete" : "abandoned");
+    requestAnimationFrame(() => observed?.frame(serial === navigationTiming ? "complete" : "abandoned"));
     heading?.focus({ preventScroll: true });
     content?.scrollTo({ top: 0 });
     if (target) document.getElementById(target)?.scrollIntoView({ block: "start" });
@@ -144,11 +150,13 @@
     void probeHealth();
     const interval = setInterval(() => { void probeHealth(); }, 15000);
     const visibility = () => {
+      navigationTiming++;
       healthGeneration += 1; healthQueued = false; clearHealth();
       void probeHealth();
     };
     document.addEventListener("visibilitychange", visibility);
     return () => {
+      navigationTiming++;
       healthMounted = false; healthGeneration += 1; healthQueued = false;
       clearInterval(interval); document.removeEventListener("visibilitychange", visibility);
     };

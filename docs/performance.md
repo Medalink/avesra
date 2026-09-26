@@ -1,3 +1,78 @@
+## Performance presentation contract
+
+The Performance content follows the authoritative `design/mockups/SettingsMemory.dc.html`
+import of `Settings.dc.html`: compact status strip, three equal summary cards,
+36-pixel stage rows with Stage / Model · device / p50 / p95 / p99 / max / err,
+and a concise footer. Existing shared design tokens supply typography and surfaces.
+The mock's simulated data, passing gates, attribution and comparison result are
+never product measurements. The Settings shell is outside this content change.
+
+The first card displays only successful, retained PC `endpoint_response_submission`
+attempts from the existing explicit accepted-trace read, only when every endpoint
+record belongs to one actual process and one complete model/image/config identity.
+Missing identity or multiple cohorts suppresses the card percentiles and gives a
+reason and source count; no current-build/profile identity is inferred. Its label is therefore
+“Endpoint → first submitted speech”, not speech-end/useful/audible reply. The
+quiet tail is excluded; repeated attempts are not unique turns. Counts, failed or
+missing outcomes, bounded query coverage and observer loss remain visible in the
+trace details. There is no new protected read, automatic inference or Hello request.
+The projection clears with its native view context. The local table, errors and
+endpoint card also clear on Settings hide, lock and teardown; pending reads
+cannot republish after withdrawal. The native hide listener is installed before
+the initial read, and the native `settings-shown` event permits a fresh read, even on a non-input
+desktop that emits no DOM focus/visibility event. DOM focus/visibility remains an
+optional additional refresh signal. Explicit Refresh also remains available when
+the local visibility flag is stale: only the existing native visible/unlocked
+Settings check can authorize that read, and only a successful same-generation
+response restores the flag. Hide/lock/teardown still rejects late publication.
+Both native listeners are installed before initial reading; no polling or injected
+DOM event is used, and no refresh overlaps an earlier pending request. The native
+`settings-shown` emitter belongs to the separate pending close-coordinator
+integration. Until that emitter lands, this standalone change guarantees explicit
+Refresh recovery; automatic reopen without DOM focus/visibility is not yet provided. Verified-action and verified-
+completion endpoint cards remain unavailable until those exact measurements exist.
+No sample count is a release gate; all displayed tails are descriptive.
+
+The local stage table retains actual preview/greeting/activity summaries, including
+failure/abandonment durations and all original outcome/missing counts. This source
+has no model deployment identity: the source column says unavailable model / PC
+observer rather than borrowing current configuration. Empty, loading and error
+states are distinct. App timing rows retain separate outcome and frontend page-
+clock cohorts; no failed-fast attempt is merged with successful latency. Detailed
+scope, retention, registration/loss, diagnostic mode and exports remain accessible
+in disclosures. The real saved-comparison flow remains in accepted-trace details;
+there is no simulated Compare button. No runtime or pixel-parity proof is implied.
+
+## Observed installed close/reopen recovery (2026-09-26)
+
+Installed Windows commit `028beb6f64ebee64e7cebfd76d780bc54043ad3b`
+(desktop SHA-256 `1141f11aa81c666d6b4b6cb852645884b0dfa292e201294d1b311d3e03e4ab90`)
+was inspected on the separate non-input diagnostic desktop. Using the real Settings
+title-bar close cleared local stage rows. The observed Overlay Open settings
+control reopened the window without a DOM focus/visibility event. The table still
+contained only its two headers, but Refresh remained enabled. Clicking that actual
+Refresh control restored six retained preview-stage rows. This proves explicit
+Refresh recovery for this installed build; it does not prove automatic refresh on
+reopen, a raced in-flight read, all lifecycle combinations or full visual parity.
+
+The same run used the selected voice's real default preview. Its finalized native
+postmix/postformat recording contains 9.36 seconds at 24 kHz stereo, before
+intentional hardware silencing; `audible_device_proof` is false. A 39.906-second
+sampled production Settings video synchronizes that recording with WebView frames
+captured at 200 ms intervals (assembled at 10 fps). It demonstrates the sampled UI
+and preview path, not acoustic delivery, microphone conversation, accepted-turn
+latency, complete application timing coverage or release performance percentiles.
+
+Local ignored evidence is retained under `artifacts/ui-parity-028beb6/`:
+`performance-hidden-dom.json`, `performance-reopened-before-refresh.json`,
+`performance-reopened-refreshed-dom.json`, `performance-reopened-refreshed.png`,
+`installed.wav.json`, `default-preview.mp4.json`, the corresponding WAV/video,
+and `build-receipt.json`. These are actual run artifacts, not synthetic fixtures.
+
+# App timing foundation
+
+Separate installation-scoped startup, UI and history-worker timings now use bounded durable storage and explicit local export; see [app-timing.md](app-timing.md). Coverage is partial and distinct from the voice aggregates below.
+
 # Local observed performance
 
 Cached PC/controller resource readings and their bounded retained export are now

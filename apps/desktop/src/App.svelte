@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { timing } from "./app-timing";
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import {
@@ -139,6 +140,7 @@
     signal = next;
   }
   onMount(() => {
+    const readyTiming = timing({ kind: "ui_ready" }, "initialize");
     let dispose = () => {};
     let gone = false;
     let syncing = false;
@@ -205,11 +207,14 @@
         acceptSnapshot(await command<Runtime>("runtime_snapshot"));
         await syncClock();
         if (settingsWindow) await refreshDevices();
+        readyTiming(gone ? "withdrawn" : "complete");
       } catch (e) {
+        readyTiming("failed");
         error = String(e);
       }
     })();
     return () => {
+      readyTiming("abandoned");
       gone = true;
       clockGeneration++;
       playback.uncalibrated();
