@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
   import { command, native, type Runtime } from "./runtime";
-  import type { SignalFrame } from "./Signal.svelte";
+  import Signal, { type SignalFrame } from "./Signal.svelte";
   let { runtime, signal }: { runtime: Runtime | null; signal: SignalFrame | null } = $props();
   let busy = $state(false);
   let error = $state("");
@@ -12,7 +12,6 @@
   const rms = $derived(live ? signal?.rms ?? 0 : 0);
   const peak = $derived(live ? signal?.peak ?? 0 : 0);
   const db = $derived(rms > 0 ? Math.max(-60, 20 * Math.log10(rms)) : -60);
-  const level = $derived(live ? Math.max(0, Math.min(1, (db + 60) / 60)) : 0);
   const blocked = $derived(!native || !runtime?.settings.microphone || runtime.locked || runtime.settings.explicit_mute || runtime.settings.deafened || runtime.settings.paused || runtime.enrollment_capture || (runtime.enrolled && runtime.voice_ready));
   async function stop(epoch: number) {
     await command("stop_microphone_check", { epoch });
@@ -41,8 +40,8 @@
 
 <div class="flex flex-col gap-1.5">
   <div class="flex items-center gap-2">
-    <div class="flex flex-1 gap-0.5" role="meter" aria-label="Microphone input level" aria-valuemin={-60} aria-valuemax={0} aria-valuenow={Math.round(db)} aria-valuetext={live ? `${Math.round(db)} dBFS` : "No current input measurement"}>
-      {#each Array(24) as _, i}<span class="h-2 flex-1 {i < Math.ceil(level * 24) ? peak >= 0.99 ? 'bg-red-400' : 'bg-emerald-400' : 'bg-white/10'}"></span>{/each}
+    <div class="relative h-7 flex-1" role="meter" aria-label="Microphone input level" aria-valuemin={-60} aria-valuemax={0} aria-valuenow={Math.round(db)} aria-valuetext={live ? `${Math.round(db)} dBFS` : "No current input measurement"}>
+      <Signal frame={live ? signal : null} tone="owner" count={40} height={28} />
     </div>
     <span class="caption min-w-14 text-right text-zinc-400">{live ? peak >= 0.99 ? "clipping" : rms <= 0.001 ? "quiet" : `${Math.round(db)} dB` : checking ? "starting…" : runtime?.enrollment_capture ? "recording" : "idle"}</span>
   </div>
