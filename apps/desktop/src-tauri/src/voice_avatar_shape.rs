@@ -10,7 +10,7 @@ use zeroize::Zeroizing;
 pub(crate) struct Parameters {
     pub version: u16,
     pub shape: [u8; 24],
-    pub petals: [Option<[u8; 6]>; 20],
+    pub petals: [Option<super::portrait_dsp::Petal>; 20],
     pub ring: String,
     pub rotation: u8,
     pub tempo: Option<u8>,
@@ -19,12 +19,24 @@ pub(crate) struct Parameters {
 impl Parameters {
     fn digest(&self) -> String {
         let mut digest = Sha256::new();
-        digest.update(b"avesra/avatar/render/v1\0");
+        digest.update(if self.version == 1 {
+            b"avesra/avatar/render/v1\0"
+        } else {
+            b"avesra/avatar/render/v2\0"
+        });
         digest.update(self.version.to_be_bytes());
         digest.update(self.shape);
-        for petal in self.petals {
+        for petal in &self.petals {
             digest.update([u8::from(petal.is_some())]);
-            digest.update(petal.unwrap_or([0; 6]));
+            if self.version == 1 {
+                digest.update([0; 6]);
+            } else if let Some(petal) = petal {
+                digest.update([petal.length, petal.curve, petal.width, petal.density]);
+                digest.update(petal.edge);
+                digest.update(petal.energy);
+            } else {
+                digest.update([0; 16]);
+            }
         }
         digest.update(self.ring.as_bytes());
         digest.update([
@@ -35,9 +47,10 @@ impl Parameters {
         hex::encode(digest.finalize())
     }
     pub(super) fn validate(&self, ring: &str, rotation: u8) -> Result<(), String> {
-        if self.version != 1
+        if !matches!(self.version, 1 | 2)
             || self.shape.iter().any(|v| *v > 63)
-            || self.petals.iter().any(Option::is_some)
+            || (self.version == 1 && self.petals.iter().any(Option::is_some))
+            || self.petals.iter().flatten().any(|v| !v.valid())
             || self.tempo.is_some()
             || self.ring != ring
             || self.rotation != rotation
@@ -45,6 +58,15 @@ impl Parameters {
         {
             return Err("Avatar parameters are invalid or unsupported".into());
         }
+        Ok(())
+    }
+    pub(super) fn portrait(
+        &mut self,
+        features: &[Option<super::portrait_dsp::Feature>],
+    ) -> Result<(), String> {
+        self.petals = super::portrait_dsp::render(features)?;
+        self.version = 2;
+        self.digest = self.digest();
         Ok(())
     }
 }
@@ -150,7 +172,7 @@ pub(super) fn build(
     let mut result = Parameters {
         version: 1,
         shape,
-        petals: [None; 20],
+        petals: std::array::from_fn(|_| None),
         ring,
         rotation,
         tempo: None,

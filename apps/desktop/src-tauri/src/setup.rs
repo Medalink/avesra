@@ -1,4 +1,6 @@
 //! Local management proof stays native and never grants voice/action authority.
+#[path = "voice_portrait.rs"]
+pub(crate) mod portrait;
 #[path = "avatar_redraw.rs"]
 pub(crate) mod redraw;
 use crate::Runtime;
@@ -50,6 +52,7 @@ impl ManagementProof {
 #[derive(Default)]
 pub struct Setup {
     redraw: redraw::State,
+    pub(crate) portrait: portrait::State,
     pub(crate) recording: tokio::sync::Mutex<()>,
     enrollment: Mutex<Option<avesra_core::enrollment::Enrollment>>,
     context: Mutex<Option<(u64, u64)>>,
@@ -105,6 +108,7 @@ impl Setup {
         }
     }
     pub fn invalidate(&self) {
+        self.portrait.invalidate();
         self.redraw.invalidate();
         self.generation.fetch_add(1, Ordering::SeqCst);
         if let Ok(mut proof) = self.proof.lock() {

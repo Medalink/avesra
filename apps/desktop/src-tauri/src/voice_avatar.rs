@@ -1,4 +1,6 @@
 //! Optional actor-bound presentation. This module never creates voice authority.
+#[path = "portrait_dsp.rs"]
+pub(crate) mod portrait_dsp;
 #[path = "voice_avatar_shape.rs"]
 mod shape;
 use avesra_core::{
@@ -90,6 +92,8 @@ struct Record {
     binding_digest: String,
     source_digest: String,
     parameters: Parameters,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    portrait: Option<Vec<Option<portrait_dsp::Feature>>>,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -178,7 +182,7 @@ fn bounded(path: &Path, limit: u64) -> Result<Option<Vec<u8>>, String> {
     Ok(Some(bytes))
 }
 fn validate(vault: &Vault, marker: &[u8]) -> Result<(), String> {
-    if vault.version != 1
+    if !matches!(vault.version, 1 | 2)
         || marker != hash(&vault.key).as_bytes()
         || vault.actors.len() > MAX_ACTORS
         || vault.actors.iter().filter(|a| a.record.is_some()).count() > MAX_RECORDS
@@ -206,6 +210,17 @@ fn validate(vault: &Vault, marker: &[u8]) -> Result<(), String> {
                 return Err("Avatar source record is invalid".into());
             }
             record.parameters.validate(&actor.ring, actor.rotation)?;
+            match &record.portrait {
+                None if record.parameters.version == 1 => {}
+                Some(features) if vault.version == 2 && record.parameters.version == 2 => {
+                    if !features.iter().any(Option::is_some)
+                        || portrait_dsp::render(features)? != record.parameters.petals
+                    {
+                        return Err("Portrait features and parameters disagree".into());
+                    }
+                }
+                _ => return Err("Portrait storage version is inconsistent".into()),
+            }
         }
     }
     Ok(())
@@ -391,9 +406,13 @@ fn current_observed(
         }
         authorize()?;
         return Ok(View {
-            version: 1,
+            version: record.parameters.version,
             candidate: record.source.candidate(),
-            state: "ready_without_portrait",
+            state: if record.portrait.is_some() {
+                "ready_with_portrait"
+            } else {
+                "ready_without_portrait"
+            },
             parameters: Some(record.parameters.clone()),
             reason: None,
         });
@@ -440,6 +459,7 @@ fn current_observed(
         binding_digest: source.binding_digest,
         source_digest: source.source_digest,
         parameters: parameters.clone(),
+        portrait: None,
     });
     timings.phase(Portrait::Publish, || {
         publish(directory, &vault, initialize, &mut || {
@@ -665,6 +685,7 @@ fn confirm_redraw_observed(
         binding_digest: expected.binding_digest.clone(),
         source_digest: expected.source_digest.clone(),
         parameters: expected.parameters.clone(),
+        portrait: None,
     });
     timings.phase(Portrait::Publish, || {
         // No key/marker initialization or ring mutation is permitted by redraw.
@@ -711,4 +732,153 @@ fn confirm_redraw_observed(
         let _ = std::fs::remove_file(temporary);
         result
     })
+}
+
+pub(crate) struct PortraitSource {
+    actor: Uuid,
+    revision: Uuid,
+    source: Source,
+    binding: String,
+    record: String,
+    key: String,
+}
+impl PortraitSource {
+    pub(crate) fn actor(&self) -> Uuid {
+        self.actor
+    }
+}
+pub(crate) fn portrait_source(
+    directory: &Path,
+    microphone: &str,
+    authorize: &mut dyn FnMut() -> Result<(), String>,
+) -> Result<PortraitSource, String> {
+    // Existing source-change refusal deliberately requires explicit redraw first.
+    current(directory, microphone, authorize)?;
+    let _candidates = super::lock_directory(&directory.join("speaker-candidates"))?;
+    authorize()?;
+    let source = resolve(directory, microphone)?.ok_or("No current owner-bound avatar source")?;
+    let _avatars = super::lock_directory(&directory.join("voice-avatars"))?;
+    let vault = load(directory)?.ok_or("Avatar source unavailable")?;
+    let actor = vault
+        .actors
+        .iter()
+        .find(|v| v.actor == source.actor)
+        .ok_or("Avatar owner unavailable")?;
+    let record = actor.record.as_ref().ok_or("Avatar record unavailable")?;
+    if record.owner_revision != source.revision
+        || record.source != source.source
+        || record.binding_digest != source.binding_digest
+        || (matches!(source.source, Source::Candidate { .. })
+            && record.source_digest != source.source_digest)
+    {
+        return Err("Avatar source changed; redraw before observing acoustic prompts".into());
+    }
+    authorize()?;
+    Ok(PortraitSource {
+        actor: source.actor,
+        revision: source.revision,
+        source: source.source,
+        binding: source.binding_digest,
+        record: actor_digest(actor)?,
+        key: hash(&vault.key),
+    })
+}
+pub(crate) fn save_portrait(
+    directory: &Path,
+    microphone: &str,
+    expected: &PortraitSource,
+    features: Vec<Option<portrait_dsp::Feature>>,
+    authorize: &mut dyn FnMut() -> Result<(), String>,
+    finalize: &mut dyn FnMut(&Path, &Path) -> Result<(), String>,
+    withdrawn: &mut dyn FnMut(),
+) -> Result<View, String> {
+    if !features.iter().any(Option::is_some) {
+        return Err("No acoustic prompt was measured; nothing was saved".into());
+    }
+    let _candidates = super::lock_directory(&directory.join("speaker-candidates"))?;
+    authorize()?;
+    let source = resolve(directory, microphone)?.ok_or_else(|| {
+        withdrawn();
+        "Portrait source unavailable".to_owned()
+    })?;
+    if source.actor != expected.actor
+        || source.revision != expected.revision
+        || source.source != expected.source
+        || source.binding_digest != expected.binding
+    {
+        withdrawn();
+        return Err("Portrait source changed; begin again".into());
+    }
+    let _avatars = super::lock_directory(&directory.join("voice-avatars"))?;
+    let mut vault = load(directory)?.ok_or_else(|| {
+        withdrawn();
+        "Avatar vault unavailable".to_owned()
+    })?;
+    let index = vault
+        .actors
+        .iter()
+        .position(|v| v.actor == expected.actor)
+        .ok_or_else(|| {
+            withdrawn();
+            "Avatar owner was removed".to_owned()
+        })?;
+    if hash(&vault.key) != expected.key || actor_digest(&vault.actors[index])? != expected.record {
+        withdrawn();
+        return Err("Avatar changed while observing; begin again".into());
+    }
+    let record = vault.actors[index].record.as_mut().ok_or_else(|| {
+        withdrawn();
+        "Avatar source was removed".to_owned()
+    })?;
+    if matches!(source.source, Source::Candidate { .. })
+        && record.source_digest != source.source_digest
+    {
+        withdrawn();
+        return Err("Saved candidate changed".into());
+    }
+    record.parameters.portrait(&features)?;
+    let parameters = record.parameters.clone();
+    let candidate = record.source.candidate();
+    record.portrait = Some(features);
+    vault.version = 2;
+    let clear = Zeroizing::new(serde_json::to_vec(&vault).map_err(|_| "Avatar encoding failed")?);
+    if clear.len() > 65536 {
+        return Err("Avatar storage capacity reached".into());
+    }
+    let protected =
+        avesra_windows::credentials::protect(&clear).map_err(|_| "Avatar protection failed")?;
+    let temporary = directory.join("voice-avatars/.vault.pending");
+    match std::fs::remove_file(&temporary) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err("Interrupted avatar write cannot be retired".into()),
+    }
+    let result = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary)
+            .map_err(|_| "Avatar writer unavailable")?;
+        file.write_all(&protected)
+            .and_then(|_| file.sync_all())
+            .map_err(|_| "Avatar write failed")?;
+        drop(file);
+        authorize()?;
+        if crate::owner::identity(directory).map_err(|_| "Avatar owner unavailable")?
+            != (expected.actor, expected.revision)
+        {
+            withdrawn();
+            return Err("Avatar owner changed".into());
+        }
+        finalize(&temporary, &directory.join("voice-avatars/vault.dpapi"))?;
+        Ok(View {
+            version: 2,
+            candidate,
+            state: "ready_with_portrait",
+            parameters: Some(parameters),
+            reason: None,
+        })
+    })();
+    let _ = std::fs::remove_file(temporary);
+    result
 }
