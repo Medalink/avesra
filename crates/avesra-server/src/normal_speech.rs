@@ -194,10 +194,30 @@ enum Piece {
     Audio(Vec<i16>),
     End { samples: usize, outcome: Completion },
 }
+struct QueuedPiece {
+    piece: Piece,
+    ticket: Option<avesra_core::engine_observer::Ticket>,
+}
+async fn enqueue(
+    tx: &mpsc::Sender<QueuedPiece>,
+    queue: Option<&avesra_core::engine_observer::Queue>,
+    piece: Piece,
+) -> Result<(), ErrorCode> {
+    let wait = queue.map(avesra_core::engine_observer::Queue::waiting);
+    let capacity = tx.reserve().await;
+    if let Some(wait) = wait {
+        wait.finish(capacity.is_ok());
+    }
+    let capacity = capacity.map_err(|_| ErrorCode::Stale)?;
+    let ticket = queue.and_then(avesra_core::engine_observer::Queue::enqueue);
+    capacity.send(QueuedPiece { piece, ticket });
+    Ok(())
+}
 async fn produce<F, Fut>(
     lane: Arc<AudioClient>,
     request: &speech::Request,
-    tx: mpsc::Sender<Piece>,
+    tx: mpsc::Sender<QueuedPiece>,
+    queue: Option<&avesra_core::engine_observer::Queue>,
     private: Arc<AtomicUsize>,
     mut authorize: F,
 ) -> Result<(), ErrorCode>
@@ -233,9 +253,7 @@ where
                     if total > speech::MAX_SAMPLES as usize {
                         return Err(ErrorCode::TooLarge);
                     }
-                    tx.send(Piece::Audio(samples))
-                        .await
-                        .map_err(|_| ErrorCode::Stale)?;
+                    enqueue(&tx, queue, Piece::Audio(samples)).await?;
                 }
                 SpeechEvent::End {
                     samples, outcome, ..
@@ -244,12 +262,15 @@ where
                         return Err(ErrorCode::Malformed);
                     }
                     if outcome == Completion::Truncated || index + 1 == segments.len() {
-                        tx.send(Piece::End {
-                            samples: total,
-                            outcome,
-                        })
-                        .await
-                        .map_err(|_| ErrorCode::Stale)?;
+                        enqueue(
+                            &tx,
+                            queue,
+                            Piece::End {
+                                samples: total,
+                                outcome,
+                            },
+                        )
+                        .await?;
                         return Ok(());
                     }
                     // Only actual Complete permits a successor. Intermediate
@@ -286,24 +307,43 @@ async fn stream(
     // At most 64 codec chunks (5.12s/245760 PCM bytes), not a whole-wave wait.
     // Queue pressure pauses private reads, never renews the 30s source budget.
     let (tx, rx) = mpsc::channel(64);
+    let queue = avesra_core::engine_observer::Queue::new(
+        avesra_core::trace::Link::planner(&request.source.planner).child(request.request),
+    );
     let synth_deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     let producer = async {
         tokio::time::timeout_at(
             synth_deadline,
-            produce(lane, request, tx, inspector.private.clone(), || {
-                inspect(auth, context, inspector, deadline)
-            }),
+            produce(
+                lane,
+                request,
+                tx,
+                queue.as_ref(),
+                inspector.private.clone(),
+                || inspect(auth, context, inspector, deadline),
+            ),
         )
         .await
         .map_err(|_| ErrorCode::Expired)?
     };
     let consumer = consume(socket, context, rx);
-    tokio::try_join!(producer, consumer)?;
+    let result = tokio::try_join!(producer, consumer);
+    if let Some(queue) = &queue {
+        queue.finish(result.is_ok());
+    }
+    result?;
     inspect(auth, context, inspector, deadline).await?;
     Ok(())
 }
-async fn next(socket: &mut WebSocket, rx: &mut mpsc::Receiver<Piece>) -> Result<Piece, ErrorCode> {
-    tokio::select! { biased; _=socket.recv()=>Err(ErrorCode::Stale), piece=rx.recv()=>piece.ok_or(ErrorCode::Unavailable) }
+async fn next(
+    socket: &mut WebSocket,
+    rx: &mut mpsc::Receiver<QueuedPiece>,
+) -> Result<Piece, ErrorCode> {
+    let queued = tokio::select! { biased; _=socket.recv()=>return Err(ErrorCode::Stale), piece=rx.recv()=>piece.ok_or(ErrorCode::Unavailable)? };
+    if let Some(ticket) = queued.ticket {
+        ticket.received();
+    }
+    Ok(queued.piece)
 }
 async fn packet(
     socket: &mut WebSocket,
@@ -336,7 +376,7 @@ async fn packet(
 async fn consume(
     socket: &mut WebSocket,
     context: &speech::Context,
-    mut rx: mpsc::Receiver<Piece>,
+    mut rx: mpsc::Receiver<QueuedPiece>,
 ) -> Result<(), ErrorCode> {
     let Piece::Audio(first) = next(socket, &mut rx).await? else {
         return Err(ErrorCode::Malformed);

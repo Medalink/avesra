@@ -7,6 +7,8 @@ use avesra_contracts::{ActionPayload, ErrorCode};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+#[path = "demonstration_passive.rs"]
+pub mod passive;
 pub(crate) const TABLES: [(&str, &str); 3] = [
     (
         "observation_scopes",
@@ -92,11 +94,14 @@ impl Scope {
 #[serde(rename_all = "snake_case")]
 pub enum SourceKind {
     ObservedTransition,
+    PassiveObservedTransition,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Candidate {
     pub source: SourceKind,
+    #[serde(default)]
+    pub passive_revision: Option<Uuid>,
     pub demonstration: Uuid,
     pub baseline_ms: u64,
     pub process_created: u64,
@@ -115,6 +120,12 @@ pub struct Candidate {
 impl Candidate {
     pub fn validate(&self) -> Result<(), ErrorCode> {
         self.scope.validate()?;
+        if matches!(self.source, SourceKind::PassiveObservedTransition)
+            != self.passive_revision.is_some()
+            || self.passive_revision.is_some_and(|v| v.is_nil())
+        {
+            return Err(ErrorCode::Malformed);
+        }
         if [
             self.id,
             self.revision,
@@ -162,6 +173,7 @@ pub struct View {
 }
 #[derive(Serialize)]
 pub struct Snapshot {
+    pub passive: Option<passive::Setting>,
     pub scopes: Vec<Scope>,
     pub candidates: Vec<View>,
 }
@@ -281,6 +293,7 @@ impl Store {
             Ok(View{candidate,validated})
         }).collect::<Result<Vec<_>,ErrorCode>>()?;
         Ok(Snapshot {
+            passive: passive::setting(&self.connection, actor)?,
             scopes: scopes(&self.connection, actor)?,
             candidates,
         })
@@ -396,6 +409,18 @@ impl Store {
         apps: &AppCatalog,
         authorize: &mut dyn FnMut() -> Result<(), ErrorCode>,
     ) -> Result<(), ErrorCode> {
+        if !matches!(candidate.source, SourceKind::ObservedTransition) {
+            return Err(ErrorCode::Denied);
+        }
+        self.save_demonstration_source(candidate, None, apps, authorize)
+    }
+    fn save_demonstration_source(
+        &mut self,
+        candidate: Candidate,
+        passive: Option<passive::Setting>,
+        apps: &AppCatalog,
+        authorize: &mut dyn FnMut() -> Result<(), ErrorCode>,
+    ) -> Result<(), ErrorCode> {
         candidate.validate()?;
         authorize()?;
         let setup = self.teaching_setup(
@@ -412,7 +437,9 @@ impl Store {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|_| ErrorCode::Storage)?;
         let existing = candidates(&tx, candidate.actor)?;
-        if existing.iter().any(|v| v.name == candidate.name) {
+        if existing.iter().any(|v| {
+            v.name == candidate.name || (passive.is_some() && v.scope.id == candidate.scope.id)
+        }) {
             return Err(ErrorCode::Denied);
         }
         if existing.len() >= 256
@@ -430,6 +457,11 @@ impl Store {
             ],
         )
         .map_err(|_| ErrorCode::Storage)?;
+        if let Some(setting) = passive {
+            passive::claim_source(&tx, &candidate, &setting)?;
+        } else {
+            passive::preserve_source(&tx, &candidate)?;
+        }
         crate::notifications::demonstration_committed(&tx, &candidate)?;
         authorize()?;
         tx.commit().map_err(|_| ErrorCode::Storage)
@@ -451,6 +483,7 @@ impl Store {
             .into_iter()
             .find(|v| v.id == id && v.revision == revision)
             .ok_or(ErrorCode::Stale)?;
+        passive::preserve_source(&tx, &value)?;
         crate::notifications::redact_memory(&tx, actor, id)?;
         if let Some(name) = name {
             let name = alias_phrase(&name)?;

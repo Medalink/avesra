@@ -175,6 +175,21 @@ pub struct AudioClient {
     recent_streams: std::sync::Mutex<std::collections::HashMap<Uuid, std::time::Instant>>,
 }
 impl AudioClient {
+    fn observed_admission(
+        &self,
+        operation: avesra_core::engine_observer::Operation,
+    ) -> Result<tokio::sync::OwnedSemaphorePermit, ErrorCode> {
+        let result = self.admission.clone().try_acquire_owned();
+        avesra_core::engine_observer::admission(
+            avesra_core::engine_observer::Lane::audio(
+                self.deployment.as_ref().map(|(lane, _)| lane.as_str()),
+            ),
+            operation,
+            matches!(&result, Err(tokio::sync::TryAcquireError::NoPermits)),
+            matches!(&result, Err(tokio::sync::TryAcquireError::Closed)),
+        );
+        result.map_err(|_| ErrorCode::Unavailable)
+    }
     pub fn new(socket: &Path) -> Result<Self, ErrorCode> {
         let metadata = std::fs::symlink_metadata(socket).map_err(|_| ErrorCode::Unavailable)?;
         let own_uid = std::fs::metadata("/proc/self")
@@ -317,11 +332,7 @@ impl AudioClient {
         Ok(health)
     }
     pub async fn load(&self) -> Result<(), ErrorCode> {
-        let _permit = self
-            .admission
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| ErrorCode::Unavailable)?;
+        let _permit = self.observed_admission(avesra_core::engine_observer::Operation::Load)?;
         let epoch = self.epoch.load(Ordering::SeqCst);
         let result = self
             .exchange(
@@ -373,11 +384,7 @@ impl AudioClient {
             return Err(ErrorCode::Stale);
         }
         let (lane, revision) = self.deployment.as_ref().ok_or(ErrorCode::Unavailable)?;
-        let _permit = self
-            .admission
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| ErrorCode::Unavailable)?;
+        let _permit = self.observed_admission(avesra_core::engine_observer::Operation::Infer)?;
         let mut request = self.request("infer", request_id, epoch, budget.as_millis() as u64)?;
         payload.validate()?;
         request["payload"] = serde_json::to_value(payload).map_err(|_| ErrorCode::Malformed)?;

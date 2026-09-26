@@ -882,6 +882,7 @@ fn execute_read(
 /// Thread lifetime owns admission, including after receiver timeout/drop. Target
 /// records are immutable for its lifetime; replacement requires a new worker.
 pub struct NativeEffects {
+    background: SyncSender<Command>,
     send: SyncSender<Command>,
     browser_completion: SyncSender<BrowserCompletion>,
     browser_blocked: Arc<AtomicU64>,
@@ -1060,6 +1061,7 @@ impl NativeEffects {
         }
         let ownership = WorkerOwnership::acquire(&path)?;
         let (send, receive) = mpsc::sync_channel::<Command>(16);
+        let (background, background_receive) = mpsc::sync_channel::<Command>(1);
         let (browser_completion, browser_receive) = mpsc::sync_channel::<BrowserCompletion>(1);
         let browser_blocked = Arc::new(AtomicU64::new(1));
         let (browser_preparation_owner, browser_preparation) =
@@ -1123,7 +1125,16 @@ impl NativeEffects {
                 };
                 let mut snapshot_sequence = 0u64;
                 let mut prompt_discovery:Option<(Uuid,Uuid,Uuid,std::time::Instant,avesra_core::workflows::PromptDiscovery)>=None;
-                while let Ok(command) = receive.recv() {
+                loop {
+                    let command=match receive.recv_timeout(std::time::Duration::from_millis(100)) {
+                        Ok(command)=>command,
+                        Err(mpsc::RecvTimeoutError::Disconnected)=>break,
+                        Err(mpsc::RecvTimeoutError::Timeout)=>match receive.try_recv(){
+                            Ok(command)=>command,
+                            Err(mpsc::TryRecvError::Disconnected)=>break,
+                            Err(mpsc::TryRecvError::Empty)=>match background_receive.try_recv(){Ok(command)=>command,Err(_)=>continue},
+                        },
+                    };
                     // This dedicated mailbox is also the completion input for
                     // the active ReadExecution loop. Never queue its
                     // settlement behind a worker waiting for that same browser.
@@ -1567,6 +1578,7 @@ impl NativeEffects {
             })
             .map_err(|_| ErrorCode::Unavailable)?;
         Ok(Self {
+            background,
             send,
             state,
             browser_completion,

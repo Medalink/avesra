@@ -75,3 +75,10 @@ establish runtime sampling, exported cross-host evidence, detector accuracy,
 whole-companion overhead, complete engine counters, or baseline/candidate report
 comparison. Those proof and implementation boundaries remain open as applicable;
 the acceptance ledger records the exact verified artifact/run scope.
+
+Actual controller admission attempts/refusals and the 64-piece TTS output channel
+now have a separate [event-driven observer](engine-observer.md), visible in the
+accepted-trace view/export. Received versus discarded dwell and complete, failed
+or abandoned capacity-reservation waits remain distinct. No model waiting queue,
+GPU compute time or token-throughput measurement is inferred from these events.
+The source implementation still requires actual runtime/export evidence.

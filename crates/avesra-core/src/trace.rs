@@ -14,7 +14,7 @@ use std::{
 use uuid::Uuid;
 const CAP: usize = 32768;
 const DAY: u64 = 86_400_000;
-pub const QUERY_VERSION: u16 = 2;
+pub const QUERY_VERSION: u16 = 3;
 static SINK: OnceLock<Sink> = OnceLock::new();
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -83,7 +83,7 @@ impl Link {
             ..self
         }
     }
-    fn valid(self) -> bool {
+    pub(crate) fn valid(self) -> bool {
         ![self.turn, self.actor, self.device, self.operation]
             .iter()
             .any(Uuid::is_nil)
@@ -153,6 +153,7 @@ pub struct Snapshot {
     pub records: Vec<Record>,
     pub rollups: Vec<Rollup>,
     pub resources: crate::resource_observer::Snapshot,
+    pub engine: crate::engine_observer::Snapshot,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -198,6 +199,7 @@ pub struct Remote {
 enum Message {
     Record(Record),
     Resource(crate::resource_observer::Sample),
+    EngineQueue(crate::engine_observer::QueueRecord),
     Read {
         actor: Uuid,
         device: Uuid,
@@ -249,14 +251,15 @@ pub fn initialize(directory: &Path, host: Host) -> Result<(), ErrorCode> {
         if occupied {
             return Err(ErrorCode::Malformed);
         }
-    } else if !matches!(version, 1..=4) {
+    } else if !matches!(version, 1..=5) {
         return Err(ErrorCode::Unsupported);
     }
 
     sql(db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=1000; CREATE TABLE IF NOT EXISTS spans(id TEXT PRIMARY KEY,actor TEXT NOT NULL,device TEXT NOT NULL,turn TEXT NOT NULL,at_ms INTEGER NOT NULL,body TEXT NOT NULL CHECK(length(body)<=4096)); CREATE INDEX IF NOT EXISTS span_owner ON spans(actor,device,at_ms); CREATE TABLE IF NOT EXISTS rollups(actor TEXT NOT NULL,device TEXT NOT NULL,day INTEGER NOT NULL,stage TEXT NOT NULL,outcome TEXT NOT NULL,count INTEGER NOT NULL,total INTEGER NOT NULL,maximum INTEGER NOT NULL,PRIMARY KEY(actor,device,day,stage,outcome)); CREATE TABLE IF NOT EXISTS retention(id INTEGER PRIMARY KEY CHECK(id=1),days INTEGER NOT NULL CHECK(days BETWEEN 1 AND 7),evicted INTEGER NOT NULL); INSERT OR IGNORE INTO retention VALUES(1,7,0); CREATE TABLE IF NOT EXISTS observer(id INTEGER PRIMARY KEY CHECK(id=1),lost INTEGER NOT NULL,starts INTEGER NOT NULL); INSERT OR IGNORE INTO observer VALUES(1,0,0); UPDATE observer SET starts=starts+1 WHERE id=1;"))?;
     let (tx, rx) = mpsc::sync_channel(256);
     crate::resource_observer::initialize(&db)?;
-    sql(db.execute_batch("PRAGMA user_version=4;"))?;
+    crate::engine_observer::initialize(&db)?;
+    sql(db.execute_batch("PRAGMA user_version=5;"))?;
     let loss = Arc::new(AtomicU64::new(0));
     let process = Uuid::new_v4();
     let losses = loss.clone();
@@ -282,6 +285,16 @@ pub fn initialize(directory: &Path, host: Host) -> Result<(), ErrorCode> {
                     }
                     Message::Resource(sample) => {
                         if crate::resource_observer::write(&mut db, &sample).is_err() {
+                            losses.fetch_add(1, Ordering::Relaxed);
+                        }
+                        if host == Host::Controller
+                            && crate::engine_observer::checkpoint(&db, process).is_err()
+                        {
+                            losses.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                    Message::EngineQueue(value) => {
+                        if crate::engine_observer::write(&mut db, &value).is_err() {
                             losses.fetch_add(1, Ordering::Relaxed);
                         }
                     }
@@ -410,6 +423,7 @@ fn read(
     let evicted: i64 =
         sql(tx.query_row("SELECT evicted FROM retention WHERE id=1", [], |r| r.get(0)))?;
     let resources = crate::resource_observer::read(&tx, days, host)?;
+    let engine = crate::engine_observer::read(&tx, host, process, actor, device, turn, days)?;
     sql(tx.commit())?;
     let snapshot = Snapshot {
         version: QUERY_VERSION,
@@ -425,6 +439,7 @@ fn read(
         records,
         rollups,
         resources,
+        engine,
     };
     snapshot.validate(host, actor, device, turn)?;
     Ok(snapshot)
@@ -487,6 +502,18 @@ pub(crate) fn resource(sample: crate::resource_observer::Sample, observed: Insta
 pub(crate) fn resource_clock(host: Host) -> Option<(Uuid, Instant)> {
     let sink = SINK.get().filter(|sink| sink.host == host)?;
     Some((sink.process, sink.origin))
+}
+pub(crate) fn observer_loss() {
+    if let Some(sink) = SINK.get() {
+        sink.loss.fetch_add(1, Ordering::Relaxed);
+    }
+}
+pub(crate) fn engine_queue(value: crate::engine_observer::QueueRecord) {
+    if let Some(sink) = SINK.get()
+        && sink.tx.try_send(Message::EngineQueue(value)).is_err()
+    {
+        sink.loss.fetch_add(1, Ordering::Relaxed);
+    }
 }
 pub(crate) fn resource_age(sample: Option<&crate::resource_observer::Sample>) -> Option<u64> {
     let sample = sample?;
@@ -878,7 +905,9 @@ impl Snapshot {
             })
         };
         self.resources.validate(host)?;
+        self.engine.validate(host, actor, device, turn)?;
         if self.version != QUERY_VERSION
+            || self.engine.process != self.process
             || self.host != host
             || self.process.is_nil()
             || !(1..=7).contains(&self.trace_days)

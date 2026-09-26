@@ -21,11 +21,13 @@ use uuid::Uuid;
 pub mod documents;
 pub(crate) mod mailbox;
 mod reading;
+mod reconnect;
 pub mod scopes;
 
 #[derive(Default)]
 pub struct BrowserSetup {
     work: Arc<tokio::sync::Mutex<()>>,
+    reconnect: reconnect::Reconnect,
     inner: Mutex<Inner>,
     scopes: scopes::Coordinator,
     documents: documents::Coordinator,
@@ -43,6 +45,7 @@ struct Attempt {
     id: Uuid,
     connection: u64,
     started: Instant,
+    background: bool,
     selected: Option<AppRecord>,
     pending: Option<Confirmation>,
     approval: Option<ManagementProof>,
@@ -76,6 +79,7 @@ pub struct Status {
     selection: Option<Id>,
     action_epoch: u64,
     mode_allows_actions: bool,
+    automatic_reconnect: bool,
     scope: Option<browser::ScopeStatus>,
 }
 impl BrowserSetup {
@@ -111,10 +115,14 @@ impl BrowserSetup {
         }
     }
     pub fn settings_hidden(&self) {
+        self.reconnect.release_management();
         if let Ok(mut inner) = self.inner.lock() {
             inner.settings_generation = inner.settings_generation.saturating_add(1);
             let established = inner.attempt.as_ref().is_some_and(|v| {
-                v.selection.is_some() && v.state == "authenticated_no_scopes" && v.current_time()
+                v.background
+                    || (v.selection.is_some()
+                        && v.state == "authenticated_no_scopes"
+                        && v.current_time())
             });
             if !established {
                 self.reading.invalidate();
@@ -144,7 +152,9 @@ impl BrowserSetup {
     }
 }
 pub(crate) fn start_read_preparation(app: tauri::AppHandle) -> Result<(), ErrorCode> {
-    reading::start(app)
+    reading::start(app.clone())?;
+    reconnect::start(app);
+    Ok(())
 }
 fn management_current(
     app: &tauri::AppHandle,
@@ -173,6 +183,7 @@ pub async fn saved_browser_pairings(
     app: tauri::AppHandle,
 ) -> Result<Vec<Summary>, String> {
     let generation = visible(&window)?;
+    app.state::<Runtime>().browser.reconnect.pause();
     let state = app.state::<Runtime>();
     let work = state
         .browser
@@ -205,6 +216,7 @@ pub async fn revoke_browser_pairing(
     pairing: browser::PairingRef,
 ) -> Result<(), String> {
     let admitted = visible(&window)?;
+    app.state::<Runtime>().browser.reconnect.pause();
     let state = app.state::<Runtime>();
     // Revoke current/pending connection first, including a credential awaiting its
     // persistence proof. A still-running worker keeps admission until it exits.
@@ -253,6 +265,7 @@ fn selection_change(
     app: &tauri::AppHandle,
 ) -> Result<(tokio::sync::OwnedMutexGuard<()>, u64, ManagementProof), String> {
     let admitted = visible(window)?;
+    app.state::<Runtime>().browser.reconnect.pause();
     let state = app.state::<Runtime>();
     let local = state.local.lock().map_err(|_| "Local state unavailable")?;
     let mut inner = state
@@ -290,6 +303,7 @@ pub async fn browser_selections(
     app: tauri::AppHandle,
 ) -> Result<Vec<SelectionStatus>, String> {
     let generation = visible(&window)?;
+    app.state::<Runtime>().browser.reconnect.pause();
     let work = app
         .state::<Runtime>()
         .browser
@@ -504,6 +518,7 @@ pub fn browser_pairing_status(
         selection: active.and_then(|v| v.selection),
         action_epoch: inner.action_epoch,
         mode_allows_actions: inner.action_allowed,
+        automatic_reconnect: state.browser.reconnect.enabled(),
         scope: if let Some(attempt) = active {
             state
                 .browser
@@ -518,30 +533,35 @@ pub fn browser_pairing_status(
     })
 }
 #[tauri::command]
-pub fn cancel_browser_pairing(
+pub async fn cancel_browser_pairing(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
     attempt: Uuid,
 ) -> Result<(), String> {
     let admitted = visible(&window)?;
-    let state = app.state::<Runtime>();
-    let _local = state.local.lock().map_err(|_| "Local state unavailable")?;
-    let mut inner = state
-        .browser
-        .inner
-        .lock()
-        .map_err(|_| "Browser setup unavailable")?;
-    if inner.settings_generation == admitted
-        && inner.attempt.as_ref().is_some_and(|v| v.id == attempt)
     {
-        inner.generation = inner.generation.saturating_add(1);
-        inner.settings_generation = inner.settings_generation.saturating_add(1);
-        inner.attempt = None;
-        state.browser.reading.invalidate();
-        state.browser.scopes.invalidate();
-        state.browser.documents.invalidate();
+        let state = app.state::<Runtime>();
+        let _local = state.local.lock().map_err(|_| "Local state unavailable")?;
+        let mut inner = state
+            .browser
+            .inner
+            .lock()
+            .map_err(|_| "Browser setup unavailable")?;
+        if inner.settings_generation != admitted
+            || !inner.attempt.as_ref().is_some_and(|v| v.id == attempt)
+        {
+            return Err("Browser connection changed".into());
+        }
+        {
+            inner.generation = inner.generation.saturating_add(1);
+            inner.settings_generation = inner.settings_generation.saturating_add(1);
+            inner.attempt = None;
+            state.browser.reading.invalidate();
+            state.browser.scopes.invalidate();
+            state.browser.documents.invalidate();
+        }
     }
-    Ok(())
+    reconnect::set(&app, false).await
 }
 #[tauri::command]
 pub fn release_browser_management(
@@ -615,33 +635,51 @@ pub fn approve_browser_pairing(
     Ok(())
 }
 #[tauri::command]
-pub fn begin_browser_pairing(
+pub async fn begin_browser_pairing(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
     phrase: String,
 ) -> Result<Uuid, String> {
     avesra_core::apps::alias_phrase(&phrase)
         .map_err(|_| "Choose an existing learned application name")?;
-    begin(&window, app, ConnectionChoice::Setup(phrase))
+    begin(&window, app, ConnectionChoice::Setup(phrase)).await
 }
 #[tauri::command]
-pub fn connect_selected_browser(
+pub async fn connect_selected_browser(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
     revision: Id,
 ) -> Result<Uuid, String> {
-    begin(&window, app, ConnectionChoice::Selected(revision))
+    begin(&window, app, ConnectionChoice::Selected(revision)).await
 }
 enum ConnectionChoice {
     Setup(String),
     Selected(Id),
+    Saved,
 }
-fn begin(
+async fn begin(
     window: &tauri::WebviewWindow,
     app: tauri::AppHandle,
     choice: ConnectionChoice,
 ) -> Result<Uuid, String> {
     let admitted = visible(window)?;
+    app.state::<Runtime>().browser.reconnect.pause();
+    reconnect::set(&app, true).await?;
+    management_current(&app, admitted, None).map_err(|_| "Settings changed")?;
+    let result = launch(app.clone(), choice, Some(admitted));
+    if result.is_ok() {
+        app.state::<Runtime>()
+            .browser
+            .reconnect
+            .release_management();
+    }
+    result
+}
+fn launch(
+    app: tauri::AppHandle,
+    choice: ConnectionChoice,
+    admitted: Option<u64>,
+) -> Result<Uuid, String> {
     let state = app.state::<Runtime>();
     let owner = state
         .browser
@@ -660,7 +698,9 @@ fn begin(
             .inner
             .lock()
             .map_err(|_| "Browser setup unavailable")?;
-        if inner.settings_generation != admitted {
+        if admitted.is_some_and(|v| inner.settings_generation != v)
+            || (admitted.is_none() && !state.browser.reconnect.allowed())
+        {
             return Err("Settings changed".into());
         }
         inner.generation = inner
@@ -674,6 +714,7 @@ fn begin(
             id,
             connection: state.connection_generation.load(Ordering::SeqCst),
             started: Instant::now(),
+            background: admitted.is_none(),
             selected: None,
             pending: None,
             approval: None,
@@ -728,7 +769,12 @@ async fn run(
                 .map_err(|_| ErrorCode::Unavailable)??;
             (record.record, None, None)
         }
-        ConnectionChoice::Selected(revision) => {
+        ConnectionChoice::Selected(_) | ConnectionChoice::Saved => {
+            let expected_revision = if let ConnectionChoice::Selected(v) = choice {
+                Some(v)
+            } else {
+                None
+            };
             let path = directory.join("browser-pairings");
             let (selection, binding) = tokio::task::spawn_blocking(move || {
                 Store::open(&path)?
@@ -737,7 +783,7 @@ async fn run(
             })
             .await
             .map_err(|_| ErrorCode::Unavailable)??;
-            if selection.revision != revision {
+            if expected_revision.is_some_and(|v| selection.revision != v) {
                 return Err(ErrorCode::Stale);
             }
             with_attempt(app, id, generation, |_, _, _| Ok(()))?;
@@ -751,7 +797,7 @@ async fn run(
                 .await
                 .map_err(|_| ErrorCode::Unavailable)?
                 .map_err(|_| ErrorCode::Unavailable)??;
-            (record, Some(selection.pairing), Some(revision))
+            (record, Some(selection.pairing), Some(selection.revision))
         }
     };
     admission.current(generation)?;

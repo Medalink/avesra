@@ -51,6 +51,8 @@ impl Drop for Hooks {
     }
 }
 pub struct Evidence {
+    passive: Option<avesra_core::demonstration::passive::Setting>,
+    observed_at: Option<Instant>,
     setup: avesra_core::demonstration::Setup,
     device: Uuid,
     name: String,
@@ -63,8 +65,21 @@ pub struct Evidence {
     transitions: u16,
 }
 impl Evidence {
+    pub(crate) fn passive_deadline(&self) -> Result<Instant, ErrorCode> {
+        self.observed_at
+            .map(|at| (at + Duration::from_secs(30)).min(self.started + Duration::from_secs(300)))
+            .ok_or(ErrorCode::Stale)
+    }
+    pub(crate) fn passive(&self) -> Option<avesra_core::demonstration::passive::Setting> {
+        self.passive.clone()
+    }
     pub(crate) fn candidate(self) -> Result<avesra_core::demonstration::Candidate, ErrorCode> {
-        if self.started.elapsed() >= Duration::from_secs(300) {
+        if self.started.elapsed() >= Duration::from_secs(300)
+            || (self.passive.is_some()
+                && self
+                    .observed_at
+                    .is_none_or(|at| at.elapsed() > Duration::from_secs(30)))
+        {
             return Err(ErrorCode::Expired);
         }
         let window_class = self
@@ -78,7 +93,12 @@ impl Evidence {
             baseline_ms: self.baseline_ms,
             process_created: self.process_created,
             window_class,
-            source: avesra_core::demonstration::SourceKind::ObservedTransition,
+            source: if self.passive.is_some() {
+                avesra_core::demonstration::SourceKind::PassiveObservedTransition
+            } else {
+                avesra_core::demonstration::SourceKind::ObservedTransition
+            },
+            passive_revision: self.passive.as_ref().map(|s| s.revision),
             id: Uuid::new_v4(),
             revision: Uuid::new_v4(),
             actor: self.setup.scope.actor,
@@ -162,6 +182,10 @@ fn sample(record: &AppRecord) -> Result<Option<Sample>, ErrorCode> {
     }
     Ok(scan.found)
 }
+pub struct Admission<'a> {
+    pub started: Instant,
+    pub control: &'a AtomicU8,
+}
 /// Control 0=continue,1=explicit Stop/save,2=Cancel. No caller Drop releases this
 /// actual worker's hook/file ownership. `current` true means foreground work has
 /// priority: abandon continuity and skip sampling until it becomes idle.
@@ -169,10 +193,62 @@ pub fn observe(
     setup: avesra_core::demonstration::Setup,
     device: Uuid,
     name: String,
-    control: &AtomicU8,
+    admission: Admission<'_>,
     current: &mut dyn FnMut() -> Result<bool, ErrorCode>,
     progress: &mut dyn FnMut(bool, u16),
 ) -> Result<Option<Evidence>, ErrorCode> {
+    observe_inner(setup, device, name, admission, current, progress, None)
+}
+pub fn observe_passive(
+    prepared: avesra_core::demonstration::passive::Prepared,
+    device: Uuid,
+    admission: Admission<'_>,
+    current: &mut dyn FnMut() -> Result<bool, ErrorCode>,
+    progress: &mut dyn FnMut(bool, u16),
+) -> Result<Option<Evidence>, ErrorCode> {
+    // Called only on the native coordinator's dedicated passive thread.
+    use windows::Win32::System::Threading::{
+        GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_LOWEST,
+    };
+    unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_LOWEST) }
+        .map_err(|_| ErrorCode::Unavailable)?;
+    let name = format!("open {}", prepared.setup.scope.name);
+    observe_inner(
+        prepared.setup,
+        device,
+        name,
+        admission,
+        current,
+        progress,
+        Some(prepared.setting),
+    )
+}
+fn observe_inner(
+    setup: avesra_core::demonstration::Setup,
+    device: Uuid,
+    name: String,
+    admission: Admission<'_>,
+    current: &mut dyn FnMut() -> Result<bool, ErrorCode>,
+    progress: &mut dyn FnMut(bool, u16),
+    passive: Option<avesra_core::demonstration::passive::Setting>,
+) -> Result<Option<Evidence>, ErrorCode> {
+    let Admission { started, control } = admission;
+    let deadline = started
+        .checked_add(Duration::from_secs(300))
+        .ok_or(ErrorCode::Expired)?;
+    let mut preparation = || {
+        if Instant::now() >= deadline {
+            return Err(ErrorCode::Expired);
+        }
+        if control.load(Ordering::SeqCst) != 0 {
+            return Err(ErrorCode::Stale);
+        }
+        if current()? {
+            return Err(ErrorCode::Unavailable);
+        }
+        Ok(())
+    };
+    preparation()?;
     setup.scope.validate()?;
     setup.record.validate()?;
     let name = avesra_core::apps::alias_phrase(&name)?;
@@ -193,10 +269,11 @@ pub fn observe(
     let _file = match &setup.record.launch {
         LaunchIdentity::Executable(expected) => {
             let mut file = open_executable(&expected.path)?;
-            if identity(
+            if identity_checked(
                 &mut file,
                 expected.arguments.clone(),
                 expected.working_directory.clone(),
+                &mut preparation,
             )? != *expected
             {
                 return Err(ErrorCode::Stale);
@@ -208,10 +285,12 @@ pub fn observe(
             None
         }
     };
-    if current()? || sample(&setup.record)?.is_some() {
+    preparation()?;
+    if sample(&setup.record)?.is_some() {
         return Err(ErrorCode::Denied);
     }
     for event in [EVENT_SYSTEM_FOREGROUND, EVENT_OBJECT_SHOW] {
+        preparation()?;
         let hook = unsafe {
             SetWinEventHook(
                 event,
@@ -228,7 +307,7 @@ pub fn observe(
         }
         hooks.0.push(hook);
     }
-    let started = Instant::now();
+    preparation()?;
     let demonstration = Uuid::new_v4();
     let baseline_ms = now_ms()?;
     let mut process_created = 0;
@@ -237,6 +316,7 @@ pub fn observe(
     let mut absent = true;
     let mut qualified = false;
     let mut observed_ms = 0;
+    let mut observed_at = None;
     let mut transitions = 0u16;
     loop {
         if started.elapsed() >= Duration::from_secs(300) {
@@ -249,6 +329,8 @@ pub fn observe(
                 hooks.retire()?;
                 return Ok(if qualified && !busy {
                     Some(Evidence {
+                        passive,
+                        observed_at,
                         setup,
                         device,
                         name,
@@ -301,6 +383,11 @@ pub fn observe(
                         qualified = true;
                         process_created = now.created;
                         observed_ms = now_ms()?;
+                        observed_at = Some(Instant::now());
+                        if passive.is_some() {
+                            let _ =
+                                control.compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst);
+                        }
                     }
                 } else {
                     absent = true;

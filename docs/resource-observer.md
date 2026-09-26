@@ -34,9 +34,11 @@ eviction totals are visible. Resource data is host/process-scoped, separate from
 accepted-turn traces; selecting a turn does not attribute host usage to that turn.
 Access/export retains current native owner/device and paired registration checks.
 
-Trace query/snapshot version2 requires the resource snapshot; older peers fail
-explicitly without a fake empty result. Telemetry database schema4 adds separate
-resource tables while preserving previous trace rows; old collectors refuse it
+Trace query/snapshot version 3 retains the required resource snapshot and adds the
+separate [engine observer](engine-observer.md); older peers fail
+explicitly without a fake empty result. Telemetry database schema 4 introduced separate
+resource tables; current schema 5 adds engine observations while preserving these
+rows. Old collectors refuse unsupported schemas
 nonfatally. Action storage and voice protocols are unchanged. Export keeps typed
 resource observations alongside OTLP spans without pretending resource samples
 are accepted spans. A missing boot identity or stale sample is explicitly shown.

@@ -19,6 +19,48 @@ let permissions: PermissionProposal | null = null;
 let documents: Documents | null = null;
 let reading: ReadJob | null = null;
 let scopeOutcome: p.Scope | null = null;
+const reconnectAlarm="avesra-saved-pair-reconnect";
+let retry:ReturnType<typeof setTimeout>|undefined;
+let retrySeconds=1, retryBlocked=false, preferenceGeneration=0;
+let activating=false, preferenceBusy=false;
+function stopRetry(){clearTimeout(retry);retry=undefined;}
+function scheduleRetry(){
+  if(retryBlocked || retry!==undefined || port)return;
+  // Jitter avoids phase-locking repeated host attempts into the native
+  // listener's bounded accept/retry gaps. It is timing only, never authority.
+  const random=crypto.getRandomValues(new Uint32Array(1))[0]/0x1_0000_0000;
+  const delay=1+Math.max(0,retrySeconds-1)*(0.8+0.2*random);retrySeconds=Math.min(60,retrySeconds*2);
+  retry=setTimeout(()=>{retry=undefined;void automaticConnect();},delay*1000);
+}
+async function automaticConnect(){
+  if(activating||retryBlocked||port||busy)return;
+  activating=true;const token=preferenceGeneration;
+  try {
+    if(await p.automatic() && token===preferenceGeneration && !retryBlocked)await connect(false);
+  } catch {if(token===preferenceGeneration){retryBlocked=true;state="Saved pairing or reconnect preference unavailable; explicit recovery required.";}}
+  finally{activating=false;}
+}
+async function userPreference(enabled:boolean){
+  if(preferenceBusy)throw new Error("Reconnect preference is busy");
+  preferenceBusy=true;
+  try {
+  const token=++preferenceGeneration;retryBlocked=true;stopRetry();
+  if(!enabled)close("Disconnected; automatic reconnect disabled");
+  await p.automaticPreference(enabled);
+  if(token!==preferenceGeneration)return;
+  retryBlocked=!enabled;retrySeconds=1;
+  if(enabled)await connect(true);
+  } finally {preferenceBusy=false;}
+}
+// Timers disappear when a service worker terminates. One named alarm provides
+// a bounded wakeup; every wake rereads the saved preference and credential shape.
+chrome.alarms.onAlarm.addListener(alarm=>{if(alarm.name===reconnectAlarm)void automaticConnect();});
+async function activate(){
+  try {await chrome.alarms.create(reconnectAlarm,{periodInMinutes:1});await automaticConnect();}
+  catch {state="Automatic browser connection unavailable";}
+}
+chrome.runtime.onStartup.addListener(()=>{void activate();});
+chrome.runtime.onInstalled.addListener(()=>{void activate();});
 function current(owned: chrome.runtime.Port, epoch: number) { return owned === port && generation === epoch; }
 function close(reason: string, owned = port, epoch = generation, unavailable = false) {
   if (owned !== port || epoch !== generation) return;
@@ -29,20 +71,22 @@ function close(reason: string, owned = port, epoch = generation, unavailable = f
   port = null; generation++; state = reason; connected = false; comparison = "";
   displayPhase = unavailable ? "Unavailable" : "Disconnected"; tone = unavailable ? "unavailable" : "error";
   clearTimeout(poll); poll = undefined; owned?.disconnect();
+  scheduleRetry();
 }
-function snapshot() { return { state, displayPhase, tone, comparison, installation, pairing: savedPairing, connected, busy: busy || p.isWriting(), proposal: permissions?.snapshot() ?? null, scope: scopeOutcome }; }
-async function connect() {
+function snapshot() { return { state, displayPhase, tone, comparison, installation, pairing: savedPairing, connected, busy: busy || preferenceBusy || p.isWriting(), proposal: permissions?.snapshot() ?? null, scope: scopeOutcome }; }
+async function connect(explicit=false) {
   if (port || busy || p.isWriting()) return;
   busy = true; state = "Reading this installation"; displayPhase = "Preparing"; tone = "unavailable";
   const epoch = ++generation;
   try {
-    const loaded = await p.load();
+    const loaded = explicit ? await p.load() : await p.loadSaved();
+    if(!loaded)return;
     if (generation !== epoch) return;
     installation = loaded.installation; savedPairing = loaded.record?.pairing ?? null;
     let record = loaded.record;
     const connection = crypto.randomUUID(), nonce = p.nonce();
     const owned = chrome.runtime.connectNative("com.avesra.companion");
-    port = owned; state = "Connecting to the Settings pairing window"; displayPhase = "Pairing";
+    port = owned; state = record ? "Connecting saved browser pairing" : "Connecting to the Settings pairing window"; displayPhase = "Pairing";
     const authority = new ObservationAuthority(() => close("Native status expired; browser observations withdrawn.", owned, epoch, true));
     observation = authority;
     const scopes = new PermissionProposal(authority, () => current(owned, epoch));
@@ -112,7 +156,7 @@ async function connect() {
           if (phase !== "proof" || !challenge || !record || body.version !== 10 || body.session !== challenge.session || body.installation !== installation || body.connection !== connection || !p.pairing(body.pairing) || !p.equal(body.pairing, record.pairing) || !Number.isSafeInteger(body.generation) || Number(body.generation) <= 0) throw new Error("Authentication reply mismatch");
           if (nativeGeneration !== null && body.generation !== nativeGeneration) throw new Error("Native generation changed during authentication");
           nativeGeneration = Number(body.generation);
-          phase = "authenticated"; connected = true; comparison = ""; state = "Paired connection ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· page operations unavailable"; displayPhase = "Paired"; tone = "paired"; schedule();
+          phase = "authenticated"; retrySeconds=1; stopRetry(); connected = true; comparison = ""; state = "Paired connection ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· page operations unavailable"; displayPhase = "Paired"; tone = "paired"; schedule();
         } else if (p.object(value, ["type", "body"]) && value.type === "status" && p.status(value.body)) {
           const status = value.body;
           if (!challenge || status.session !== challenge.session || status.sequence !== sequence || !["pending", "authenticated"].includes(phase) || status.state !== (phase === "authenticated" ? "authenticated_no_scopes" : "pending") || (nativeGeneration !== null && status.generation !== nativeGeneration)) throw new Error("Native status mismatch");
@@ -137,18 +181,19 @@ async function connect() {
       } finally { handling = false; }
     }
     owned.onMessage.addListener((value: unknown) => {
-      void receive(value).catch(() => close("Connection or persistence unavailable. Check saved pairings before retrying.", owned, epoch, true));
+      void receive(value).catch(() => {if(!current(owned,epoch))return;retryBlocked=true;stopRetry();close("Connection or persistence unavailable. Check saved pairings before retrying.", owned, epoch, true);});
     });
     owned.onDisconnect.addListener(() => {
       const failed = chrome.runtime.lastError;
       if (!current(owned, epoch)) return;
-      close(failed ? "Native companion unavailable or expired. Open pairing in Windows Settings." : "Disconnected", owned, epoch, !!failed);
+      close(failed ? "Native companion unavailable; saved pairing will reconnect automatically unless disabled in Windows Settings." : "Connection ended; reconnecting saved pairing", owned, epoch, !!failed);
+      scheduleRetry();
     });
     send({ type: "hello", body: { version: 10, installation, connection, extension: chrome.runtime.id, nonce, pairing: savedPairing } });
   } catch {
     if (generation === epoch) {
       const identity = await p.recoveryIdentity().catch(() => null);
-      if (generation === epoch) { savedPairing = identity; close("Setup or saved pairing unavailable; nothing was replaced.", port, epoch, true); }
+      if (generation === epoch) { savedPairing = identity; retryBlocked=true; stopRetry(); close("Setup or saved pairing unavailable; nothing was replaced.", port, epoch, true); }
     }
   }
   finally { busy = false; }
@@ -157,8 +202,8 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, reply) => {
   if (sender.id !== chrome.runtime.id || sender.url !== chrome.runtime.getURL("popup.html")) return false;
   if (p.object(message, ["operation"])) {
     if (message.operation === "status") { void permissions?.reconcile(); reply(snapshot()); return false; }
-    if (message.operation === "connect") { void connect().then(() => reply(snapshot())); return true; }
-    if (message.operation === "disconnect") { close("Disconnected"); reply(snapshot()); return false; }
+    if (message.operation === "connect") { void userPreference(true).catch(()=>{state="Reconnect preference could not be saved";}).finally(() => reply(snapshot())); return true; }
+    if (message.operation === "disconnect") { void userPreference(false).catch(()=>{state="Disconnected; reconnect preference could not be saved";}).finally(()=>reply(snapshot())); return true; }
   }
   if (p.object(message, ["operation", "proposal"]) && message.operation === "permission_intent" && view(message.proposal)) {
     reply({ accepted: permissions?.intent(message.proposal) ?? false }); return false;
@@ -169,10 +214,12 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, reply) => {
   if (p.object(message, ["operation", "proposal", "permitted"]) && message.operation === "permission_result" && view(message.proposal) && typeof message.permitted === "boolean") {
     permissions?.completed(message.proposal, message.permitted); reply(snapshot()); return false;
   }
-  if (p.object(message, ["operation", "pairing"]) && message.operation === "forget" && p.pairing(message.pairing) && !busy && !p.isWriting()) {
+  if (p.object(message, ["operation", "pairing"]) && message.operation === "forget" && p.pairing(message.pairing) && !busy && !preferenceBusy && !p.isWriting()) {
+    const pairing = message.pairing;
+    retryBlocked=true;preferenceGeneration++;stopRetry();
     close("Removing this installation's saved credential"); busy = true;
     const epoch = generation;
-    void p.forget(message.pairing).then(() => { if (generation === epoch) { savedPairing = null; state = "Local credential removed. Revoke its saved revision in Windows Settings too."; } })
+    void p.automaticPreference(false).then(()=>p.forget(pairing)).then(() => { if (generation === epoch) { savedPairing = null; state = "Local credential removed. Revoke its saved revision in Windows Settings too."; } })
       .catch(() => { if (generation === epoch) state = "Local removal uncertain; saved revision was not replaced."; })
       .finally(() => { busy = false; reply(snapshot()); });
     return true;
@@ -182,7 +229,7 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, reply) => {
 
 // Register synchronously: worker restart discards pending proposal authority.
 chrome.permissions.onAdded.addListener(() => { void permissions?.reconcile(); });
-chrome.permissions.onRemoved.addListener(() => { close("Browser permission removed; connection authority withdrawn.", port, generation, true); });
+chrome.permissions.onRemoved.addListener(() => { retryBlocked=true;stopRetry();close("Browser permission removed; connection authority withdrawn.", port, generation, true); });
 
 // These listeners only invalidate in-memory ownership; no page data is retained.
 const invalidateDocuments = () => { reading?.invalidate(); documents?.invalidate(); };
@@ -201,3 +248,5 @@ chrome.tabs.onDetached.addListener(invalidateDocuments);
 chrome.tabs.onMoved.addListener(invalidateDocuments);
 chrome.tabs.onActivated.addListener(info=>{if(!reading?.expectedActivation(info.tabId,info.windowId))invalidateDocuments();});
 chrome.windows.onFocusChanged.addListener(window=>{if(!reading?.expectedFocus(window))invalidateDocuments();});
+
+void activate();

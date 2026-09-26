@@ -1,9 +1,10 @@
 # Accepted-turn traces
 
-Trace query/snapshot version2 also carries separate typed cached host resource
+Trace query/snapshot version 3 also carries separate typed controller admission/TTS queue ([contract](engine-observer.md)) and cached host resource
 observations; see [resource-observer.md](resource-observer.md). They are not
-accepted spans and remain outside the OTLP span projection. Telemetry schema4
-extends the bounded writer with resource samples/rollups; earlier stage/schema
+accepted spans and remain outside the OTLP span projection. Telemetry schema 5
+extends the bounded writer with engine observations (schema 4 introduced resource
+samples/rollups); earlier stage/schema
 notes below describe their introduction rather than the current schema number.
 
 Preacceptance voice measurements are promoted only by genuine durable acceptance;

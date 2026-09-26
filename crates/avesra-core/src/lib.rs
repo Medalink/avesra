@@ -4,6 +4,7 @@ pub mod clock;
 pub mod conversations;
 pub mod diagnostics;
 pub mod download;
+pub mod engine_observer;
 pub mod enrollment;
 pub mod execution;
 pub mod ledger;

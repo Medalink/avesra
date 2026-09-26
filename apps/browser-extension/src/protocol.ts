@@ -119,3 +119,30 @@ export async function recoveryIdentity(): Promise<Pairing | null> {
   const value: unknown = current.avesraPairing;
   return value && typeof value === "object" && "pairing" in value && pairing(value.pairing) ? value.pairing : null;
 }
+
+// This preference carries no credential or grant. Automatic activation never
+// creates an installation identity or repairs malformed saved storage.
+export async function automatic(): Promise<boolean> {return await loadSaved()!==null;}
+
+let preferenceWrite:Promise<void>=Promise.resolve();
+export function automaticPreference(enabled:boolean):Promise<void> {
+  const work=preferenceWrite.then(async()=>{
+    await trusted();
+    const previous=await chrome.storage.local.get("avesraReconnectDisabled");
+    if(previous.avesraReconnectDisabled!==undefined && typeof previous.avesraReconnectDisabled!=="boolean")throw new Error("Reconnect preference unavailable");
+    await chrome.storage.local.set({avesraReconnectDisabled:!enabled});
+    const actual=await chrome.storage.local.get("avesraReconnectDisabled");
+    if(actual.avesraReconnectDisabled!==!enabled)throw new Error("Reconnect preference was not saved");
+  });
+  preferenceWrite=work.catch(()=>{});
+  return work;
+}
+
+export async function loadSaved():Promise<{installation:string;record:Saved}|null>{
+  await trusted();
+  const value=await chrome.storage.local.get(["avesraInstallation","avesraPairing","avesraReconnectDisabled"]);
+  if(value.avesraReconnectDisabled!==undefined && typeof value.avesraReconnectDisabled!=="boolean")throw new Error("Reconnect preference unavailable");
+  if(value.avesraReconnectDisabled===true || value.avesraPairing===undefined)return null;
+  if(!saved(value.avesraPairing) || value.avesraInstallation!==value.avesraPairing.installation)throw new Error("Saved pairing unavailable");
+  return {installation:value.avesraPairing.installation,record:value.avesraPairing};
+}

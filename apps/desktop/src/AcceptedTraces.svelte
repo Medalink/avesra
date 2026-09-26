@@ -1,10 +1,11 @@
 <script lang="ts">
+  import EngineReadings from "./EngineReadings.svelte";
   import ResourceReadings from "./ResourceReadings.svelte";
   import type { ComponentProps } from "svelte";
   import { command, native, type Runtime } from "./runtime";
   let { runtime }: { runtime: Runtime | null } = $props();
   type Span = { id:string; link:{turn:string;operation:string;parent:string|null}; host:string; process:string; stage:string; outcome:string; error:string|null; duration_us:number; queue_us:number|null; retries:number; deployment:{model:string|null;image:string|null;config:string|null}; analysis?:{request:string;receipts:{worker:string;host:string;process:string;lane:string;model_revision:string;duration_us:number}[]}|null };
-  type Snapshot = { records:Span[]; trace_days:number; observer_loss:number; evicted:number; collector_starts:number; truncated:boolean; resources:ComponentProps<typeof ResourceReadings>["value"] };
+  type Snapshot = { records:Span[]; trace_days:number; observer_loss:number; evicted:number; collector_starts:number; truncated:boolean; resources:ComponentProps<typeof ResourceReadings>["value"]; engine:ComponentProps<typeof EngineReadings>["value"] };
   type View = { local:Snapshot; controller:Snapshot|null; controller_error:string|null };
   let view = $state<View|null>(null);
   let selected = $state("");
@@ -14,7 +15,7 @@
   let generation=0;
   $effect(()=>{if(runtime?.locked){generation++;view=null;selected="";message="";}});
   const spans=$derived([...(view?.local.records??[]),...(view?.controller?.records??[])]);
-  const turns=$derived([...new Set(spans.map(s=>s.link.turn))]);
+  const turns=$derived([...new Set([...spans.map(s=>s.link.turn),...(view?.controller?.engine.queues??[]).map(q=>q.link.turn),...(view?.controller?.engine.live??[]).map(q=>q.link.turn)])]);
   const rows=$derived(selected?spans.filter(s=>s.link.turn===selected):[]);
   const summaries=$derived.by(()=>{
     const groups=new Map<string,Span[]>();
@@ -56,6 +57,7 @@
     {#if view.controller}<p class="av-hint">Controller: {view.controller.records.length} spans · {view.controller.observer_loss} observer losses · {view.controller.evicted} expired/evicted · {view.controller.trace_days}-day retention.</p>{:else}<p class="av-hint text-amber-200">Controller unavailable: {view.controller_error}. This is not an empty successful trace.</p>{/if}
     {#if view.local.truncated||view.controller?.truncated}<p class="av-hint">Inspection/export is limited to the newest 2,048 spans per host. Select a turn to export its exact retained records.</p>{/if}
     <label class="av-hint">Accepted turn <select bind:value={selected}><option value="">Select a turn ({turns.length} retained)</option>{#each turns as turn}<option value={turn}>{turn}</option>{/each}</select></label>
+    {#if view.controller}<EngineReadings value={view.controller.engine} {selected} />{/if}
     {#each summaries as summary}
       <p class="av-hint">{summary.name}: {summary.count} observations · {summary.complete} completed · {summary.errors} failed · {summary.missing} missing · {summary.withdrawn} withdrawn · {summary.abandoned} abandoned. {summary.response?"Successful submission latency only":"All-outcome elapsed durations"}: p50 {summary.p50} / p95 {summary.p95} / p99 {summary.p99} / max {summary.max} ms ({summary.measured} measured){summary.measured<30?" · provisional":""}.</p>
     {/each}

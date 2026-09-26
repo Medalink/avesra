@@ -7,7 +7,7 @@
   let { runtime }: { runtime: Runtime | null } = $props();
   type Pairing = { id: string; revision: string };
   type Confirmation = { installation: string; connection: string; session: string; challenge: string; extension: string; comparison: string };
-  type Status = { attempt: string | null; state: string; browser_app: string | null; browser_revision: string | null; browser_label: string | null; pending: Confirmation | null; selection: string | null; action_epoch: number; mode_allows_actions: boolean; scope: {state: string; reference: Pairing; origin?: string; operations?: string[]; remaining_ms?: number} | null };
+  type Status = { automatic_reconnect: boolean; attempt: string | null; state: string; browser_app: string | null; browser_revision: string | null; browser_label: string | null; pending: Confirmation | null; selection: string | null; action_epoch: number; mode_allows_actions: boolean; scope: {state: string; reference: Pairing; origin?: string; operations?: string[]; remaining_ms?: number} | null };
   type Alias = { id: string; phrase: string; name: string; target: string; target_revision: string; available: boolean };
   type Saved = { pairing: Pairing; available: boolean; binding: null | { label: string; installation: string; browser_app: string; browser_revision: string } };
   type Selected = { revision: string; selected: null | { revision: string; pairing: Pairing; actor: string }; binding: Saved["binding"]; available: boolean };
@@ -135,6 +135,10 @@
     };
   });
 </script>
+
+{#if status && !status.automatic_reconnect}
+  <p class="text-[12px] text-zinc-400">Automatic browser connection is off in Avesra. Connect the saved browser below to enable it. If you also disconnected the extension, use Connect in its popup.</p>
+{/if}
 
 <!-- Windows PC card: approved Settings.dc.html 478–495. -->
 <div class="av-card flex flex-col gap-3 p-3.5">

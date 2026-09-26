@@ -1,13 +1,19 @@
 //! Visible scoped teaching owns its actual native observer until retirement.
 use super::*;
 use avesra_windows::effects::teaching::{Operation, Request, ResultValue};
+#[path = "tasks_passive_teaching.rs"]
+pub mod passive;
+pub use passive::start_passive;
 #[derive(Default)]
 pub struct State {
     generation: std::sync::atomic::AtomicU64,
+    passive_generation: std::sync::atomic::AtomicU64,
     active: Mutex<Option<Active>>,
     last: Mutex<Option<&'static str>>,
 }
 struct Active {
+    app_name: String,
+    passive: bool,
     started: Instant,
     id: Uuid,
     panel: Uuid,
@@ -24,6 +30,8 @@ pub struct View {
 }
 #[derive(Serialize)]
 struct ActiveView {
+    app_name: String,
+    passive: bool,
     id: Uuid,
     qualified: bool,
     transitions: u16,
@@ -32,6 +40,16 @@ struct ActiveView {
 impl State {
     pub(super) fn invalidate(&self) {
         self.generation.fetch_add(1, Ordering::SeqCst);
+        if let Ok(active) = self.active.lock()
+            && let Some(active) = active.as_ref()
+            && !active.passive
+        {
+            active.control.store(2, Ordering::SeqCst);
+        }
+    }
+    fn invalidate_learning(&self) {
+        self.invalidate();
+        self.passive_generation.fetch_add(1, Ordering::SeqCst);
         if let Ok(active) = self.active.lock()
             && let Some(active) = active.as_ref()
         {
@@ -82,8 +100,10 @@ pub async fn teaching_status(
         .lock()
         .map_err(|_| "Teaching unavailable")?
         .as_ref()
-        .filter(|v| v.actor == actor && v.panel == panel)
+        .filter(|v| v.actor == actor && (v.panel == panel || v.passive))
         .map(|v| ActiveView {
+            app_name: v.app_name.clone(),
+            passive: v.passive,
             id: v.id,
             qualified: v.qualified,
             transitions: v.transitions,
@@ -124,7 +144,7 @@ pub async fn set_teaching_scope(
         let _guard = guard;
         let actor = crate::owner::current_actor(&app).await?;
         let authorization = authorize(app.clone(), panel, actor, Some(proof(&app)?))?;
-        app.state::<Runtime>().tasks.teaching.invalidate();
+        app.state::<Runtime>().tasks.teaching.invalidate_learning();
         receive(command(
             &app,
             actor,
@@ -167,7 +187,7 @@ pub async fn change_demonstration(
         let _guard = guard;
         let actor = crate::owner::current_actor(&app).await?;
         let authorization = authorize(app.clone(), panel, actor, Some(proof(&app)?))?;
-        app.state::<Runtime>().tasks.teaching.invalidate();
+        app.state::<Runtime>().tasks.teaching.invalidate_learning();
         receive(command(
             &app,
             actor,
@@ -219,6 +239,7 @@ pub async fn start_demonstration(
         .lock()
         .map_err(|_| "Session unavailable")?
         .ok_or("Session unavailable")?;
+    let started = Instant::now();
     let id = Uuid::new_v4();
     let control = Arc::new(AtomicU8::new(0));
     {
@@ -232,7 +253,9 @@ pub async fn start_demonstration(
             return Err("Wait for the previous observer to finish".into());
         }
         *active = Some(Active {
-            started: Instant::now(),
+            app_name: setup.scope.name.clone(),
+            passive: false,
+            started,
             id,
             panel,
             actor,
@@ -252,9 +275,14 @@ pub async fn start_demonstration(
         let observed = tokio::task::spawn_blocking(move || {
             let mut authority =
                 authorize(worker_app.clone(), panel, actor, None).map_err(|_| ErrorCode::Stale)?;
+            authority()?;
             let mut check = || {
-                authority()?;
                 let state = worker_app.state::<Runtime>();
+                let _owner = state
+                    .owner_setup
+                    .try_lock()
+                    .map_err(|_| ErrorCode::Unavailable)?;
+                current(&worker_app, panel).map_err(|_| ErrorCode::Stale)?;
                 let local = state.local.lock().map_err(|_| ErrorCode::Unavailable)?;
                 if state.tasks.teaching.generation.load(Ordering::SeqCst) != generation
                     || control.load(Ordering::SeqCst) == 2
@@ -280,7 +308,10 @@ pub async fn start_demonstration(
                 *setup,
                 session.device,
                 name,
-                &control,
+                avesra_windows::apps::demonstration::Admission {
+                    started,
+                    control: &control,
+                },
                 &mut check,
                 &mut progress,
             )
@@ -368,7 +399,7 @@ pub fn stop_demonstration(
         .map_err(|_| "Teaching unavailable")?;
     let active = active
         .as_ref()
-        .filter(|v| v.id == id && v.panel == panel)
+        .filter(|v| v.id == id && (v.panel == panel || (v.passive && !save)))
         .ok_or("Teaching session changed")?;
     if !save {
         active.control.store(2, Ordering::SeqCst);
@@ -394,6 +425,10 @@ pub fn teaching_progress(
     visible(&window)?;
     current(&app, panel)?;
     let state = app.state::<Runtime>();
+    let directory = app.path().app_data_dir().map_err(|_| "Owner unavailable")?;
+    let actor = crate::owner::identity(&directory)
+        .map_err(|_| "Owner unavailable")?
+        .0;
     let active = state
         .tasks
         .teaching
@@ -401,8 +436,10 @@ pub fn teaching_progress(
         .lock()
         .map_err(|_| "Teaching unavailable")?
         .as_ref()
-        .filter(|v| v.panel == panel)
+        .filter(|v| v.actor == actor && (v.panel == panel || v.passive))
         .map(|v| ActiveView {
+            app_name: v.app_name.clone(),
+            passive: v.passive,
             id: v.id,
             qualified: v.qualified,
             transitions: v.transitions,

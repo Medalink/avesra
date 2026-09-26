@@ -50,3 +50,61 @@ or emit duplicate useful-learning events.
 This family is not general multi-step/VPN teaching, passive screen interpretation,
 or arbitrary click replay. Genuine demonstration, restart, invocation, relocation,
 structure drift, correction and deletion remain required live evidence.
+
+## Optional passive app-opening session (schema 27)
+
+The owner may explicitly enable passive learning for one existing allowed app
+scope. This is optional and never a prerequisite for conversation. The saved
+setting binds the exact scope revision and is separate from execution grants.
+The native coordinator may begin one bounded observation attempt in a fresh
+acknowledged session, or after an explicit setting revision. It requires the
+current native owner, unlocked/unpaused connected state, and the unchanged scope,
+app and alias. Exclusion, setting replacement, owner/session/action changes and
+Stop retire the actual observer. Settings need not remain open. Stop ends the
+current attempt; the saved optional setting may apply to a later fresh session.
+
+The same title-free absent-to-foreground observation produces a distinct
+PassiveObservedTransition candidate, never a successful workflow or inferred user
+click. No microphone, screenshots, titles, field values or general UI events enter
+this learner. An unchanged or already-open app supplies no new opening evidence.
+One dirty hint and a two-second backstop remain bounded by five minutes and 64
+semantic changes. Interactive speech/tasks defer observation and invalidate
+continuity. The low-priority Store mailbox holds at most one pending operation;
+foreground operations are selected first. Pending evidence has an additional
+30-second age ceiling, never renewed when queued.
+
+The first genuine transition may automatically save the deterministic routine
+name `open <saved alias>` and its useful-learning event in one transaction. A
+separate owner/scope dedup key is committed with the candidate and survives
+correction or deletion. Passive learning never overwrites a routine or recreates
+a deleted candidate. New explicit candidates and subsequent explicit corrections or
+deletions also retain a scope barrier. A pre-migration erased row without any
+recoverable scope conservatively blocks automatic learning for that owner; explicit
+teaching remains available without reconstructing deleted content. Existing name collisions produce no learning event. A changed
+scope needs explicit revalidation; an existing source key still prevents silent
+replacement. The owner can use explicit teaching for a new definition.
+
+No observer is restarted just because a lease expires or an observation fails.
+After one candidate, cancellation, timeout or failure the attempt ends for that
+session/setting revision. This avoids repeated executable hashing and indefinite
+file leases. A restart first rechecks current identity, enabled intent and dedup
+state; historical evidence alone never opens an observer or an action. A fresh
+invocation retains current ordinary LaunchApp permission and postcondition checks.
+This bounded optional family does not complete general continuous visual learning,
+multi-step routine extraction or the required live privacy/recovery evidence.
+
+Idle policy reads are cached for 30 seconds under the native session and setting
+generation. The observer checks native owner-management exclusion, current session,
+lock, pause and busy state without decrypting owner storage on every 100-ms tick.
+The create-once owner record is revalidated at admission and immediately around
+the candidate publication transaction; the cache never authorizes a stored result.
+Changing the supported create-once owner contract requires native owner-generation
+invalidation before this cache can remain valid; silent replacement is unsupported.
+
+Both explicit and passive observation use the original native admission Instant
+for the entire five-minute lease, including worker scheduling, identity hashing,
+baseline sampling and hook setup. The executable reader checks cancellation,
+pause/current authority and deadline before and after each 64-KiB read. No hooks
+are installed after expired preparation. Synchronous OS I/O retains its actual
+file/thread owner until the call returns; a deadline does not pretend to retire a
+stalled kernel read or release admission for a replacement observer.

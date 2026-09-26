@@ -220,10 +220,11 @@ GitHub reported 13 dependency alerts (8 high, 5 moderate) during the handoff pus
 
 ### Browser lifecycle follow-up observed in source
 
-Authenticated browser attempts currently expire300 seconds after the original
-Settings attempt. The extension reconnects only through its popup Connect command;
-there is no automatic fresh-session saved-pair reconnect path. This remains required
-C4 normal-use work after the Gmail continuation checkpoint. Preserve fixed job
-lifetimes, exact process/profile/account scopes, settlement exclusion and no content
-replay when adding fresh authentication; do not extend an old session to hide the gap.
-No actual user browser installation/account was inspected or changed for this finding.
+Saved-selection reconnect now has a source implementation (browser-control.md):
+a native startup supervisor and extension alarm/backoff retry use fresh sessions
+under the existing 300-second cap. Each side persists its own explicit Disconnect
+opt-out until that side's Connect; no credential repair, browser launch, old job
+replay or uncertain-cleanup reset is added. Original job admission must fit the
+remaining session horizon. This slice does not perform early rotation. Live
+installation/pairing/reconnect proof remains open; no user browser/account was
+inspected or changed during this implementation.

@@ -762,6 +762,7 @@ fn main() {
                 shortcut_focus_generation: std::sync::atomic::AtomicU64::new(1),
             });
             notifications::start(app.handle().clone());
+            tasks::teaching::start_passive(app.handle().clone());
             model_health::init(app.handle());
             // Receiver is independent of the selected transport. No worker
             // emits an accepted-read offer until the full dispatch is wired.
@@ -954,6 +955,7 @@ fn main() {
             tasks::teaching::teaching_status,
             tasks::teaching::teaching_progress,
             tasks::teaching::set_teaching_scope,
+            tasks::teaching::passive::set_passive_teaching,
             tasks::teaching::start_demonstration,
             tasks::teaching::stop_demonstration,
             tasks::teaching::change_demonstration,

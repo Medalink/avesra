@@ -76,6 +76,13 @@ struct FileFingerprint {
     file_index: u64,
 }
 fn fingerprint(file: &mut File) -> Result<FileFingerprint, ErrorCode> {
+    fingerprint_checked(file, &mut || Ok(()))
+}
+fn fingerprint_checked(
+    file: &mut File,
+    current: &mut dyn FnMut() -> Result<(), ErrorCode>,
+) -> Result<FileFingerprint, ErrorCode> {
+    current()?;
     let metadata = file.metadata().map_err(|_| ErrorCode::Unavailable)?;
     if !metadata.is_file() || metadata.len() == 0 || metadata.len() > 1_073_741_824 {
         return Err(ErrorCode::TooLarge);
@@ -89,7 +96,9 @@ fn fingerprint(file: &mut File) -> Result<FileFingerprint, ErrorCode> {
     let mut buffer = [0u8; 65536];
     let mut total = 0u64;
     loop {
+        current()?;
         let count = file.read(&mut buffer).map_err(|_| ErrorCode::Unavailable)?;
+        current()?;
         if count == 0 {
             break;
         }
@@ -115,7 +124,15 @@ fn identity(
     arguments: String,
     working_directory: String,
 ) -> Result<ExecutableIdentity, ErrorCode> {
-    let value = fingerprint(file)?;
+    identity_checked(file, arguments, working_directory, &mut || Ok(()))
+}
+fn identity_checked(
+    file: &mut File,
+    arguments: String,
+    working_directory: String,
+    current: &mut dyn FnMut() -> Result<(), ErrorCode>,
+) -> Result<ExecutableIdentity, ErrorCode> {
+    let value = fingerprint_checked(file, current)?;
     Ok(ExecutableIdentity {
         path: value.path,
         arguments,

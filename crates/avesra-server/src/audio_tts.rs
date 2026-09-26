@@ -172,11 +172,7 @@ impl AudioClient {
         {
             return Err(ErrorCode::Malformed);
         }
-        let permit = self
-            .admission
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| ErrorCode::Unavailable)?;
+        let permit = self.observed_admission(avesra_core::engine_observer::Operation::TtsStream)?;
         let health = self.health().await?;
         if !health.streaming
             || health.state != "loaded_unqualified"

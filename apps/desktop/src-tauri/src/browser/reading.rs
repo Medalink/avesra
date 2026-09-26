@@ -354,6 +354,14 @@ fn admit(app: &tauri::AppHandle, offer: &Offer) -> Result<Arc<Admission>, ErrorC
     {
         return Err(ErrorCode::Stale);
     }
+    let attempt = inner.attempt.as_ref().ok_or(ErrorCode::Stale)?;
+    let remaining = offer.remaining_ms()?.saturating_add(1);
+    let horizon = Duration::from_secs(300)
+        .checked_sub(attempt.started.elapsed())
+        .ok_or(ErrorCode::Expired)?;
+    if horizon <= Duration::from_millis(remaining) {
+        return Err(ErrorCode::Expired);
+    }
     let signal = offer.withdrawal();
     let target = documents::reserve_target(&state, &local, &inner, offer)?;
     let owner = state

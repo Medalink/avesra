@@ -440,11 +440,14 @@ impl Driver {
             .checked_add(Duration::from_millis(remaining_ms))
             .ok_or(ErrorCode::Expired)?;
         left(deadline)?;
-        let permit = self
-            .actual
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| ErrorCode::Unavailable)?;
+        let admission = self.actual.clone().try_acquire_owned();
+        avesra_core::engine_observer::admission(
+            avesra_core::engine_observer::Lane::Reasoning,
+            avesra_core::engine_observer::Operation::Reasoning,
+            matches!(&admission, Err(tokio::sync::TryAcquireError::NoPermits)),
+            matches!(&admission, Err(tokio::sync::TryAcquireError::Closed)),
+        );
+        let permit = admission.map_err(|_| ErrorCode::Unavailable)?;
         let caller = Caller(Arc::new(AtomicBool::new(true)));
         let present = caller.0.clone();
         let driver = self.clone();

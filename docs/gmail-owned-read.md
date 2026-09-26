@@ -138,11 +138,11 @@ scope/pairing replacement, browser disconnect, actor/action revocation and calle
 loss withdraw the pending reply or output. Raw bodies are not written to history.
 Generic planner lifetimes stay unchanged. Real mailbox production is not proven.
 
-A separate verified C4 usability gap remains: native browser Attempt.current_time
-and the authenticated receive loop expire after300 seconds from the original setup
-attempt. The extension only connects on the popup's explicit Connect command and
-has no automatic saved-pair reconnect path. Saved credentials avoid reissuing the
-pairing, but do not avoid the current Settings/reconnect ritual. The next C4
-lifecycle slice must establish fresh authenticated sessions for a saved active
-browser without renewing old jobs, replaying content, or releasing uncertain
-browser work. Increasing the existing session deadline is not that fix.
+The former 300-second manual-reconnect gap has a source implementation in the
+saved-selection supervisor described in browser-control.md. Sessions still expire
+at their original 300-second limit; new sessions use fresh authentication, with
+independent persistent Disconnect preferences in native Settings and the extension.
+No job, content, document handle or mailbox successor is replayed or renewed.
+Read admission refuses a remaining job budget that cannot fit the session horizon.
+This slice performs no early rotation and preserves unresolved cleanup exclusion.
+Live browser installation/pairing and reconnect behavior remain unverified.
