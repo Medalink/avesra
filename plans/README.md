@@ -2,13 +2,17 @@
 
 Avesra means **A Very Effective Smart Reasoning Assistant**.
 
+Current installed Windows/ARM revision: **963dde3**, 2026-09-26. Plan001 remains
+**IN PROGRESS**. The [current acceptance ledger](001-acceptance-2026-09-26.md)
+takes precedence over the historical checkpoints below.
+
 Repository: https://github.com/Medalink/avesra
 
 Original planning baseline: `eb0189ff64b276b4f1e2d850ab3cff6979189ad9` on `main`, inspected on 2026-09-24; at that baseline the repository contained only an MIT `LICENSE`. The owner subsequently requested publication and execution. Completion planning on 2026-09-25 inspected the primary checkout `E:\Dev\Avesra` on `main`, initially at `e894025`, then concurrently advanced to `c82fed21ea259c7fd1dc6902bf2a5a07b10e231f`, with additional uncommitted enrollment/UI work. The initial live worktree list contained only this checkout. Branch/worktree names in historical checkpoints below are not current execution locations.
 
 Model provisioning evidence and remaining serving gaps: [Spark2 setup record](spark2-model-setup.md). Approved UI direction and interactive mockups: [design](../design/README.md) (simulated prototype, not application code). The main plan includes the owner's later requests for optional client GPU acceleration and instrumentation throughout the pipeline.
 
-Installed development baseline, 2026-09-26: `3958812`/`8613e48` implement simple
+Historical development baseline, 2026-09-26: `3958812`/`8613e48` implement simple
 Personal conversation and continuous selected-device input. Matching Windows and
 ARM static/release builds passed. Real isolated native previews completed before
 and after cancellation; the cancelled TTS request retired while the model stayed
@@ -31,7 +35,7 @@ Handoff and next-step boundaries: [Plan 001 handoff](001-handoff.md). The owner 
 
 ## Execution order
 
-Latest Windows startup hotfix: `5bde1f5` (2026-09-26), with the unchanged75b5de0
+Historical Windows startup hotfix: `5bde1f5` (2026-09-26), with the unchanged75b5de0
 shared controller. It fixes rejection of the actual activity cancellation metadata,
 adds bounded read-only startup recovery and removes the unused Personal directedness
 dependency. Static/release and actual Models status inspection passed; accepted
@@ -59,7 +63,7 @@ grants; do not claim completed release evidence.
 
 | Plan | Outcome | Priority | Effort | Dependencies | Status |
 | --- | --- | --- | --- | --- | --- |
-| [001](001-single-spark-assistant.md) | Build and verify Avesra on Spark2 with Local Studio, a Windows companion, optional client GPU acceleration and per-stage metrics | P1 | L, multiple milestones | Current-state reconciliation C0; scoped hardware/app qualification | IN PROGRESS / PARTIAL — Matching Windows/ARM `61118aa` installed after Static/release checks. Actual26→27 action/4→5 telemetry migration passed integrity checks. Default preview produced9.77seconds of native effects/music audio and30.196seconds of sampled video; one real TTS admission persisted. Query3 export contains87PC/436Spark samples, zero observer losses and zero accepted spans. Resource tables and passive-learning-off controls were observed. Real conversation, browser reconnect, teaching invocation, required owner workflows and all full A01-A29 criteria remain open; see the [current acceptance ledger](001-acceptance-2026-09-26.md). |
+| [001](001-single-spark-assistant.md) | Build and verify Avesra on Spark2 with Local Studio, a Windows companion, optional client GPU acceleration and per-stage metrics | P1 | L, multiple milestones | Current-state reconciliation C0; scoped hardware/app qualification | IN PROGRESS / PARTIAL — Matching Windows/ARM963dde3 installed after Static/release checks. Actual action-store27-to28 migration passed integrity checks. Gaming saved and survived an actual isolated process restart; Single Spark and selected audio devices restored/preserved. No live conversation, PDH diagnostic, game-load or A27 pass is inferred. Earlier61118aa preview retains its9.77-second native audio/30.196-second sampled video proof. Genuine conversation, browser reconnect, teaching invocation, owner workflows and all full A01-A29 criteria remain open; see the [current acceptance ledger](001-acceptance-2026-09-26.md). |
 | [002](002-voice-atmosphere.md) | Add native voice character, looping atmosphere, stereo mixing and an easy live bypass | P1 | L, staged | Existing Plan 001 preview/output ownership; normal speech retains its qualification gates | IN PROGRESS — Digital sound approved and saved as defaults; adjustable pitch and animated overlay implemented. Human audition/approval remains deferred. |
 | [003](003-voice-avatar.md) | Draw each enrolled person's voice as a unique, reproducible avatar from their stored profile and a 20-word voice portrait | P2 | M, staged | Plan 001 protected owner and enrollment flow | PROPOSED |
 
