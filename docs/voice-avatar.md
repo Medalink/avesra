@@ -1,4 +1,4 @@
-# Native voice avatar, version 1
+# Native voice avatar, versions 1 and 2
 
 An avatar is optional sensitive presentation, never identity, permission, speaker
 matching or a prerequisite to Personal conversation. Missing portrait capture,
@@ -24,9 +24,9 @@ prepare/confirm redraw operation below can replace that same actor's immutable
 record, keeping its ring. Owner revision changes fail closed on ordinary reads;
 redraw requires the actual current owner-bound source and a fresh management proof.
 
-The webview receives only version 1, 24 six-bit shape values, 20 optional petal
+The webview receives versioned presentation parameters: 24 six-bit shape values, 20 optional petal
 slots, a 16-digit lowercase hexadecimal ring, integer rotation in 1/256 turns,
-optional quantized tempo, and a display digest. The foundation has no measured
+optional quantized tempo, and a display digest. Version 1 has no measured
 word features or speaking tempo: every petal and tempo is null. It must not
 render fake measured petals, claim a completed portrait or invent syllable rate.
 Parameters and their digest never enter telemetry, logs, exports or diagnostics.
@@ -232,3 +232,80 @@ inspect pending preview, cancel without publication, save, and reopen/restart to
 compare saved integer parameters. Also withdraw via hide/lock and change source
 between prepare/confirm; stale publication must fail. This source work does not
 access private stores or run capture, automated tests, fixtures or harnesses.
+
+## Optional acoustic prompt observation
+
+This workflow observes the already running native Personal producer. It never
+opens another device, drains the media queue, pauses normal input, suppresses
+actions/replies, or changes controls, admission or audio epochs. If normal
+Personal input is unavailable, the optional operation is unavailable too.
+
+`begin_voice_portrait()` consumes an existing visible-Settings management proof
+and snapshots the actual owner-bound immutable avatar source. Its original Hello
+expiry (at most 60 seconds) covers both batches and save; no response or batch
+renews it. `record_voice_portrait({session,request})` explicitly observes one of
+two eight-second batches. A caller request UUID correlates progress only, never
+authority. One batch must actually retire before the next can start. Save accepts
+two completed batches with at least one measured slot; all missing is not a
+completed portrait. Cancel, hide, lock, source/control/session change, caller loss
+and expiry withdraw only this observer.
+
+The sole Personal producer copies at most one actual 320-sample frame into a
+bounded eight-frame channel after its existing sequence/clock/reference checks.
+Its tap uses only try-lock/try-send, never awaits, performs DSP/file work or emits
+UI events. Contention/overflow ends the observer without changing the producer's
+result. A batch retains its original first capture lease, ordered sequence and
+hardware-derived timestamps through exactly 400 frames; it never joins a new
+producer lease or substitutes delayed, padded or replayed samples. No owner
+management lock is held during observation/DSP, so normal learning can continue.
+
+Each 40-frame/800-ms slot is acoustic prompt evidence, not verified word or
+speaker recognition. Progress follows actual received samples. Any frame with
+assistant-output overlap/tail or unknown reference coverage makes that slot
+missing; no residual is asserted to be clean voice. Only eligible original
+microphone samples enter local DSP. Ambiguous energy islands, clipping and absent
+pitch also yield missing slots. Normal conversations/actions remain active during
+the prompts; resulting assistant speech can make slots unavailable.
+
+DSP uses the documented bounded local energy/pitch/spectrum measurements. Duration
+means energy-island duration, not total voiced duration. Harmonicity is a
+pitch-period correlation estimate; pitch slope and relative mel-band contrast
+form bounded visual values. There is no lexical verification, measured speaking
+tempo, release qualification or person-relative pitch-normalization claim.
+PCM queues, slot buffers and floating-point working vectors are zeroized on drop.
+Raw samples never enter storage, frontend, logs or telemetry. The actual consumer
+owns channel/DSP cleanup through retirement even if an IPC caller disappears.
+
+The protected vault accepts v1 and v2; v2 records may contain twenty optional
+native feature records and matching bounded typed parameter slots. v1 records
+remain readable without recomputation. `save_voice_portrait({session})` reacquires
+owner management only for bounded protected publication, rechecks current owner,
+source binding, original avatar/key and original proof, then atomically replaces
+the record under the current-context lock. Ordinary Personal observation growth
+does not change that immutable avatar identity; candidate/source replacement does.
+Source redraw deliberately clears prior acoustic features. Existing deletion
+removes them with their avatar; ring metadata survives.
+
+The first explicit acoustic Save upgrades this protected vault to v2. A v1-only
+binary rejects it; do not downgrade, regenerate its key or silently erase features.
+Keep a consistent protected vault/initialization-marker backup and a compatible
+binary for rollback. This is separate from telemetry schema9's strict timing
+reader compatibility. Observer queue contention/overflow is a processing failure;
+original-proof/source/deadline withdrawal is classified as withdrawn, not success.
+
+Public v2 uses `ready_with_portrait`, exact bound candidate reference and v2
+parameters: unchanged shape24/ring/rotation, twenty null or typed
+`{length,curve,width,density,edge[8],energy[4]}` six-bit integer slots, tempo null.
+The strict v1 reader remains supported. The approved 192-point contour still
+renders only the core: capturing these supplementary features does not imply a
+visibly changed avatar or authorize adding petals/ring to the mock. Advanced UI
+reports captured/missing prompt slots without a similarity or lexical score.
+
+Affected entry points: four portrait commands, Setup invalidation, the optional
+Personal producer tap, bounded DSP and protected avatar reader/writer. Normal
+producer/analysis/action semantics and media ownership are otherwise unchanged.
+Native timing records only finite phases/outcomes and opaque operation IDs; no
+session/source/feature/parameter values. No automated tests or real microphone,
+Hello, protected-store mutation or capture operation is run by the implementation
+agent. Real owner observation/continuity/cancellation/save/restart proof remains
+unrun and Plan003 remains partial until those and its other criteria are proven.

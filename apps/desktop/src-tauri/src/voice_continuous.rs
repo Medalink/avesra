@@ -194,6 +194,15 @@ pub(super) async fn run(
                     held.marks.pop_front();
                 }
             }
+            // Observe only after both reference and utterance-clock validation.
+            // The optional tap cannot wait or change this producer's outcome.
+            state.setup.portrait.observe(
+                &admission.context,
+                lease,
+                &frame,
+                filtered.reference_known,
+                filtered.output_overlap,
+            );
             if pcm.is_empty() {
                 captured = frame.captured;
             }
