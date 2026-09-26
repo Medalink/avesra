@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { PreferenceDraft } from "./preference-draft.svelte";
+  import PreferencesFooter from "./PreferencesFooter.svelte";
   import Performance from "./Performance.svelte";
   import Notifications from "./Notifications.svelte";
   import { onMount, tick } from "svelte";
@@ -31,9 +33,8 @@
     refreshDevices,
     error,
     notice,
-    saving,
     control,
-    update,
+    accept,
     hide,
     drag,
   }: {
@@ -45,12 +46,16 @@
     refreshDevices: () => Promise<void>;
     error: string;
     notice: string;
-    saving: boolean;
     control: (value: string) => Promise<void>;
-    update: (patch: Partial<Settings>) => Promise<void>;
+    accept: (value: Runtime) => void;
     hide: () => Promise<void>;
     drag: (event: PointerEvent) => Promise<void>;
   } = $props();
+  const draft = new PreferenceDraft(() => runtime, (value) => accept(value));
+  $effect(() => draft.observe());
+  onMount(() => draft.mount());
+  const saving = $derived(draft.blocked);
+  const update = (patch: Parameters<PreferenceDraft["edit"]>[0]) => draft.edit(patch);
   const voice = $derived(personalVoiceView(runtime));
   const spark = $derived(sparkConnection(runtime));
   function restoredSection() {
@@ -257,7 +262,9 @@
     };
   }));
   const meta = $derived(section === "setup" ? ["setup", "Get started", "Your setup, one step at a time."] : sections.find((s) => s[0] === section)!);
-  const s = $derived(runtime?.settings);
+  const s = $derived(draft.settings);
+  const actualMicrophone = $derived(devices.find(device => device.id === runtime?.settings.microphone)?.name ?? "unavailable microphone");
+  const actualSpeaker = $derived(devices.find(device => device.id === runtime?.settings.speaker)?.name ?? "unavailable output");
   const interfaceScales = [100, 110, 125, 150, 175];
 </script>
 
@@ -280,7 +287,7 @@
       onclick={() => navigate("profiles", "spark-pairing")}
       >Spark · {spark.label}<Icon name="arrow" size={10} /></button
     ><span class="av-chip bg-white/[0.04] text-zinc-300 ring-white/10"
-      >Profile · {s?.profile === "gaming" ? "Gaming" : "Single Spark"}</span
+      >Profile · {runtime?.settings.profile === "gaming" ? "Gaming" : runtime?.settings.profile === "accelerated" ? "Accelerated" : "Single Spark"}</span
     >
     <button class="av-iconbtn size-7" onclick={hide} aria-label="Close settings"
       ><Icon name="close" size={14} /></button
@@ -349,6 +356,7 @@
                         : ""}</option
                     >{/each}</select
                 ></SelectFrame>
+                {#if draft.changes.microphone}<p class="av-hint text-amber-200">Currently using {actualMicrophone} for checks; Save changes to switch.</p>{/if}
                 <MicrophoneMeter {runtime} {signal} />
               </div>
               <div class="flex flex-col gap-1.5">
@@ -368,7 +376,7 @@
                         : ""}</option
                     >{/each}</select
                 ></SelectFrame><span class="av-hint"
-                  >Replies and voice previews use this output. Your selected Avesra voice is kept.</span
+                  >{#if draft.changes.speaker}Currently using {actualSpeaker}; Save changes to switch.{:else}Replies and voice previews use this output. Your selected Avesra voice is kept.{/if}</span
                 >
               </div>
             </div>
@@ -396,6 +404,7 @@
             </div>
           </section>
           <ShortcutSettings {runtime} />
+          {#if draft.changes.speaker}<p class="av-hint text-amber-200">Voice previews currently use {actualSpeaker}; Save changes to switch.</p>{/if}
           <div id="voice-designer"><VoiceDesigner {runtime} /></div>
           <VoiceAtmosphere {runtime} />
           <section class="section">
@@ -683,4 +692,5 @@
       </div>
     </main>
   </div>
+  <PreferencesFooter {draft} {devices} />
 </div>
