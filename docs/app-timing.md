@@ -76,6 +76,28 @@ Abrupt process/page termination can lose unsent frontend batches or buffered wri
 
 Native history queue/work/retirement rows carry one shared random operation UUID, unrelated to accepted-turn or source identity. UI summaries separate outcomes; p95/p99 remain descriptive even above 30 samples. Native page replacement does not reset its per-window rate limiter. Failed frontend observer registration is shown in App timings and is not retried automatically; reopening the app window is the explicit recovery.
 
+### Timing registration startup order
+
+The native timing ingress state is registered on the Tauri builder, before any
+configured webview is created. Both Overlay and Settings import the same one-shot
+frontend registration module. Tauri creates configured windows before invoking
+the application setup callback, so registering this state inside that callback
+leaves the first webview able to invoke before its command state exists.
+
+`begin_app_timing` and batch ingress retain their bounded, nonblocking `try_lock`
+admission. A transient refusal still makes one-shot registration unavailable;
+there is no automatic retry or change to application work. The App timings status
+describes its own Settings page only. It does not report Overlay registration, and
+zero exported frontend loss does not prove zero losses on a page that never
+registered and therefore could not submit its counter. The observed schema-8
+export with no Overlay rows does not establish which registration failure occurred.
+
+Affected entry points are builder state installation and the unchanged
+`begin_app_timing` state argument. Batch submission, snapshot/export, finite
+registries and telemetry schema 9 are unchanged. Static source verification
+establishes ordering only; a separately authorized real-app export must establish
+whether the installed Overlay now contributes observations.
+
 ## Preferences command roster (telemetry schema 7)
 
 The frontend and native closed registries admit exactly five additional command

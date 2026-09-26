@@ -644,6 +644,8 @@ fn main() {
     }
     let _ = rustls::crypto::ring::default_provider().install_default();
     tauri::Builder::default()
+        // Configured webviews can invoke while Tauri is still creating windows.
+        .manage(app_timing::State::default())
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             // Diagnostic launch arguments never turn an existing audible process
             // into a recording process or activate a window on another desktop.
@@ -692,7 +694,6 @@ fn main() {
                 )
             })?;
             app.manage(instance_lock);
-            app.manage(app_timing::State::default());
             app.manage(settings_editor::State::default());
             let _ = avesra_core::trace::initialize(&directory, avesra_core::trace::Host::Native);
             avesra_windows::resources::start();
