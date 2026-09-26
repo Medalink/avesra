@@ -48,6 +48,7 @@
   const settingsWindow =
     new URLSearchParams(location.search).get("window") === "settings";
   const s = $derived(runtime?.settings);
+  const interfaceScale = $derived(s?.interface_scale);
   async function control(value: string) {
     error = "";
     try {
@@ -92,15 +93,14 @@
   // keeps its reference geometry (440 × 124, or 370 tall expanded) times that zoom.
   // Startup sizing happens natively; this follows later setting and expand changes.
   $effect(() => {
-    if (!s || !native || settingsWindow) return;
-    const zoom = s.interface_scale / 100;
+    if (interfaceScale === undefined || !native || settingsWindow) return;
+    const zoom = interfaceScale / 100;
+    let current = true;
     void getCurrentWindow().setSize(
       new LogicalSize(440 * zoom, (expanded ? 370 : 124) * zoom),
-    );
+    ).catch(e => { if (current) error = `Unable to resize the overlay: ${String(e)}`; });
+    return () => { current = false; };
   });
-  function expand() {
-    expanded = !expanded;
-  }
   async function drag(event: PointerEvent) {
     if (native && event.button === 0) await getCurrentWindow().startDragging();
   }
@@ -236,6 +236,7 @@
     {hide}
     {drag}
   />{:else}<Overlay
+    bind:expanded
     {runtime}
     {error}
     signal={outputSignal ?? signal}
