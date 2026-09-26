@@ -88,6 +88,7 @@ enum Command {
         query: avesra_core::conversations::history::Query,
         authorize: CatalogAuthorization,
         reply: SyncSender<Result<avesra_core::conversations::history::ResultView, ErrorCode>>,
+        timing: Box<avesra_core::app_timing::Span>,
     },
     Teaching(
         Box<teaching::Request>,
@@ -1475,9 +1476,17 @@ impl NativeEffects {
                             let _=reply.try_send(result);
                             continue;
                         }
-                        Command::History{actor,device,query,mut authorize,reply}=>{
+                        Command::History{actor,device,query,mut authorize,reply,timing}=>{
+                            let correlation=timing.operation_id();
+                            timing.finish(avesra_core::app_timing::Outcome::Complete);
+                            let work=avesra_core::app_timing::Span::with_operation(avesra_core::app_timing::Operation::History,avesra_core::app_timing::Stage::Work,correlation);
+                            let retired=avesra_core::app_timing::Span::with_operation(avesra_core::app_timing::Operation::History,avesra_core::app_timing::Stage::Retired,correlation);
                             let result=controller.management().conversation_history(actor,device,query,&mut authorize);
+                            let outcome=if result.is_ok(){avesra_core::app_timing::Outcome::Complete}else{avesra_core::app_timing::Outcome::Failed};
+                            work.finish(outcome);
+                            drop(authorize);
                             let _=reply.try_send(result);
+                            retired.finish(outcome);
                             continue;
                         }
                         Command::ConversationStatus {
@@ -1957,6 +1966,11 @@ impl NativeEffects {
         let (reply, receive) = mpsc::sync_channel(1);
         self.send
             .try_send(Command::History {
+                timing: Box::new(avesra_core::app_timing::Span::with_operation(
+                    avesra_core::app_timing::Operation::History,
+                    avesra_core::app_timing::Stage::QueueWait,
+                    Some(Uuid::new_v4()),
+                )),
                 actor,
                 device,
                 query,
