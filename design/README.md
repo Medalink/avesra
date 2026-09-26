@@ -52,6 +52,13 @@ The build scans `../mockups` for class names and is deterministic.
   - **Avesra speaking:** a twisting ribbon of synthetic strands, red to Ruby.
 
   Other states draw their own flat indicators. Passive, recognizing, accepted, thinking and speaking show no text. Controls appear on hover, while switched on, or (Stop) while a task runs. There's a CSS fallback and a still frame for reduced motion.
+- **Voice atmosphere** (Plan 002): Audio & Voice → Voice atmosphere mirrors the app.
+  - A master switch, and **Digital** (default) or **Human** presets. Each preset keeps its own values.
+  - Main sliders: Voice presence and Galaxy / background.
+  - Original / Atmosphere comparison during a repeating preview.
+  - More sound controls: the effect and background layers; Bass, Reverb, Echo, Harmonizer and Compression; Harmony pitch; background texture; left/right echo spacing.
+  - Digital shows the owner-approved factory tune. Human disables the controls it ignores.
+  - The overlay's one-click toggle is Ruby while on, not amber, because amber means input is off.
 - **Signal hooks:** the simulated signal lives in `Overlay.dc.html`:
   - `signalLevel()`: overall loudness.
   - `updateBars()`: one value per frequency band.

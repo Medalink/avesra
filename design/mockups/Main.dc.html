@@ -201,7 +201,7 @@
 
       <div class="flex flex-col gap-1">
         <span class="font-mono text-[10.5px] tracking-[0.08em] text-zinc-400 uppercase">Controls</span>
-        <sc-for list="{{toggles}}" as="tg" hint-placeholder-count="6">
+        <sc-for list="{{toggles}}" as="tg" hint-placeholder-count="7">
           <div class="flex h-8 items-center justify-between gap-2">
             <span class="text-[12.5px] text-zinc-300">{{tg.label}}</span>
             <button type="button" role="switch" class="av-switch group" aria-checked="{{tg.on}}" aria-label="{{tg.label}}" onClick="{{tg.toggle}}" disabled="{{tg.disabled}}"><span class="av-knob group-aria-checked:translate-x-[18px]"></span></button>
@@ -253,7 +253,7 @@ class Component extends DCLogic {
     super(props);
     this.state = {
       cmd: { n: 0 },
-      snap: { disp: 'idle', activity: 'idle', muted: false, deafened: false, paused: false, connected: true, expanded: false, taskStatus: 'none' },
+      snap: { disp: 'idle', activity: 'idle', muted: false, deafened: false, paused: false, connected: true, expanded: false, taskStatus: 'none', atmosphere: true },
       pos: { x: 596, y: 60 }, minimized: false, settingsOpen: false, section: 'audio', secN: 0,
       backdrop: 'mail', reduced: false
     };
@@ -303,6 +303,7 @@ class Component extends DCLogic {
       { label: 'Mic muted', on: sn.muted || sn.deafened, disabled: false, toggle: () => this.send('mute') },
       { label: 'Deafened', on: sn.deafened, disabled: false, toggle: () => this.send('deafen') },
       { label: 'Assistant paused', on: sn.paused, disabled: !sn.connected, toggle: () => this.send('pause') },
+      { label: 'Voice atmosphere', on: sn.atmosphere !== false, disabled: false, toggle: () => this.send('atmosphere') },
       { label: 'Overlay expanded', on: sn.expanded, disabled: false, toggle: () => this.send('expand', !sn.expanded) },
       { label: 'Minimized to tray', on: s.minimized, disabled: false, toggle: () => this.setState({ minimized: !s.minimized }) },
       { label: 'Settings window', on: s.settingsOpen, disabled: false, toggle: () => (s.settingsOpen ? this.setState({ settingsOpen: false }) : this.openSettings(s.section)) }
