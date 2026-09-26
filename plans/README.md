@@ -2,7 +2,7 @@
 
 Avesra means **A Very Effective Smart Reasoning Assistant**.
 
-Current installed Windows/ARM revision: **963dde3**, 2026-09-26. Plan001 remains
+Current installed Windows: **963dde3**; server-only update: **a8b0eb1**, 2026-09-26. Plan001 remains
 **IN PROGRESS**. The [current acceptance ledger](001-acceptance-2026-09-26.md)
 takes precedence over the historical checkpoints below.
 
@@ -63,7 +63,7 @@ grants; do not claim completed release evidence.
 
 | Plan | Outcome | Priority | Effort | Dependencies | Status |
 | --- | --- | --- | --- | --- | --- |
-| [001](001-single-spark-assistant.md) | Build and verify Avesra on Spark2 with Local Studio, a Windows companion, optional client GPU acceleration and per-stage metrics | P1 | L, multiple milestones | Current-state reconciliation C0; scoped hardware/app qualification | IN PROGRESS / PARTIAL — Matching Windows/ARM963dde3 installed after Static/release checks. Actual action-store27-to28 migration passed integrity checks. Gaming saved and survived an actual isolated process restart; Single Spark and selected audio devices restored/preserved. No live conversation, PDH diagnostic, game-load or A27 pass is inferred. Earlier61118aa preview retains its9.77-second native audio/30.196-second sampled video proof. Genuine conversation, browser reconnect, teaching invocation, owner workflows and all full A01-A29 criteria remain open; see the [current acceptance ledger](001-acceptance-2026-09-26.md). |
+| [001](001-single-spark-assistant.md) | Build and verify Avesra on Spark2 with Local Studio, a Windows companion, optional client GPU acceleration and per-stage metrics | P1 | L, multiple milestones | Current-state reconciliation C0; scoped hardware/app qualification | IN PROGRESS / PARTIAL — Windows963dde3 retained; server-onlya8b0eb1 installed after Static/release checks. Actual missing-speaker-endpoint TLS availability and automatic cold model load passed; other audio/reasoning process identities stayed unchanged. Subsequent preview produced9.36seconds of native postmix and35.001seconds of sampled video; actual export shows one load/one TTS admission, no accepted spans. Actual action-store27-to28 migration passed integrity checks. Gaming saved and survived an actual isolated process restart; Single Spark and selected audio devices restored/preserved. No live conversation, PDH diagnostic, game-load or A27 pass is inferred. Earlier61118aa preview retains its9.77-second native audio/30.196-second sampled video proof. Genuine conversation, browser reconnect, teaching invocation, owner workflows and all full A01-A29 criteria remain open; see the [current acceptance ledger](001-acceptance-2026-09-26.md). |
 | [002](002-voice-atmosphere.md) | Add native voice character, looping atmosphere, stereo mixing and an easy live bypass | P1 | L, staged | Existing Plan 001 preview/output ownership; normal speech retains its qualification gates | IN PROGRESS — Digital sound approved and saved as defaults; adjustable pitch and animated overlay implemented. Human audition/approval remains deferred. |
 | [003](003-voice-avatar.md) | Draw each enrolled person's voice as a unique, reproducible avatar from their stored profile and a 20-word voice portrait | P2 | M, staged | Plan 001 protected owner and enrollment flow | PROPOSED |
 

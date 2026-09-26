@@ -93,8 +93,56 @@ again; it does not repair credentials or resurrect a previous operation.
 Entry points: `transport::router` owns the startup coordinator; `AudioClient::load`
 owns the retained load; generic audio exchanges and the direct TTS stream use the
 same checked connector. Deployment installers, pinned supervisors and ordinary
-inference deadlines are unchanged. Verification is source/static only under the
-owner's no-tests instruction; actual reboot-to-listening evidence remains required.
+inference deadlines are unchanged. The manual cold-lane observation below verifies
+one recovery path; actual full-reboot and conversational evidence remain separate.
+
+### Manual cold-lane recovery proof
+
+This is an operator procedure for an authorized maintenance window, not an
+automated check or permission to interrupt normal use. Keep the companion closed
+and verify that no inference or stream is active before proceeding.
+
+1. Record the controller source revision, deployed executable hash, UTC or
+   explicitly zoned timestamps, boot ID, exact unit names and PID/start times.
+   Resolve the selected lane from its existing controller deployment and owned
+   installer manifest. Verify the exact full container/image IDs, pinned
+   supervisor/config hashes, model revision, socket and enabled persistent unit.
+   Do not substitute a candidate or rewrite ownership metadata. Snapshot the
+   other selected audio and reasoning process identities for comparison.
+2. Stop only that idle, owned lane through its existing unit. Before restarting
+   anything, prove actual retirement: unit inactive with MainPID zero, exact
+   container not running/restarting with a normal exit, and the supervisor journal
+   and durable operation marker consistent with a completed stop. Confirm the
+   selected endpoint is absent. A missing PID or killed Docker client alone is
+   insufficient. Do not manually erase a pending marker or socket to force success.
+3. Restart only the owned controller while that endpoint remains absent. Observe
+   pinned-certificate TLS health and retain its time before starting the lane.
+   This proves controller availability during the missing-endpoint condition.
+4. Start the exact previously verified lane unit within the controller's original
+   60-second availability window. Let the controller's startup coordinator perform
+   its one load; an administrative `load` call is not a substitute. Retain the
+   controller journal's load result and a subsequent private health observation:
+   exact lane/revision, required streaming metadata, `loaded_unqualified`, idle,
+   and zero successful inferences for this fresh service. Verify that the other
+   recorded process identities did not change.
+5. Stop the procedure on identity drift, outstanding work, timeout, quarantine,
+   unexpected restart or failed health. Preserve the exact logs and ownership
+   marker for reconciliation; do not repeat a load or restart to hide uncertainty.
+   An acknowledged loaded terminal remains settled even if its later health check
+   fails: that failure does not authorize cancelling or unloading it. Reconcile
+   actual state before any separately authorized recovery operation.
+
+Observed on 2026-09-26 with controller source `a8b0eb1`: the warm controller
+PID 1856368 at 05:48:14 CDT reported all four selected lanes already loaded. After a
+verified normal stop of the selected speaker unit, controller PID 1861301 started
+at 05:49:05 CDT and served pinned-certificate health while its socket was absent.
+The same owned speaker unit started at 05:49:06 CDT with PID 1861695; at 05:49:09 CDT
+the controller reported speaker loaded and the other three lanes already loaded.
+At05:49:17 CDT speaker health matched its selected revision, was loaded and idle,
+and reported zero successful inferences. ASR PID 2227, activity PID 482389, TTS
+PID 482390 and reasoning PID 32995 retained their prior start times. This proves
+one cold speaker-lane recovery plus loaded-lane skips, not a whole-host reboot,
+automatic listening, model qualification or a completed conversation.
 
 Pin controller executable, audio images, model revisions and serving manifests.
 Do not use floating image tags as installation identity. A persistent user unit
