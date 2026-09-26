@@ -43,13 +43,13 @@
   <span class="av-kicker">App timings</span>
   <p class="av-hint">Local measurements for this Windows user's installation. These are separate from accepted conversations and do not prove work on Spark.</p>
   <div class="flex gap-2"><button class="av-btn av-btn-ghost av-btn-sm" disabled={!native || busy || !runtime || runtime.locked} onclick={() => read()}>Read app timings</button><button class="av-btn av-btn-ghost av-btn-sm" disabled={!native || busy || !runtime || runtime.locked} onclick={() => read(true)}>Export retained timings</button></div>
-  <p class="av-hint">This page timing collector: {frontend.registration}. {frontend.pending} buffered � {frontend.unreported_loss} unreported losses. A failed page registration requires reopening this app window; no automatic observer retry occurs.</p>
+  <p class="av-hint">This page timing collector: {frontend.registration}. {frontend.pending} buffered | {frontend.unreported_loss} unreported losses. A failed page registration requires reopening this app window; no automatic observer retry occurs.</p>
   {#if snapshot}
-    <p class="av-hint">{snapshot.records.length} / {snapshot.capacity} retained · {snapshot.retention_days} days maximum · {snapshot.evicted} evicted · {snapshot.native_observer_loss} native observer losses · {snapshot.frontend_reported_loss} frontend-reported losses.</p>
+    <p class="av-hint">{snapshot.records.length} / {snapshot.capacity} retained | {snapshot.retention_days} days maximum | {snapshot.evicted} evicted | {snapshot.native_observer_loss} native observer losses | {snapshot.frontend_reported_loss} frontend-reported losses.</p>
     <p class="av-hint">Rows below show this native process only, separating frontend page clocks. The export also contains retained older processes. Exact build fingerprint and profile identity are unavailable; package version alone cannot establish comparable builds.</p>
     {#if groups.length === 0}<p class="av-hint">No retained timings from this process.</p>{/if}
     {#each groups as group (group.key)}
-      <div class="av-card p-3"><p class="av-hint break-all">{group.key.replaceAll("_", " ")}</p><p class="font-mono text-xs">p50 {group.p50.toFixed(1)} · p95 {group.p95.toFixed(1)} · p99 {group.p99.toFixed(1)} · max {group.max.toFixed(1)} ms</p><p class="av-hint">{group.count} measured attempts · {group.complete} complete · {group.count-group.complete} other outcomes{group.count<30 ? " · provisional" : ""}</p></div>
+      <div class="av-card p-3"><p class="av-hint break-all">{group.key.replaceAll("_", " ")}</p><p class="font-mono text-xs">p50 {group.p50.toFixed(1)} | p95 {group.p95.toFixed(1)} | p99 {group.p99.toFixed(1)} | max {group.max.toFixed(1)} ms</p><p class="av-hint">{group.count} measured attempts | {group.complete} complete | {group.count-group.complete} other outcomes{group.count<30 ? " | provisional" : ""}</p></div>
     {/each}
   {/if}
   <p class="av-hint">Each outcome has separate percentiles. Failure and abandonment timings are time to that outcome, not successful latency. UI waits are not worker retirement; next-frame observations are not physical display presentation. All percentiles are descriptive retained-sample summaries, including p95/p99; sample count never certifies a tail-latency target. Internal timing coverage remains partial.</p>
