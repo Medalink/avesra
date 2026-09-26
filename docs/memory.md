@@ -28,6 +28,34 @@ source/revision binding, busy gates, retained command ownership and stale-result
 checks are unchanged. Source review and a focused frontend check cover this slice;
 no automated tests or installed private-record proof are claimed.
 
+### Observed empty-form behavior — 2026-09-26
+
+The installed production UI at `7aa1b8e` was manually inspected on diagnostic
+PID 56536, with microphone capture disabled and hardware output silent. The
+separate diagnostic desktop left the input desktop unchanged. Windows Hello was
+not used; no actual private fact was read or saved. Evidence is retained in
+`E:/Dev/Avesra/artifacts/ui-parity-7aa1b8e/`.
+
+`memory-initial-dom.txt`/`memory-initial.png` show the editor closed and the
+protected-memory verification message. Add opened the actual empty fact form
+(`memory-add-dom.txt`/`memory-add.png`); no verified source was selected and Save
+with source was disabled. The operator entered the plain local text “Draft text,
+not saved.” through the real textarea, then chose Close form.
+`memory-draft-closed.json` shows the hidden editor and enabled Continue draft;
+`memory-draft-reopened.json` shows that Continue restored the same text and Save
+remained disabled (its `save: true` field records the disabled property).
+Native Settings hide withdrew the editor and draft: `memory-hide-withdrawn.json`
+shows Add again and the uninspected-records prompt.
+
+For a future authorized manual repeat, open Memory, choose Add, enter harmless
+local draft text with no verified source, close the form and reopen it through
+Continue draft. Observe preserved text and disabled Save, then hide Settings and
+confirm the form/draft has cleared. Operate the actual controls and retain each
+observed state; do not inject records or call private IPC. This proves only the
+observed empty/unverified form lifecycle. Populated fact/routine card rendering,
+Hello admission, source inspection, save/correct/delete, and other protected
+record workflows remain unproven by this run. No tests or harness were used.
+
 ## Explicit verified-task records
 
 The first product writer supports explicit owner facts and one-step routines
