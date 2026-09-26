@@ -19,9 +19,30 @@ def read_exact(connection, count):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("operation", choices=("health", "load"))
-    parser.add_argument("--socket", required=True)
+    parser.add_argument("operation", choices=("health", "load", "manifest"))
+    parser.add_argument("--socket")
+    parser.add_argument("--lane", choices=("speaker", "asr", "tts", "voice-design"))
+    parser.add_argument("--model")
     args = parser.parse_args()
+    if args.operation == "manifest":
+        # Local and offline: hashes the model folder so its digest can be pinned in model_integrity.MANIFESTS.
+        if not args.lane or not args.model:
+            parser.error("manifest requires --lane and --model")
+        from .model_integrity import MANIFESTS, digest, manifest, read_only
+
+        try:
+            entries = manifest(args.model)
+        except (OSError, ValueError) as error:
+            # Fixed codes only; mount the model folder read-only (docker -v <dir>:/models:ro) and retry.
+            print(f"Model folder rejected: {error if isinstance(error, ValueError) else 'model_folder_unavailable'}")
+            raise SystemExit(1)
+        value = digest(entries)
+        print(json.dumps({"lane": args.lane, "files": len(entries), "bytes": sum(e["size"] for e in entries),
+                          "digest": value, "pinned": MANIFESTS[args.lane], "matches": value == MANIFESTS[args.lane],
+                          "read_only": read_only(args.model)}))
+        return
+    if not args.socket:
+        parser.error("--socket is required")
     request = {"version": 1, "operation": args.operation}
     if args.operation == "load":
         now = int(time.time() * 1000)

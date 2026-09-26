@@ -58,6 +58,9 @@ class Driver:
         model_path = Path(config["model_path"])
         if not model_path.is_dir() or config["model_revision"] != REVISIONS[self.lane]:
             raise ValueError("model_revision_unavailable")
+        from .model_integrity import verify
+
+        verify(self.lane, model_path)
         torch.set_num_threads(2)
         if not torch.cuda.is_available():
             raise ValueError("spark_gpu_unavailable")
