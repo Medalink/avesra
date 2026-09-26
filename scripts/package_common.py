@@ -107,7 +107,7 @@ def verify(root, expected, extras=()):
     if digest(root / "package.json") != sha(expected):
         raise ValueError("Package manifest SHA256 mismatch")
     manifest = json.loads(read(root / "package.json", 262144))
-    if set(manifest) != {"version", "source", "store_schema", "files"} or manifest["version"] != 1 or manifest["store_schema"] not in (13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29):
+    if set(manifest) != {"version", "source", "store_schema", "files"} or manifest["version"] != 1 or manifest["store_schema"] not in (13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30):
         raise ValueError("Unsupported package manifest")
     sha(manifest["source"])
     members = manifest["files"]

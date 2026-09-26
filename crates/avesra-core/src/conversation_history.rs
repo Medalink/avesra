@@ -1,5 +1,5 @@
 //! Bounded private history projections. No live capability can be reconstructed here.
-use super::{Record, Source, planner, tasks};
+use super::{Record, Source, planner, search, tasks};
 use crate::{memory, store::Store};
 use avesra_contracts::{ErrorCode, TaskState, planner::Response, speech::Provenance};
 use serde::Serialize;
@@ -12,7 +12,18 @@ pub struct Cursor {
 }
 pub enum Query {
     Page(Option<Cursor>),
-    MemorySource { memory: Uuid, revision: Uuid },
+    Search {
+        query: Option<search::Query>,
+        cursor: Option<search::Cursor>,
+        deadline: std::time::Instant,
+    },
+    Index {
+        deadline: std::time::Instant,
+    },
+    MemorySource {
+        memory: Uuid,
+        revision: Uuid,
+    },
 }
 #[derive(Serialize)]
 pub struct Reply {
@@ -64,12 +75,14 @@ pub struct SourceView {
     pub correction: Option<Row>,
 }
 pub struct ResultView {
+    pub search_next: Option<search::Cursor>,
+    pub coverage: Option<search::Coverage>,
     pub page: Option<Page>,
     pub source: Option<SourceView>,
     pub next: Option<Cursor>,
     pub anchor: Option<Cursor>,
 }
-fn row(
+pub(super) fn row(
     db: &rusqlite::Connection,
     actor: Uuid,
     device: Uuid,
@@ -122,6 +135,41 @@ impl Store {
         }
         authorize()?;
         let result = match query {
+            Query::Search {
+                query,
+                cursor,
+                deadline,
+            } => {
+                let result = search::run(
+                    &self.connection,
+                    actor,
+                    device,
+                    query,
+                    cursor,
+                    deadline,
+                    authorize,
+                )?;
+                ResultView {
+                    page: Some(result.page),
+                    source: None,
+                    next: None,
+                    anchor: None,
+                    search_next: result.next,
+                    coverage: Some(result.coverage),
+                }
+            }
+            Query::Index { deadline } => {
+                let coverage =
+                    search::backfill(&self.connection, actor, device, deadline, authorize)?;
+                ResultView {
+                    page: None,
+                    source: None,
+                    next: None,
+                    anchor: None,
+                    search_next: None,
+                    coverage: Some(coverage),
+                }
+            }
             Query::MemorySource {
                 memory: id,
                 revision,
@@ -149,6 +197,8 @@ impl Store {
                     .map(|s| row(&self.connection, actor, device, s.turn, Some(s.revision)))
                     .transpose()?;
                 ResultView {
+                    search_next: None,
+                    coverage: None,
                     page: None,
                     next: None,
                     anchor: None,
@@ -232,6 +282,8 @@ impl Store {
                     })
                 };
                 ResultView {
+                    search_next: None,
+                    coverage: None,
                     anchor: Some(Cursor {
                         high: cursor.high,
                         before: cursor.high,

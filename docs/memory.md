@@ -149,8 +149,8 @@ freezes the actual highest rowid; subsequent native-only keyset cursors walk bac
 without adding newly accepted turns. At most two hundred rowid-indexed headers are
 scanned per call, with at most twenty bounded bodies. Sparse windows may return fewer
 or no matching rows with a continuation; only actual keyset exhaustion means no older
-history remains. No full-history load, FTS/index migration or model-context expansion
-is introduced. Responses are bounded to 512 KiB; malformed or oversize stored rows
+history remains. Ordinary paging introduces no full-history load or model-context expansion;
+the separately bounded schema30 search path is described below. Responses are bounded to 512 KiB; malformed or oversize stored rows
 fail explicitly, never masquerade as an empty page.
 
 Rows distinguish original accepted text/time/state, stored planner response and typed
@@ -168,8 +168,8 @@ actor/device or malformed references are refused. This read path constructs no l
 turn, output capability or action, and cannot replay a stored reply. Text is escaped.
 
 The UI clears loaded history/source content on lock, hide, owner/context change and
-component disposal, and discards stale command completions. Selected-history deletion,
-search and independently retained backups remain separate work; inspecting a deleted
+component disposal, and discards stale command completions. Selected-history deletion and indexed search use the separate contracts below;
+independently retained backups remain separate work; inspecting a deleted
 fact's original accepted command does not undo that fact's removal from memory retrieval.
 
 ### Manual history verification (not yet performed)
@@ -275,3 +275,67 @@ management deadline, bounded by the same original thirty-second ticket and Hello
 expiry. This does not extend the ticket. A successful ledger commit invokes its
 owned content-invalidation callback before sending the result, even if the caller
 has gone away; receiving the result is not the invalidation owner.
+
+## Protected indexed history search (schema30)
+
+The existing protected History reader also offers real SQLite FTS5 search and
+structured exact turn/task/app UUID lookup. Search indexes only the authoritative
+accepted original and its stored response text, not copied planner dialogue or
+ambient input. Private FTS content and token tables are plaintext in the same
+protected local database, like the existing source ledger; they are not DPAPI
+ciphertext. Search produces historical projections only, never model context,
+live claims, grants, or replayable output. Exact app lookup means the validated
+Application.app or Prompt.binding.app on a linked accepted task; it does not search
+installed apps, infer aliases, or cover every app mention in conversation.
+
+The native query accepts at most256 UTF-8 bytes and eight alphanumeric terms,
+quotes every term into the fixed FTS grammar, and ANDs the current native owner/
+device scope. No raw MATCH syntax, wildcards, ranking across owners, LIKE fallback,
+snippets or dynamic SQL identifiers are exposed. Results use authoritative source
+readers and validate actor/device again. At most20 results are returned per bounded
+page with original query/highwater/keyset and content generation retained in an
+opaque native cursor. Exact UUID lookup does not accept a WebView actor.
+
+Schema30 adds a stable accepted-rowid document map, ordinary-content FTS5 index,
+and current-owner/device backfill checkpoints without rebuilding source tables.
+The accepted, reply, native-observation and linked-task transactions update their
+exact index row; schema29 deletion removes the selected document and replaces
+collateral documents with accepted-original-only projections in that same
+transaction. Later selection removes the surviving original's index too. Both
+SQLite secure_delete and FTS5 secure-delete are enabled; this still makes no
+forensic, memory-erasure or offline-backup guarantee.
+
+Existing history is indexed only through explicit bounded current-owner/device
+maintenance: up to 200 headers and 2 MiB of encoded source bodies per operation, resumable
+through source-sized transactions that atomically update each document and its
+checkpoint. Completed prefixes survive a later interrupted unit; a malformed unit
+never advances its checkpoint. The operation reports budget exhaustion separately. New source writes index immediately. Coverage is explicitly incomplete
+until the original selected backfill highwater is exhausted; an empty partial
+search is not evidence that older history lacks matches. No startup full-corpus
+scan or hidden background index rebuild occurs. Malformed sources fail without
+advancing the checkpoint.
+
+Every search and backfill retains the original History proof/panel/current binding,
+reader owner and twelve-second operation budget. A scoped SQLite progress handler
+adds a fixed VM-step/time budget across corpus operations; LIMIT alone is not the
+work bound. The handler observes its immutable original deadline, while actual
+native authority is checked before/after database work. It is cleared before
+transaction cleanup. Unsupported FTS or exhausted work budgets are explicit errors,
+not empty successful searches. Indexed historical copies are never authority and
+lock/hide/expiry/content deletion invalidates the same reader and UI projections.
+
+Search cursors also freeze the current per-owner/device index revision and coverage
+snapshot. A source completion, link change, deletion or backfill changes that
+revision, so continuation refuses and asks for a new search rather than silently
+changing its cohort or claiming current coverage belongs to an older cursor.
+Search SQL has a 200,000 VM-instruction cap; backfill has a 2,000,000 aggregate cap
+and stops before beginning another unit once fewer than200,000 instructions remain.
+The actual original operation deadline still applies. This bounds executed SQLite
+VM work; it is not a claim that filesystem calls are forcibly preempted. Every
+actual operation retains its ledger owner through cleanup.
+
+The search migration also adds an exact `(actor,device)` accepted-history index;
+its implicit rowid tail supports owner-scoped maximum/range seeks across sessions.
+The existing `(actor,device,session)` index alone is insufficient for this scan.
+SQL progress deadlines are the earlier of the original operation deadline and
+the original Hello proof expiry, never a new twelve-second authority grant.

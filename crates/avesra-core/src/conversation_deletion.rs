@@ -461,6 +461,9 @@ impl Store {
                 .map_err(|_| ErrorCode::Storage)?;
             }
         }
+        for context in &prepared.contexts {
+            super::super::search::refresh(&tx, context.turn)?;
+        }
         authorize()?;
         tx.commit().map_err(|_| ErrorCode::Storage)?;
         // Logical deletion is committed. Never roll it back or report that a

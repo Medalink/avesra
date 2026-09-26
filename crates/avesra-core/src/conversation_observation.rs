@@ -281,6 +281,7 @@ impl Store {
         )
         .map_err(|_| ErrorCode::Storage)?;
         if tx.execute("UPDATE accepted_conversations SET state='answered' WHERE id=?1 AND state='planning'",[record.id.to_string()]).map_err(|_|ErrorCode::Storage)?!=1 {return Err(ErrorCode::Stale);}
+        crate::conversations::search::refresh(&tx, record.id)?;
         let stored = read_reply(&tx, &plan)?.ok_or(ErrorCode::Malformed)?;
         if stored.revision != result.revision
             || stored.reply != result.reply

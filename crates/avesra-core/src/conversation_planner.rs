@@ -1041,6 +1041,7 @@ impl Store {
             params![next, record.id.to_string()],
         )
         .map_err(|_| ErrorCode::Storage)?;
+        crate::conversations::search::refresh(&tx, record.id)?;
         claim.cancellation.check()?;
         remaining(claim.started)?;
         authorize(&PlannerAuthority {

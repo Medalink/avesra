@@ -7,6 +7,8 @@ use uuid::Uuid;
 
 #[path = "conversation_history.rs"]
 pub mod history;
+#[path = "conversation_search.rs"]
+pub mod search;
 
 #[path = "conversation_planner.rs"]
 mod planner;
@@ -27,6 +29,7 @@ const MAX_BODY: usize = 65_536;
 pub(crate) const SCHEMA: &str = "CREATE TABLE accepted_conversations(id TEXT PRIMARY KEY CHECK(length(id)=36),revision TEXT UNIQUE NOT NULL CHECK(length(revision)=36),actor TEXT NOT NULL CHECK(length(actor)=36),device TEXT NOT NULL CHECK(length(device)=36),session TEXT NOT NULL CHECK(length(session)=36),utterance TEXT NOT NULL CHECK(length(utterance)=36),body TEXT NOT NULL CHECK(length(body)<=65536),state TEXT NOT NULL CHECK(state IN ('accepted','planning','waiting_input','answered','cancelled','suspended')),UNIQUE(device,session,utterance))";
 
 pub(crate) fn check_schema(db: &Connection, version: u64) -> Result<(), ErrorCode> {
+    search::check_schema(db, version)?;
     deletion::check_schema(db, version)?;
     tasks::check_schema(db, version)?;
     planner::check_schema(db, version)?;
@@ -62,6 +65,12 @@ pub(crate) fn check_schema(db: &Connection, version: u64) -> Result<(), ErrorCod
         let unique: i64 = row.get(2).map_err(|_| ErrorCode::Malformed)?;
         let origin: String = row.get(3).map_err(|_| ErrorCode::Malformed)?;
         let partial: i64 = row.get(4).map_err(|_| ErrorCode::Malformed)?;
+        if name == "conversation_search_owner" && version >= 30 {
+            if unique != 0 || partial != 0 || origin != "c" {
+                return Err(ErrorCode::Malformed);
+            }
+            continue;
+        }
         if name == "conversation_history_scope" && version >= 29 {
             if unique != 0 || partial != 0 || origin != "c" {
                 return Err(ErrorCode::Malformed);
@@ -263,6 +272,7 @@ impl Store {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|_| ErrorCode::Storage)?;
         tx.execute("INSERT INTO accepted_conversations(id,revision,actor,device,session,utterance,body,state) VALUES(?1,?2,?3,?4,?5,?6,?7,'accepted')",params![record.id.to_string(),record.revision.to_string(),record.actor.to_string(),record.source.device.to_string(),record.source.session.to_string(),record.source.utterance.to_string(),body]).map_err(|_|ErrorCode::Storage)?;
+        search::refresh(&tx, record.id)?;
         let exact:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM accepted_conversations WHERE id=?1 AND revision=?2 AND actor=?3 AND device=?4 AND session=?5 AND utterance=?6 AND body=?7 AND state='accepted')",params![record.id.to_string(),record.revision.to_string(),record.actor.to_string(),record.source.device.to_string(),record.source.session.to_string(),record.source.utterance.to_string(),body],|r|r.get(0)).map_err(|_|ErrorCode::Storage)?;
         if !exact {
             return Err(ErrorCode::Malformed);

@@ -1220,6 +1220,7 @@ fn insert_link(
     )
     .map_err(|_| ErrorCode::Storage)?;
     linked(tx, record)?.ok_or(ErrorCode::Malformed)?;
+    super::search::refresh(tx, record.id)?;
     if let TaskTarget::Prompt { binding } = &target {
         let current = apps.resolve(record.actor, &binding.app_name)?;
         if current.alias_id != binding.alias

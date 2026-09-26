@@ -1,6 +1,6 @@
 //! Protected, bounded history inspection. Stored content never creates a live turn.
 use super::*;
-use avesra_core::conversations::history as core;
+use avesra_core::conversations::{history as core, search};
 use serde::Deserialize;
 use std::sync::atomic::AtomicU64;
 #[path = "tasks_history_deletion.rs"]
@@ -54,15 +54,21 @@ struct Reader {
     action_epoch: u64,
     cursor: Mutex<Option<(Uuid, core::Cursor)>>,
     anchor: Mutex<Option<core::Cursor>>,
+    search: Mutex<Option<(Uuid, search::Cursor)>>,
 }
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Query {
+    Search { query: search::Query },
+    SearchMore { cursor: Uuid },
+    Index,
     Page { cursor: Option<Uuid> },
     MemorySource { memory: Uuid, revision: Uuid },
 }
 #[derive(Serialize)]
 pub struct View {
+    search_cursor: Option<Uuid>,
+    coverage: Option<search::Coverage>,
     reader: Uuid,
     cursor: Option<Uuid>,
     remaining_ms: u64,
@@ -205,6 +211,7 @@ pub async fn inspect_conversation_history(
                 action_epoch,
                 cursor: Mutex::new(None),
                 anchor: Mutex::new(None),
+                search: Mutex::new(None),
             });
             reader_current(&app, &value).map_err(|_| "History proof withdrawn")?;
             *app.state::<Runtime>()
@@ -215,7 +222,33 @@ pub async fn inspect_conversation_history(
                 .map_err(|_| "History session unavailable")? = Some(value.clone());
             value
         };
+        let observed = Instant::now();
+        let search_deadline = (started + Duration::from_secs(12))
+            .min(observed + Duration::from_millis(session.proof.remaining_ms()));
         let request = match query {
+            Query::Search { query } => core::Query::Search {
+                query: Some(query),
+                cursor: None,
+                deadline: search_deadline,
+            },
+            Query::SearchMore { cursor } => {
+                let cursor = session
+                    .search
+                    .lock()
+                    .map_err(|_| "Search cursor unavailable")?
+                    .as_ref()
+                    .filter(|(id, _)| *id == cursor)
+                    .map(|(_, c)| c.clone())
+                    .ok_or("Search changed; start a new search")?;
+                core::Query::Search {
+                    query: None,
+                    cursor: Some(cursor),
+                    deadline: search_deadline,
+                }
+            }
+            Query::Index => core::Query::Index {
+                deadline: search_deadline,
+            },
             Query::MemorySource { memory, revision } => {
                 core::Query::MemorySource { memory, revision }
             }
@@ -295,6 +328,12 @@ pub async fn inspect_conversation_history(
                 .lock()
                 .map_err(|_| "History cursor unavailable")? = cursor;
         }
+        let search_cursor = result.search_next.map(|value| (Uuid::new_v4(), value));
+        let search_token = search_cursor.as_ref().map(|(id, _)| *id);
+        *session
+            .search
+            .lock()
+            .map_err(|_| "Search cursor unavailable")? = search_cursor;
         let remaining_ms = session.proof.remaining_ms();
         if remaining_ms == 0 {
             return Err("History proof expired".into());
@@ -302,6 +341,8 @@ pub async fn inspect_conversation_history(
         drop(owner);
         drop(admission);
         Ok(View {
+            search_cursor: search_token,
+            coverage: result.coverage,
             reader: session.id,
             cursor: token,
             remaining_ms,
