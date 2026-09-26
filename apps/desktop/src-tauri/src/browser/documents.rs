@@ -155,15 +155,17 @@ pub(super) fn reserve_target(
     offer: &Offer,
 ) -> Result<PreparedTarget, ErrorCode> {
     let action = &offer.permit().action;
-    let reference = inner
+    let mut matches = inner
         .attempt
         .as_ref()
         .ok_or(ErrorCode::Stale)?
         .targets
         .iter()
-        .find(|v| v.reference.id.uuid() == action.target_id)
-        .ok_or(ErrorCode::Stale)?
-        .reference;
+        .filter(|v| !v.retired && v.grant.id.uuid() == action.target_id);
+    let reference = matches.next().ok_or(ErrorCode::Stale)?.reference;
+    if matches.next().is_some() {
+        return Err(ErrorCode::Denied);
+    }
     let target = resolve_target(state, local, inner, reference, action.actor_id)?;
     let avesra_contracts::ActionPayload::ReadPage { origin, .. } = &action.payload else {
         return Err(ErrorCode::Denied);
@@ -249,7 +251,10 @@ impl PreparedTarget {
                 action_revision: Id::new(action.revision)?,
                 intent_revision: Id::new(action.intent_revision)?,
                 grant: Id::new(action.grant_id)?,
-                target: target.reference,
+                target: ScopeRef {
+                    id: grant.id,
+                    revision: grant.revision,
+                },
                 scope: ScopeRef {
                     id: grant.id,
                     revision: grant.revision,
@@ -793,6 +798,14 @@ pub(super) fn reply(
                         revision: target.reference.revision,
                         candidate: target.candidate.clone(),
                     };
+                    // An explicit new selection replaces only inactive metadata
+                    // for this scope; actual owner admission already excludes a
+                    // pending/uncertain job before this path can be reached.
+                    for previous in &mut attempt.targets {
+                        if previous.grant.id == target.grant.id {
+                            previous.retire();
+                        }
+                    }
                     attempt.targets.push(target);
                     phase
                 }

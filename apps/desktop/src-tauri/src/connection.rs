@@ -1,4 +1,6 @@
 use crate::{ModeSnapshot, Runtime};
+#[path = "directedness.rs"]
+pub(crate) mod directedness;
 use avesra_contracts::{
     ConnectionStatus, ControlMessage, Envelope, MAX_CONTROL_BYTES, PROTOCOL_VERSION, ServerStatus,
 };
@@ -359,16 +361,17 @@ pub struct SpeakerHealth {
 }
 
 impl SpeakerHealth {
-    fn validate(&self, lane: &str, revision: &str) -> Result<(), String> {
+    fn validate_metadata(&self, lane: &str) -> Result<(), String> {
         if self.version != 1
             || self.lane != lane
-            || self.model_revision != revision
+            || self.model_revision.len() != 40
+            || !self.model_revision.bytes().all(|v| v.is_ascii_hexdigit())
             || !matches!(
                 self.state.as_str(),
                 "unavailable" | "loading" | "loaded_unqualified" | "termination_pending"
             )
             || self.permission_authority
-            || self.streaming
+            || (self.streaming && !matches!(lane, "asr" | "tts" | "activity"))
             || self.cancellation != "terminate_process"
             || self
                 .last_inference_ms
@@ -378,6 +381,62 @@ impl SpeakerHealth {
         }
         Ok(())
     }
+    fn validate(&self, lane: &str, revision: &str) -> Result<(), String> {
+        self.validate_metadata(lane)?;
+        if self.model_revision != revision || self.streaming {
+            return Err("Configured audio service metadata is incompatible".into());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AudioLaneObservation {
+    NotConfigured,
+    Unavailable,
+    Incompatible,
+    Observed { health: SpeakerHealth },
+}
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AudioLaneHealth {
+    version: u16,
+    asr: AudioLaneObservation,
+    speaker: AudioLaneObservation,
+    tts: AudioLaneObservation,
+}
+pub async fn audio_lane_health(record: &PairingRecord) -> Result<AudioLaneHealth, String> {
+    let response = speaker_client(record)?
+        .get(
+            endpoint(&record.url)?
+                .join("audio-lanes")
+                .map_err(|_| "Invalid Spark endpoint")?,
+        )
+        .bearer_auth(&record.credential)
+        .send()
+        .await
+        .map_err(|_| "Audio deployment status is unreachable")?;
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Err("This Spark controller does not provide audio lane status. Update the controller to inspect these deployments.".into());
+    }
+    let mut value: AudioLaneHealth = serde_json::from_value(bounded_response(response).await?)
+        .map_err(|_| "Invalid audio deployment metadata")?;
+    if value.version != 1 {
+        return Err("Incompatible audio deployment status".into());
+    }
+    for (observation, lane) in [
+        (&mut value.asr, "asr"),
+        (&mut value.speaker, "speaker"),
+        (&mut value.tts, "tts"),
+    ] {
+        if let AudioLaneObservation::Observed { health } = observation
+            && health.validate_metadata(lane).is_err()
+        {
+            *observation = AudioLaneObservation::Incompatible;
+        }
+    }
+    Ok(value)
 }
 
 fn speaker_client(record: &PairingRecord) -> Result<reqwest::Client, String> {
@@ -464,12 +523,42 @@ pub async fn voice_analysis_available(record: &PairingRecord) -> Result<(), Stri
 pub struct VoiceAnalysis {
     pub transcript: String,
     pub embedding: Option<Vec<f32>>,
+    pub activity: Option<avesra_contracts::activity::Activity>,
+}
+pub async fn voice_activity_available(
+    record: &PairingRecord,
+    streaming: bool,
+) -> Result<(), String> {
+    let response = speaker_client(record)?
+        .get(
+            endpoint(&record.url)?
+                .join("voice-activity")
+                .map_err(|_| "Invalid Spark endpoint")?,
+        )
+        .bearer_auth(&record.credential)
+        .send()
+        .await
+        .map_err(|_| "Speech activity service is unreachable")?;
+    let value: SpeakerHealth = serde_json::from_value(bounded_response(response).await?)
+        .map_err(|_| "Invalid activity service metadata")?;
+    value.validate_metadata("activity")?;
+    if value.state != "loaded_unqualified"
+        || value.busy
+        || (streaming && !value.streaming)
+        || value.model_revision != avesra_contracts::activity::REVISION
+    {
+        return Err(
+            "Configured activity service is unavailable or busy. No recording started.".into(),
+        );
+    }
+    Ok(())
 }
 pub async fn analyze_voice(
     record: &PairingRecord,
     session: SessionIdentity,
     id: Uuid,
     pcm: Vec<u8>,
+    activity: bool,
 ) -> Result<VoiceAnalysis, String> {
     use base64::Engine;
     #[derive(Deserialize)]
@@ -486,9 +575,15 @@ pub async fn analyze_voice(
         outcome: String,
         reason: String,
         accepted_turn: bool,
+        #[serde(default)]
+        activity: Option<avesra_contracts::activity::Activity>,
     }
-    let payload = serde_json::json!({"version":1,"request_id":id,"session_id":session.id,
+    let samples = u32::try_from(pcm.len() / 2).map_err(|_| "Voice sample limit exceeded")?;
+    let mut payload = serde_json::json!({"version":1,"request_id":id,"session_id":session.id,
         "capture_epoch":session.epoch,"pcm_s16le":base64::engine::general_purpose::STANDARD.encode(pcm)});
+    if activity {
+        payload["activity"] = true.into();
+    }
     let response = speaker_client(record)?
         .post(
             endpoint(&record.url)?
@@ -501,8 +596,10 @@ pub async fn analyze_voice(
         .await
         .map_err(|_| "Voice analysis request failed")?;
     drop(payload);
-    let value: Reply = serde_json::from_value(bounded_response(response).await?)
-        .map_err(|_| "Invalid voice analysis response")?;
+    let value: Reply = serde_json::from_value(
+        bounded_response_with_limit(response, if activity { 32768 } else { 16384 }).await?,
+    )
+    .map_err(|_| "Invalid voice analysis response")?;
     if value.version != 1
         || value.request_id != id
         || value.session_id != session.id
@@ -512,6 +609,11 @@ pub async fn analyze_voice(
         || value.transcript.len() > 8192
         || value.outcome != "abstain"
         || value.accepted_turn
+        || value.activity.is_some() != activity
+        || value
+            .activity
+            .as_ref()
+            .is_some_and(|v| v.validate(samples).is_err())
         || value
             .embedding
             .as_ref()
@@ -526,9 +628,16 @@ pub async fn analyze_voice(
     Ok(VoiceAnalysis {
         transcript: value.transcript,
         embedding: value.embedding,
+        activity: value.activity,
     })
 }
-async fn bounded_response(mut response: reqwest::Response) -> Result<serde_json::Value, String> {
+async fn bounded_response(response: reqwest::Response) -> Result<serde_json::Value, String> {
+    bounded_response_with_limit(response, 16_384).await
+}
+async fn bounded_response_with_limit(
+    mut response: reqwest::Response,
+    limit: usize,
+) -> Result<serde_json::Value, String> {
     if !response.status().is_success() {
         return Err("Speaker request was rejected or unavailable".into());
     }
@@ -538,7 +647,7 @@ async fn bounded_response(mut response: reqwest::Response) -> Result<serde_json:
         .await
         .map_err(|_| "Speaker response interrupted")?
     {
-        if bytes.len() + chunk.len() > 16_384 {
+        if bytes.len() + chunk.len() > limit {
             return Err("Speaker response exceeds limit".into());
         }
         bytes.extend_from_slice(&chunk);
@@ -600,7 +709,7 @@ pub struct PairingRecord {
     credential: String,
 }
 pub(crate) enum MediaEndpoint {
-    Capture,
+    Activity,
     Preview,
     Greeting,
     Speech,
@@ -616,7 +725,7 @@ pub(crate) async fn voice_socket(
     let mut url = endpoint(&record.url)?;
     url.set_scheme("wss").map_err(|_| "Invalid websocket URL")?;
     url.set_path(match endpoint_kind {
-        MediaEndpoint::Capture => "/voice-stream",
+        MediaEndpoint::Activity => "/voice-activity-stream",
         MediaEndpoint::Preview => "/voice-preview",
         MediaEndpoint::Greeting => "/startup-greeting",
         MediaEndpoint::Speech => "/normal-speech",

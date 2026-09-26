@@ -1,5 +1,19 @@
 # Native opaque-claim transport
 
+Version-2 typed action proposals now finish on the same ledger worker. Final
+completion resolves the native actor's exact learned app alias or configured
+speaker grant, then atomically stores the unchanged proposal and its ordinary
+task/intent/source link. Unresolved proposals stay `waiting_input`; a linked
+proposal stays `planning` until observed execution. Neither is answer text or
+speech authority. The published native handle carries the newly committed task
+identity only in memory. No history lookup can recover this dispatch handoff.
+The accepted coordinator retains it during actual execution and shares one
+withdrawal atomic through caller, planner and worker. Initial five-second exact
+resolution is separate from the original thirty-second planner budget; the
+post-model handoff checks that original remaining budget rather than resetting
+it or reusing an already expired five-second admission. Strict legacy version-1
+history remains readable, with no legacy wire admission or replay.
+
 This slice connects the existing PlannerClaim to the paired /planner route and the same NativeEffects ledger owner. Its Rust-only entry point consumes that opaque handle; no Tauri command, frontend text field, browser message, imported history or status response may construct a claim. The qualified voice producer remains absent and existing voice analysis still abstains. Implementing this path must not set enrolled or voice_ready.
 
 One actual native coordinator owns preparation, HTTP, correlated cancellation and ledger finalization. Its slot survives disappearance of the calling future and cannot be replaced while blocking DPAPI/owner/store work or cancellation is still running. Dropping the caller withdraws the original claim through its existing cancellation handle. The claim's original monotonic 30-second budget includes all preparation and queues; transport() computes remaining immediately before the one request, never at a renewed admission. Every asynchronous completion checks original cancellation/deadline before publishing or beginning more work.

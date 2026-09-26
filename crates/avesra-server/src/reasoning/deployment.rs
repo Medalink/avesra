@@ -183,6 +183,10 @@ impl ReadyIncarnation {
     pub fn model(&self) -> &str {
         &self.model
     }
+    pub(super) fn container_id(&self) -> &str {
+        let Reference::Docker { container_id, .. } = &self.record.reference;
+        container_id
+    }
     pub fn artifact_qualified(&self) -> bool {
         false
     }

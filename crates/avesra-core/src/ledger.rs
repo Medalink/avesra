@@ -763,6 +763,15 @@ impl Store {
                 clock(now_ms)?
             ],
         ))?;
+        if outcome == Outcome::Success && observation.is_some() {
+            crate::notifications::action_verified(
+                &tx,
+                dispatch,
+                session.device_id,
+                &action,
+                now_ms,
+            )?;
+        }
         let next = match outcome {
             Outcome::Success => TaskState::Succeeded,
             Outcome::Failed | Outcome::Unsupported => TaskState::Failed,

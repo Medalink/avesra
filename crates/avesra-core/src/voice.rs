@@ -1,4 +1,8 @@
 //! Native conversation evidence boundary; no serialized value grants authority.
+#[path = "voice_qualification.rs"]
+pub mod qualification;
+#[path = "voice_utterance.rs"]
+pub mod utterance;
 use crate::enrollment::Candidate;
 use avesra_contracts::ErrorCode;
 use std::{
@@ -30,8 +34,12 @@ impl Context {
 }
 pub enum AudioCondition {
     Unknown,
-    Clean,
-    Detected,
+    Measured {
+        adapter_revision: String,
+        utterance: Uuid,
+        context: Context,
+        detected: bool,
+    },
 }
 pub enum SignalEvidence {
     Unknown,
@@ -44,7 +52,11 @@ pub enum SignalEvidence {
 }
 pub enum DirectedIntent {
     Unknown,
-    Rejected,
+    Rejected {
+        adapter_revision: String,
+        utterance: Uuid,
+        context: Context,
+    },
     Directed {
         adapter_revision: String,
         utterance: Uuid,
@@ -72,9 +84,15 @@ pub struct Observation {
     pub signal: SignalEvidence,
     pub directed: DirectedIntent,
 }
-/// Deliberately no public constructor/Deserialize. Selected enrollment is not
-/// qualification. Native evidence review must be implemented before activation.
+#[derive(Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AdmissionKind {
+    Development,
+    ReleaseQualified,
+}
+/// Created only by native measured admission review. Never deserialized.
 pub struct QualifiedProfile {
+    kind: AdmissionKind,
     candidate: Candidate,
     actor: Uuid,
     qualification_revision: Uuid,
@@ -84,9 +102,35 @@ pub struct QualifiedProfile {
     held_out_margin: f32,
     signal_adapter_revision: String,
     directed_adapter_revision: String,
+    overlap_adapter_revision: String,
+    echo_adapter_revision: String,
+    endpoint_policy: utterance::Policy,
     minimum_voiced_samples: u32,
     maximum_clipped_fraction: f32,
     valid_until: Instant,
+}
+impl QualifiedProfile {
+    pub fn kind(&self) -> AdmissionKind {
+        self.kind
+    }
+    pub fn actor(&self) -> Uuid {
+        self.actor
+    }
+    pub fn grant_revision(&self) -> Uuid {
+        self.grant_revision
+    }
+    pub fn candidate_revision(&self) -> Uuid {
+        self.candidate.revision
+    }
+    pub fn qualification_revision(&self) -> Uuid {
+        self.qualification_revision
+    }
+    pub fn endpoint_policy(&self) -> utterance::Policy {
+        self.endpoint_policy.clone()
+    }
+    pub fn valid(&self) -> bool {
+        Instant::now() < self.valid_until
+    }
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Abstention {
@@ -283,7 +327,7 @@ impl TurnGate {
             || profile.asr_revision != observation.asr_revision
             || now >= profile.valid_until
             || !profile.threshold.is_finite()
-            || !(0.0..=1.0).contains(&profile.threshold)
+            || !(-1.0..=1.0).contains(&profile.threshold)
             || !profile.held_out_margin.is_finite()
             || !(0.0..=1.0).contains(&profile.held_out_margin)
             || !(320..=160_000).contains(&profile.minimum_voiced_samples)
@@ -291,6 +335,8 @@ impl TurnGate {
             || !(0.0..=1.0).contains(&profile.maximum_clipped_fraction)
             || profile.signal_adapter_revision.is_empty()
             || profile.directed_adapter_revision.is_empty()
+            || profile.overlap_adapter_revision.is_empty()
+            || profile.echo_adapter_revision.is_empty()
             || profile
                 .candidate
                 .held_out_similarities
@@ -322,7 +368,22 @@ impl TurnGate {
         }
         let directed_kind = match observation.directed {
             DirectedIntent::Unknown => return reject(Abstention::DirectednessUnknown),
-            DirectedIntent::Rejected => return reject(Abstention::NotAddressed),
+            DirectedIntent::Rejected {
+                adapter_revision,
+                utterance,
+                context,
+            } => {
+                return reject(
+                    if adapter_revision == profile.directed_adapter_revision
+                        && utterance == observation.utterance
+                        && context == *current
+                    {
+                        Abstention::NotAddressed
+                    } else {
+                        Abstention::DirectednessUnknown
+                    },
+                );
+            }
             DirectedIntent::Directed {
                 adapter_revision,
                 utterance,
@@ -340,13 +401,41 @@ impl TurnGate {
         };
         match observation.overlap {
             AudioCondition::Unknown => return reject(Abstention::OverlapUnknown),
-            AudioCondition::Detected => return reject(Abstention::Overlap),
-            AudioCondition::Clean => {}
+            AudioCondition::Measured {
+                adapter_revision,
+                utterance,
+                context,
+                detected,
+            } => {
+                if adapter_revision != profile.overlap_adapter_revision
+                    || utterance != observation.utterance
+                    || context != *current
+                {
+                    return reject(Abstention::OverlapUnknown);
+                }
+                if detected {
+                    return reject(Abstention::Overlap);
+                }
+            }
         }
         match observation.echo {
             AudioCondition::Unknown => return reject(Abstention::EchoUnknown),
-            AudioCondition::Detected => return reject(Abstention::Echo),
-            AudioCondition::Clean => {}
+            AudioCondition::Measured {
+                adapter_revision,
+                utterance,
+                context,
+                detected,
+            } => {
+                if adapter_revision != profile.echo_adapter_revision
+                    || utterance != observation.utterance
+                    || context != *current
+                {
+                    return reject(Abstention::EchoUnknown);
+                }
+                if detected {
+                    return reject(Abstention::Echo);
+                }
+            }
         }
         let Some(vector) = observation.embedding else {
             return reject(Abstention::UnknownSpeaker);

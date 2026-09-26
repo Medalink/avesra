@@ -342,3 +342,141 @@ pub fn save_candidate(
     let _ = std::fs::remove_file(temporary);
     result
 }
+
+/// Native-only reviewed evidence; never serialize this to the webview.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QualificationRecord {
+    pub version: u16,
+    pub owner_revision: Uuid,
+    pub registration: avesra_contracts::actors::Binding,
+    pub server: String,
+    pub candidate_digest: String,
+    pub directed_artifact: String,
+    pub directed_incarnation: String,
+    #[serde(default)]
+    pub directed_quality: Option<String>,
+    pub report: avesra_core::voice::qualification::Report,
+}
+pub fn candidate_digest(candidate: &Candidate) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+    Ok(format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(candidate).map_err(|_| "Candidate encoding failed")?)
+    ))
+}
+fn validate_qualification(
+    directory: &Path,
+    value: &QualificationRecord,
+) -> Result<Candidate, String> {
+    let (id, revision) = value.report.candidate();
+    let candidate = read_candidate_locked(directory, id, revision)?;
+    let owner = crate::owner::identity(directory).map_err(|_| "Authenticated owner unavailable")?;
+    let selected = selected(directory)?.ok_or("Select the reviewed candidate first")?;
+    value
+        .registration
+        .validate()
+        .map_err(|_| "Invalid stored registration")?;
+    if value.version != 1
+        || value.owner_revision.is_nil()
+        || value.registration.revoked
+        || owner != (value.report.point().actor, value.owner_revision)
+        || value.registration.actor != owner.0
+        || value.registration.owner_revision != owner.1
+        || selected.id != id
+        || selected.revision != revision
+        || candidate_digest(&candidate)? != value.candidate_digest
+        || value.server.len() != 64
+        || !value.server.bytes().all(|v| v.is_ascii_hexdigit())
+        || value.directed_artifact.is_empty()
+        || value.directed_artifact.len() > 256
+        || value.directed_incarnation.is_empty()
+        || value.directed_incarnation.len() > 256
+        || value.directed_quality.as_ref().is_some_and(|value| {
+            value.len() != 64
+                || !value
+                    .bytes()
+                    .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+        })
+    {
+        return Err("Reviewed qualification identity changed".into());
+    }
+    Ok(candidate)
+}
+pub fn read_qualification(
+    directory: &Path,
+) -> Result<Option<(QualificationRecord, Candidate)>, String> {
+    use std::io::Read;
+    let _lock = lock_directory(&directory.join("speaker-candidates"))?;
+    let path = directory.join("voice-qualification.dpapi");
+    let meta = match std::fs::symlink_metadata(&path) {
+        Ok(value) => value,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err("Qualification report unavailable".into()),
+    };
+    if !meta.is_file() || meta.len() > 131072 {
+        return Err("Qualification report exceeds limit".into());
+    }
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .and_then(|v| v.take(131073).read_to_end(&mut bytes))
+        .map_err(|_| "Qualification read failed")?;
+    if bytes.len() > 131072 {
+        return Err("Qualification report exceeds limit".into());
+    }
+    let clear = avesra_windows::credentials::unprotect(&bytes)
+        .map_err(|_| "Qualification protection invalid")?;
+    if clear.len() > 98304 {
+        return Err("Qualification cleartext exceeds limit".into());
+    }
+    let record: QualificationRecord =
+        serde_json::from_slice(&clear).map_err(|_| "Invalid qualification report")?;
+    let candidate = validate_qualification(directory, &record)?;
+    Ok(Some((record, candidate)))
+}
+pub fn save_qualification(
+    directory: &Path,
+    value: &QualificationRecord,
+    publish: &mut dyn FnMut(&Path, &Path) -> Result<(), String>,
+) -> Result<(), String> {
+    let _lock = lock_directory(&directory.join("speaker-candidates"))?;
+    validate_qualification(directory, value)?;
+    let clear = serde_json::to_vec(value).map_err(|_| "Qualification encoding failed")?;
+    if clear.len() > 98304 {
+        return Err("Qualification exceeds storage limit".into());
+    }
+    let protected = avesra_windows::credentials::protect(&clear)
+        .map_err(|_| "Qualification protection failed")?;
+    if protected.len() > 131072 {
+        return Err("Protected qualification exceeds limit".into());
+    }
+    let temporary = directory.join(".voice-qualification.pending");
+    match std::fs::remove_file(&temporary) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err("Interrupted qualification write unavailable".into()),
+    }
+    let result = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary)
+            .map_err(|_| "Qualification storage unavailable")?;
+        file.write_all(&protected)
+            .and_then(|_| file.sync_all())
+            .map_err(|_| "Qualification storage failed")?;
+        drop(file);
+        publish(&temporary, &directory.join("voice-qualification.dpapi"))?;
+        Ok(())
+    })();
+    let _ = std::fs::remove_file(temporary);
+    result
+}
+pub fn revoke_qualification(directory: &Path) -> Result<(), String> {
+    let _lock = lock_directory(&directory.join("speaker-candidates"))?;
+    match std::fs::remove_file(directory.join("voice-qualification.dpapi")) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err("Protected qualification could not be revoked".into()),
+    }
+}

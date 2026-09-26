@@ -1,0 +1,3 @@
+FROM vllm/vllm-openai@sha256:fc120ece0a388cc0aa1caad4a9f1cd92113484ab7ec2fd0efadd62585be05bf8
+COPY bounded_start.py /opt/avesra/bounded_start.py
+ENTRYPOINT ["python3", "/opt/avesra/bounded_start.py"]

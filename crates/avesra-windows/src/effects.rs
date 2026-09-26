@@ -2,8 +2,9 @@
 use crate::volume::{self, VolumeOutcome, VolumeTarget};
 use avesra_contracts::{Action, ActionPayload, ErrorCode, Outcome};
 use avesra_core::{
+    action_permissions::{PermissionView, Selection, TaskTarget},
     conversations::{
-        AppTaskRequest, CancellationTarget, DurableTurn, PlannerAuthority, PlannerCancellation,
+        CancellationTarget, DurableTurn, ExactTaskRequest, PlannerAuthority, PlannerCancellation,
         PlannerClaim, PlannerRequest, PlannerRetirement, Source as ConversationSource, StoredReply,
         Summary as ConversationSummary, TaskAuthority, TaskResolution,
     },
@@ -69,6 +70,27 @@ impl Management {
     }
 }
 enum Command {
+    EventAnswer {
+        claim: Box<PlannerClaim>,
+        authorize: PlannerAuthorization,
+        reply: SyncSender<Result<StoredReply, ErrorCode>>,
+    },
+    Notification {
+        command: NotificationCommand,
+        authorize: CatalogAuthorization,
+        reply: SyncSender<Result<NotificationResult, ErrorCode>>,
+    },
+    PromptProbe {
+        actor: Uuid,
+        alias: Uuid,
+        revision: Uuid,
+        authorize: CatalogAuthorization,
+        reply: SyncSender<Result<avesra_core::workflows::PromptDiscovery, ErrorCode>>,
+    },
+    ActionSetup(
+        ActionManagement,
+        SyncSender<Result<ActionSnapshot, ErrorCode>>,
+    ),
     BrowserCompletionWake,
     RetirePlanner {
         retirement: PlannerRetirement,
@@ -85,8 +107,8 @@ enum Command {
         authorize: PlannerAuthorization,
         reply: SyncSender<Result<StoredReply, ErrorCode>>,
     },
-    AcceptAppTask {
-        request: AppTaskRequest,
+    AcceptActionTask {
+        request: ExactTaskRequest,
         authorize: TaskAuthorization,
         reply: SyncSender<Result<TaskResolution, ErrorCode>>,
     },
@@ -134,12 +156,110 @@ enum Command {
     ),
 }
 pub type CatalogAuthorization = Box<dyn FnMut() -> Result<(), ErrorCode> + Send>;
+pub enum NotificationCommand {
+    Suppress {
+        actor: Uuid,
+        device: Uuid,
+        before: u64,
+    },
+    Claim {
+        actor: Uuid,
+        device: Uuid,
+        kind: avesra_core::notifications::Kind,
+        since: u64,
+    },
+    Finish {
+        batch: avesra_core::notifications::Batch,
+        delivery: avesra_core::notifications::Delivery,
+    },
+    Recent {
+        actor: Uuid,
+        device: Uuid,
+    },
+    Last {
+        actor: Uuid,
+        device: Uuid,
+        kind: avesra_core::notifications::Kind,
+    },
+}
+pub enum NotificationResult {
+    Done,
+    Batch(Option<avesra_core::notifications::Batch>),
+    Events(Vec<avesra_core::notifications::Event>),
+}
 /// Must recheck the original qualified native profile/context at commit. A
 /// successful arbitrary closure is not a substitute for that runtime adapter.
 pub type ConversationAuthorization = Box<dyn FnMut(&Conversation) -> Result<(), ErrorCode> + Send>;
 pub type PlannerAuthorization =
     Box<dyn FnMut(&PlannerAuthority<'_>) -> Result<(), ErrorCode> + Send>;
 pub type TaskAuthorization = Box<dyn FnMut(&TaskAuthority<'_>) -> Result<(), ErrorCode> + Send>;
+pub enum ActionManagement {
+    BindPrompt {
+        actor: Uuid,
+        alias: Uuid,
+        revision: Uuid,
+        choices: avesra_core::workflows::BindingChoices,
+        authorize: CatalogAuthorization,
+    },
+    Memory {
+        actor: Uuid,
+        change: avesra_core::memory::Change,
+        authorize: CatalogAuthorization,
+    },
+    Read {
+        actor: Uuid,
+    },
+    Grant {
+        actor: Uuid,
+        selection: Selection,
+        authorize: CatalogAuthorization,
+    },
+    Revoke {
+        actor: Uuid,
+        id: Uuid,
+        authorize: CatalogAuthorization,
+    },
+}
+#[derive(serde::Serialize)]
+pub struct ActionSnapshot {
+    pub sequence: u64,
+    pub permissions: Vec<PermissionView>,
+    pub aliases: Vec<avesra_core::apps::AppAlias>,
+    pub tasks: Vec<avesra_core::conversations::TaskView>,
+    pub memories: Vec<avesra_core::memory::View>,
+}
+fn action_snapshot(
+    store: &Store,
+    apps: &avesra_core::apps::AppCatalog,
+    actor: Uuid,
+    sequence: u64,
+) -> Result<ActionSnapshot, ErrorCode> {
+    Ok(ActionSnapshot {
+        sequence,
+        permissions: store.action_permissions(Some(actor))?,
+        aliases: apps
+            .aliases()?
+            .into_iter()
+            .filter(|v| v.selected_by == actor && v.available)
+            .collect(),
+        tasks: store.recent_action_tasks(actor)?,
+        memories: store.private_memories(actor)?,
+    })
+}
+fn task_current(
+    state: &Mutex<State>,
+    target: CancellationTarget,
+    epoch: u64,
+) -> Result<(), ErrorCode> {
+    let state = state.lock().map_err(|_| ErrorCode::Unavailable)?;
+    if !state.allowed
+        || state.action_epoch != epoch
+        || state.pending_cancellations.contains(&target)
+    {
+        return Err(ErrorCode::Stale);
+    }
+    Ok(())
+}
 /// Native-owned setup commands. Neither an alias nor registration grants effects.
 pub enum CatalogCommand {
     List,
@@ -221,19 +341,55 @@ impl Drop for WorkerOwnership {
 struct NativeAdapter {
     targets: HashMap<Uuid, VolumeTarget>,
     apps: avesra_core::apps::AppCatalog,
+    prompts: HashMap<Uuid, Box<avesra_core::workflows::PromptBinding>>,
 }
 impl EffectAdapter for NativeAdapter {
     fn execute(
         &mut self,
         permit: &DispatchPermit,
-        authorize: &mut dyn FnMut() -> Result<(), ErrorCode>,
+        authority: &mut avesra_core::execution::EffectAuthority<'_>,
     ) -> Result<EffectResult, ErrorCode> {
+        if let ActionPayload::FillPrompt {
+            app_id,
+            project_id,
+            text,
+        } = &permit.action.payload
+        {
+            if permit.action.target_id != *project_id {
+                return Err(ErrorCode::Denied);
+            }
+            let binding = self.prompts.get(project_id).ok_or(ErrorCode::Stale)?;
+            let resolved = self
+                .apps
+                .resolve(permit.action.actor_id, &binding.app_name)?;
+            if resolved.record.id != *app_id
+                || resolved.record.revision != binding.app_revision
+                || resolved.alias_id != binding.alias
+                || resolved.alias_revision != binding.alias_revision
+            {
+                return Err(ErrorCode::Stale);
+            }
+            return crate::prompt::fill(&resolved.record, binding, text, authority);
+        }
+        if let ActionPayload::Diagnostic { catalog_entry } = permit.action.payload {
+            let catalog = avesra_core::diagnostics::Catalog::from_id(catalog_entry)?;
+            if permit.action.target_id != catalog.id() {
+                return Err(ErrorCode::Denied);
+            }
+            let report = crate::diagnostics::run(catalog, &mut || authority.current())?;
+            return Ok(EffectResult {
+                outcome: Outcome::Success,
+                observation: Some(EffectObservation::Diagnostic {
+                    report: Box::new(report),
+                }),
+            });
+        }
         if let ActionPayload::LaunchApp { app_id } = permit.action.payload {
             if app_id != permit.action.target_id {
                 return Err(ErrorCode::Denied);
             }
             let record = self.apps.get(app_id)?;
-            return crate::apps::launch(&record, authorize);
+            return crate::apps::launch(&record, &mut || authority.commit());
         }
         let ActionPayload::SetVolume { percent } = permit.action.payload else {
             return Ok(EffectResult {
@@ -245,7 +401,9 @@ impl EffectAdapter for NativeAdapter {
             .targets
             .get(&permit.action.target_id)
             .ok_or(ErrorCode::Denied)?;
-        let change = volume::set_percent(target, percent, permit.dispatch_id, authorize)?;
+        let change = volume::set_percent(target, percent, permit.dispatch_id, &mut || {
+            authority.commit()
+        })?;
         let outcome = match change.outcome {
             VolumeOutcome::Verified => Outcome::Success,
             VolumeOutcome::Uncertain => Outcome::UnknownEffect,
@@ -274,7 +432,11 @@ struct Job {
 }
 /// Runs on the actual worker with the borrowed read and native reservation held.
 /// C5 supplies the concrete accepted-task consumer; no webview callback exists.
-pub type ReadConsumer = Box<
+pub struct ReadConsumer {
+    pub scope: avesra_core::browser_scopes::Grant,
+    pub consume: ReadPublication,
+}
+pub type ReadPublication = Box<
     dyn for<'a, 'store> FnOnce(
             crate::browser_receive::ReadReply<'a, 'store>,
         ) -> Result<(), ErrorCode>
@@ -287,6 +449,9 @@ pub struct ExecutionWaiter {
     cancellation: Cancellation,
 }
 impl ExecutionWaiter {
+    pub fn cancellation(&self) -> Cancellation {
+        self.cancellation.clone()
+    }
     pub fn receive(
         &self,
         timeout: std::time::Duration,
@@ -305,6 +470,12 @@ pub struct PublishedReply {
     reply: StoredReply,
 }
 impl PublishedReply {
+    pub fn proposed_task(&self) -> Option<&avesra_core::conversations::LinkedTask> {
+        self.reply.proposed_task()
+    }
+    pub fn remaining_ms(&self) -> Result<u64, ErrorCode> {
+        self.reply.remaining_ms()
+    }
     pub fn cancellation(&self) -> PlannerCancellation {
         self.reply.cancellation()
     }
@@ -488,6 +659,23 @@ fn execute_read(
     };
     let (request, binding, mut current) = prepared.into_parts();
     let authorize = (|| {
+        let expected = &consumer.scope;
+        let context = &request.context;
+        if context.scope.id != expected.id
+            || context.scope.revision != expected.revision
+            || context.target != context.scope
+            || context.actor != expected.actor
+            || context.pairing != expected.pairing
+            || context.selection != expected.selection
+            || context.browser_app.id != expected.browser_app
+            || context.browser_app.revision != expected.browser_revision
+            || request.origin != expected.origin
+            || !expected
+                .operations
+                .contains(&avesra_contracts::browser::ScopeOperation::Read)
+        {
+            return Err(ErrorCode::Stale);
+        }
         let record = apps.get(request.context.browser_app.id.uuid())?;
         if record.revision != request.context.browser_app.revision.uuid()
             || record.selected_by != request.context.actor.uuid()
@@ -545,7 +733,7 @@ fn execute_read(
                     .take()
                     .ok_or(ErrorCode::Stale)?
                     .finalize(&mut execution, &mut current)?;
-                consumer(borrowed)?;
+                (consumer.consume)(borrowed)?;
                 break execution.completed_receipt();
             }
             if execution.remaining_ms().is_err() {
@@ -589,6 +777,91 @@ pub struct NativeEffects {
     state: Arc<Mutex<State>>,
 }
 impl NativeEffects {
+    pub fn event_answer(
+        &self,
+        claim: PlannerClaim,
+        authorize: PlannerAuthorization,
+    ) -> Result<Receiver<Result<StoredReply, ErrorCode>>, ErrorCode> {
+        let (reply, receive) = mpsc::sync_channel(1);
+        self.send
+            .try_send(Command::EventAnswer {
+                claim: Box::new(claim),
+                authorize,
+                reply,
+            })
+            .map_err(|_| ErrorCode::Unavailable)?;
+        Ok(receive)
+    }
+    pub fn notification(
+        &self,
+        command: NotificationCommand,
+        authorize: CatalogAuthorization,
+    ) -> Result<Receiver<Result<NotificationResult, ErrorCode>>, ErrorCode> {
+        let (reply, receive) = mpsc::sync_channel(1);
+        self.send
+            .try_send(Command::Notification {
+                command,
+                authorize,
+                reply,
+            })
+            .map_err(|_| ErrorCode::Unavailable)?;
+        Ok(receive)
+    }
+    pub fn probe_prompt(
+        &self,
+        actor: Uuid,
+        alias: Uuid,
+        revision: Uuid,
+        authorize: CatalogAuthorization,
+    ) -> Result<Receiver<Result<avesra_core::workflows::PromptDiscovery, ErrorCode>>, ErrorCode>
+    {
+        let (reply, receive) = mpsc::sync_channel(1);
+        self.send
+            .try_send(Command::PromptProbe {
+                actor,
+                alias,
+                revision,
+                authorize,
+                reply,
+            })
+            .map_err(|_| ErrorCode::Unavailable)?;
+        Ok(receive)
+    }
+    pub fn actions(
+        &self,
+        command: ActionManagement,
+    ) -> Result<Receiver<Result<ActionSnapshot, ErrorCode>>, ErrorCode> {
+        let state = self.state.lock().map_err(|_| ErrorCode::Unavailable)?;
+        if let ActionManagement::Revoke { actor, .. }
+        | ActionManagement::Memory {
+            actor,
+            change:
+                avesra_core::memory::Change::Correct { .. } | avesra_core::memory::Change::Delete { .. },
+            ..
+        } = &command
+        {
+            if let Some(active) = state.active.as_ref().filter(|v| v.actor == *actor) {
+                active.cancellation.cancel();
+            }
+            // Private-memory corrections/deletion must withdraw any queued or
+            // published grounded response before its source content is redacted.
+            for (target, signal) in &state.planners {
+                if target.actor == *actor {
+                    signal.cancel();
+                }
+            }
+            for source in &state.replies {
+                if source.target.actor == *actor {
+                    source.signal.cancel();
+                }
+            }
+        }
+        let (reply, receive) = mpsc::sync_channel(1);
+        self.send
+            .try_send(Command::ActionSetup(command, reply))
+            .map_err(|_| ErrorCode::Unavailable)?;
+        Ok(receive)
+    }
     pub fn spawn(path: PathBuf, targets: Vec<VolumeTarget>) -> Result<Self, ErrorCode> {
         if targets.len() > 32 {
             return Err(ErrorCode::TooLarge);
@@ -628,6 +901,21 @@ impl NativeEffects {
                 else {
                     return;
                 };
+                let Ok(permissions) = store.action_permissions(None) else {
+                    return;
+                };
+                let mut prompts=HashMap::new();
+                for permission in permissions.into_iter().filter(|v| !v.revoked) {
+                    if let TaskTarget::Prompt{binding}=&permission.permission.target {prompts.insert(binding.id,binding.clone());}
+                    if let TaskTarget::Volume { target, endpoint } = permission.permission.target {
+                        let Ok(target) = VolumeTarget::new(target, endpoint) else {
+                            return;
+                        };
+                        if registry.insert(target.id, target).is_some() {
+                            return;
+                        }
+                    }
+                }
                 browser_resource(
                     &owned_browser,
                     store
@@ -639,7 +927,10 @@ impl NativeEffects {
                 let mut adapter = NativeAdapter {
                     targets: registry,
                     apps,
+                    prompts,
                 };
+                let mut snapshot_sequence = 0u64;
+                let mut prompt_discovery:Option<(Uuid,Uuid,Uuid,std::time::Instant,avesra_core::workflows::PromptDiscovery)>=None;
                 while let Ok(command) = receive.recv() {
                     // This dedicated mailbox is also the completion input for
                     // the active ReadExecution loop. Never queue its
@@ -661,6 +952,149 @@ impl NativeEffects {
                         let _ = completion.reply.try_send(result);
                     }
                     let mut job = match command {
+                        Command::EventAnswer { claim, mut authorize, reply }=>{
+                            let target=claim.target();let epoch=claim.context().action_epoch;
+                            let result=(||{
+                                planner_current(&owned,target,epoch)?;
+                                let request=claim.transport()?;
+                                let kind=avesra_core::notifications::question_kind(&request.text).ok_or(ErrorCode::Unsupported)?;
+                                let events=controller.management().last_announced(request.context.actor,request.context.device,kind)?;
+                                let text=avesra_core::notifications::describe_last(kind,&events)?;
+                                let result=avesra_contracts::planner::Reply{version:avesra_contracts::planner::VERSION,context:request.context,terminal:avesra_contracts::planner::Terminal::Complete,response:avesra_contracts::planner::Response::Answer{text}};
+                                controller.management().finish_planner(*claim,result,&adapter.apps,&mut |authority|{planner_current(&owned,target,epoch)?;authorize(authority)?;planner_current(&owned,target,epoch)})
+                            })();
+                            if result.is_err()&&let Ok(mut state)=owned.lock(){state.planners.retain(|(t,_)|*t!=target);}
+                            let _=reply.try_send(result);continue;
+                        }
+                        Command::Notification { command, mut authorize, reply } => {
+                            let result = (|| {
+                                authorize()?;
+                                let store=controller.management();
+                                let value=match command {
+                                    NotificationCommand::Suppress{actor,device,before}=>{store.suppress_notifications(actor,device,before,&mut authorize)?;NotificationResult::Done},
+                                    NotificationCommand::Claim{actor,device,kind,since}=>NotificationResult::Batch(store.claim_notification(actor,device,kind,since,&mut authorize)?),
+                                    NotificationCommand::Finish{batch,delivery}=>{store.finish_notification(batch,delivery,&mut authorize)?;NotificationResult::Done},
+                                    NotificationCommand::Recent{actor,device}=>NotificationResult::Events(store.recent_notifications(actor,device)?),
+                                    NotificationCommand::Last{actor,device,kind}=>NotificationResult::Events(store.last_announced(actor,device,kind)?),
+                                };
+                                authorize()?;
+                                Ok(value)
+                            })();
+                            let _=reply.try_send(result);
+                            continue;
+                        }
+                        Command::PromptProbe {
+                            actor,
+                            alias,
+                            revision,
+                            mut authorize,
+                            reply,
+                        } => {
+                            prompt_discovery=None;
+                            let started=std::time::Instant::now();
+                            let result = (|| {
+                                authorize()?;
+                                let aliases = adapter.apps.aliases()?;
+                                let selected = aliases
+                                    .iter()
+                                    .find(|v| {
+                                        v.id == alias
+                                            && v.revision == revision
+                                            && v.selected_by == actor
+                                            && v.available
+                                    })
+                                    .ok_or(ErrorCode::Stale)?;
+                                let resolved = adapter.apps.resolve(actor, &selected.phrase)?;
+                                if resolved.alias_id != alias || resolved.alias_revision != revision
+                                {
+                                    return Err(ErrorCode::Stale);
+                                }
+                                crate::prompt::discover(&resolved.record, &mut authorize)
+                            })();
+                            if let Ok(discovery)=&result {prompt_discovery=Some((actor,alias,revision,started,discovery.clone()));}
+                            let _ = reply.try_send(result);
+                            continue;
+                        }
+                        Command::ActionSetup(command, reply) => {
+                            let result = (|| {
+                                let actor = match command {
+                                    ActionManagement::BindPrompt{actor,alias,revision,choices,mut authorize}=>{
+                                        let (owner,saved_alias,saved_revision,started,observed)=prompt_discovery.take().ok_or(ErrorCode::Stale)?;
+                                        if (owner,saved_alias,saved_revision)!=(actor,alias,revision) || started.elapsed()>=std::time::Duration::from_secs(30){return Err(ErrorCode::Stale);}
+                                        let aliases=adapter.apps.aliases()?;
+                                        let selected=aliases.iter().find(|a|a.id==alias && a.revision==revision && a.selected_by==actor && a.available).ok_or(ErrorCode::Stale)?;
+                                        let resolved=adapter.apps.resolve(actor,&selected.phrase)?;
+                                        let mut current=||{if started.elapsed()>=std::time::Duration::from_secs(30){return Err(ErrorCode::Expired);}authorize()};
+                                        let binding=Box::new(crate::prompt::bind(&resolved,&selected.phrase,actor,observed,choices,&mut current)?);
+                                        let permission=controller.management().grant_action(actor,Selection::Prompt{binding},&adapter.apps,&mut current)?;
+                                        let TaskTarget::Prompt{binding}=permission.target else {return Err(ErrorCode::Malformed)};
+                                        adapter.prompts.insert(binding.id,binding);
+                                        actor
+                                    },
+                                    ActionManagement::Memory {
+                                        actor,
+                                        change,
+                                        mut authorize,
+                                    } => {
+                                        controller.management().change_memory(
+                                            actor,
+                                            change,
+                                            &mut authorize,
+                                        )?;
+                                        actor
+                                    }
+                                    ActionManagement::Read { actor } => actor,
+                                    ActionManagement::Grant {
+                                        actor,
+                                        selection,
+                                        mut authorize,
+                                    } => {
+                                        if let Selection::Volume { endpoint } = &selection {
+                                            VolumeTarget::new(Uuid::new_v4(), endpoint.clone())?;
+                                        }
+                                        let permission = controller.management().grant_action(
+                                            actor,
+                                            selection,
+                                            &adapter.apps,
+                                            &mut authorize,
+                                        )?;
+                                        if let TaskTarget::Volume { target, endpoint } =
+                                            permission.target
+                                        {
+                                            adapter.targets.insert(
+                                                target,
+                                                VolumeTarget::new(target, endpoint)?,
+                                            );
+                                        }
+                                        actor
+                                    }
+                                    ActionManagement::Revoke {
+                                        actor,
+                                        id,
+                                        mut authorize,
+                                    } => {
+                                        controller.management().revoke_action(
+                                            actor,
+                                            id,
+                                            &mut authorize,
+                                        )?;
+                                        actor
+                                    }
+                                };
+                                snapshot_sequence = snapshot_sequence
+                                    .checked_add(1)
+                                    .filter(|v| *v <= avesra_contracts::browser::MAX_SAFE_COUNTER)
+                                    .ok_or(ErrorCode::Unavailable)?;
+                                action_snapshot(
+                                    controller.management(),
+                                    &adapter.apps,
+                                    actor,
+                                    snapshot_sequence,
+                                )
+                            })();
+                            let _ = reply.try_send(result);
+                            continue;
+                        }
                         Command::BrowserCompletionWake => continue,
                         Command::RetirePlanner { retirement, reply } => {
                             let target = retirement.target();
@@ -714,6 +1148,7 @@ impl NativeEffects {
                             let result = controller.management().finish_planner(
                                 *claim,
                                 result,
+                                &adapter.apps,
                                 &mut |authority| {
                                     planner_current(&owned, target, epoch)?;
                                     authorize(authority)?;
@@ -728,16 +1163,28 @@ impl NativeEffects {
                             let _ = reply.try_send(result);
                             continue;
                         }
-                        Command::AcceptAppTask {
+                        Command::AcceptActionTask {
                             request,
                             mut authorize,
                             reply,
                         } => {
-                            let _ = reply.try_send(controller.management().accept_app_task(
-                                request,
-                                &adapter.apps,
-                                &mut authorize,
-                            ));
+                            let target = request.target();
+                            let epoch = request.action_epoch();
+                            let result = (|| {
+                                task_current(&owned, target, epoch)?;
+                                let result = controller.management().accept_action_task(
+                                    request,
+                                    &adapter.apps,
+                                    &mut |authority| {
+                                        task_current(&owned, target, epoch)?;
+                                        authorize(authority)?;
+                                        task_current(&owned, target, epoch)
+                                    },
+                                )?;
+                                task_current(&owned, target, epoch)?;
+                                Ok(result)
+                            })();
+                            let _ = reply.try_send(result);
                             continue;
                         }
                         Command::AcceptConversation {
@@ -1206,14 +1653,14 @@ impl NativeEffects {
     }
     /// Exact native resolver only. This never dispatches an effect or grants
     /// permission; the source's stored record and grant decide the one payload.
-    pub fn accept_app_task(
+    pub fn accept_action_task(
         &self,
-        request: AppTaskRequest,
+        request: ExactTaskRequest,
         authorize: TaskAuthorization,
     ) -> Result<Receiver<Result<TaskResolution, ErrorCode>>, ErrorCode> {
         let (reply, receive) = mpsc::sync_channel(1);
         self.send
-            .try_send(Command::AcceptAppTask {
+            .try_send(Command::AcceptActionTask {
                 request,
                 authorize,
                 reply,
@@ -1229,6 +1676,20 @@ impl NativeEffects {
         session: DispatchSession,
         read_consumer: Option<ReadConsumer>,
     ) -> Result<ExecutionWaiter, ErrorCode> {
+        self.submit_with_withdrawal(
+            step,
+            session,
+            read_consumer,
+            Arc::new(AtomicBool::new(false)),
+        )
+    }
+    pub fn submit_with_withdrawal(
+        &self,
+        step: Uuid,
+        session: DispatchSession,
+        read_consumer: Option<ReadConsumer>,
+        withdrawn: Arc<AtomicBool>,
+    ) -> Result<ExecutionWaiter, ErrorCode> {
         let mut state = self.state.lock().map_err(|_| ErrorCode::Unavailable)?;
         if !state.allowed
             || session.capture_epoch == 0
@@ -1240,7 +1701,7 @@ impl NativeEffects {
         if state.active.is_some() {
             return Err(ErrorCode::Unavailable);
         }
-        let cancellation = Cancellation::default();
+        let cancellation = Cancellation::from_signal(withdrawn);
         let (reply, receive) = mpsc::sync_channel(1);
         state.active = Some(Active {
             step,

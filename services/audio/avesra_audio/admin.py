@@ -71,12 +71,12 @@ def main():
         else:
             if set(response) != allowed or type(response["version"]) is not int or response["version"] != 1:
                 raise RuntimeError("Invalid health schema")
-            if response["lane"] not in {"speaker", "asr", "tts", "voice-design"} or response["state"] not in {"unavailable", "loading", "loaded_unqualified", "termination_pending"}:
+            if response["lane"] not in {"speaker", "asr", "tts", "voice-design", "activity"} or response["state"] not in {"unavailable", "loading", "loaded_unqualified", "termination_pending"}:
                 raise RuntimeError("Invalid health state")
             revision = response["model_revision"]
             if not isinstance(revision, str) or len(revision) != 40 or any(c not in "0123456789abcdef" for c in revision):
                 raise RuntimeError("Invalid model revision")
-            if type(response["streaming"]) is not bool or (response["streaming"] and response["lane"] not in {"asr", "tts"}) or response["permission_authority"] is not False or type(response["busy"]) is not bool or response["cancellation"] != "terminate_process":
+            if type(response["streaming"]) is not bool or (response["streaming"] and response["lane"] not in {"asr", "tts", "activity"}) or response["permission_authority"] is not False or type(response["busy"]) is not bool or response["cancellation"] != "terminate_process":
                 raise RuntimeError("Unexpected service capabilities")
             if type(response["successful_inferences"]) is not int or response["successful_inferences"] < 0:
                 raise RuntimeError("Invalid inference count")

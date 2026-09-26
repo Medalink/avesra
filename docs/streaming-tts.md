@@ -1,5 +1,16 @@
 # Incremental generated-voice synthesis
 
+Explicit editable voice tests and fixed startup greetings use preview wire
+version 2 to expose this actual incremental path. Their controller waits for the
+first validated private chunk, sends `StreamingReady` with a sample ceiling, and
+paces bounded queued audio while the same private job continues. It no longer
+collects a complete synthesized waveform before Ready. Only the actual Complete
+terminal supplies the final exact sample count; a failed/truncated prefix cannot
+be reported as fully spoken. Saved reference playback remains exact-length PCM.
+See [generated voices](generated-voices.md) for ownership, pacing and telemetry
+boundaries. Latency improvement requires a new actual native observation; the
+earlier complete-waveform proof does not measure this changed path.
+
 The required TTS path emits PCM while codec generation is still running. Splitting a complete waveform or using Qwen's simulated text-input flag does not satisfy this contract. The selected generated reference voice remains mandatory; requests cannot supply a file path, voice identity or clone reference. Output is transient24kHz mono signed16-bit PCM, bounded to30seconds and bound to one reply/utterance/session/playback epoch. Normal voice readiness remains closed until the actual synthesis/transport/playback path is qualified.
 
 The initial adapter is tightly bound to qwen-tts0.1.1 and the inspected source hashes in the final locked image. A temporary hook on the selected model's talker observes only complete codec vectors from forward output, excluding prefill and EOS. It decodes bounded new-code chunks with up to25 left-context codes, seeded from the selected generated voice's reference codes, and removes all context audio before emission. Text/ref-text tokenization and ICL prompt preparation use the same pinned wrapper helpers. It does not call the wrapper's complete-waveform synthesis method or decode the final waveform a second time.

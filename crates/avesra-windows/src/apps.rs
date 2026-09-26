@@ -482,6 +482,14 @@ pub struct WindowHint {
     observed: Instant,
 }
 impl WindowHint {
+    pub(crate) fn automation_window(&self, record: &AppRecord) -> Result<HWND, ErrorCode> {
+        let mut observed = record.clone();
+        bind_window_hint(&mut observed, self)?;
+        if record.window_class.as_ref() != Some(&self.class) {
+            return Err(ErrorCode::Stale);
+        }
+        Ok(HWND(self.window as usize as *mut _))
+    }
     pub fn class(&self) -> &str {
         &self.class
     }

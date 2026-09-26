@@ -142,7 +142,7 @@ class Service:
             return {
                 "version": 1, "lane": self.config["lane"],
                 "model_revision": self.config["model_revision"], "state": self.state,
-                "streaming": self.config.get("asr_streaming", False) or self.config.get("tts_streaming", False), "cancellation": "terminate_process",
+                "streaming": self.config.get("asr_streaming", False) or self.config.get("tts_streaming", False) or self.config.get("activity_streaming", False), "cancellation": "terminate_process",
                 "permission_authority": False, "busy": self.active is not None or self.stream is not None,
                 "successful_inferences": self.successful_inferences,
                 "last_inference_ms": self.last_inference_ms,
@@ -171,7 +171,7 @@ class Service:
             if not request["issued_at_ms"] <= now < request["expires_at_ms"] or request["expires_at_ms"] - request["issued_at_ms"] > (120_000 if operation == "load" else 30_000):
                 raise ValueError()
             deadline = time.monotonic() + (request["expires_at_ms"] - now) / 1000
-            if operation == "stream" and (not self.config.get("asr_streaming", False) or type(request["chunk_sequence"]) is not int or not 0 < request["chunk_sequence"] <= 3000 or type(request["final"]) is not bool):
+            if operation == "stream" and (not (self.config.get("asr_streaming", False) or self.config.get("activity_streaming", False)) or type(request["chunk_sequence"]) is not int or not 0 < request["chunk_sequence"] <= 3000 or type(request["final"]) is not bool):
                 raise ValueError()
         except (ValueError, TypeError, AttributeError):
             return {"error": "invalid_request"}
@@ -358,7 +358,7 @@ async def serve(config_path, socket_path):
     from .drivers import REVISIONS
 
     config = json.loads(Path(config_path).read_text())
-    if set(config) - {"lane", "model_path", "model_revision", "cache_path", "voice_preset", "voice_store", "asr_streaming", "asr_right_context", "tts_streaming"}:
+    if set(config) - {"lane", "model_path", "model_revision", "cache_path", "voice_preset", "voice_store", "asr_streaming", "asr_right_context", "tts_streaming", "activity_streaming"}:
         raise ValueError("Unknown configuration field")
     if config.get("lane") not in REVISIONS or config.get("model_revision") != REVISIONS[config["lane"]]:
         raise ValueError("Unsupported model revision")
@@ -368,6 +368,8 @@ async def serve(config_path, socket_path):
         raise ValueError("Invalid streaming context")
     if type(config.get("tts_streaming", False)) is not bool or (config.get("tts_streaming", False) and config["lane"] != "tts"):
         raise ValueError("Invalid TTS streaming configuration")
+    if type(config.get("activity_streaming", False)) is not bool or (config.get("activity_streaming", False) and config["lane"] != "activity"):
+        raise ValueError("Invalid activity streaming configuration")
     path = Path(socket_path)
     parent = path.parent.stat()
     if parent.st_uid != os.getuid() or stat.S_IMODE(parent.st_mode) & 0o077:

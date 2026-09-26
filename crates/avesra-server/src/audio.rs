@@ -18,6 +18,8 @@ use tokio::{
 };
 use uuid::Uuid;
 const MAX_PACKET: usize = 2_000_000;
+#[path = "audio_activity.rs"]
+pub mod activity;
 #[path = "audio_stream.rs"]
 pub mod streaming;
 #[path = "audio_tts.rs"]
@@ -61,6 +63,9 @@ impl AudioInput {
 #[derive(Deserialize)]
 #[serde(untagged, deny_unknown_fields)]
 pub enum AudioOutput {
+    Activity {
+        activity: avesra_contracts::activity::Activity,
+    },
     Embedding {
         outcome: String,
         embedding: Vec<f32>,
@@ -80,6 +85,7 @@ pub enum AudioOutput {
 impl AudioOutput {
     fn validate(&self) -> Result<(), ErrorCode> {
         let valid = match self {
+            Self::Activity { activity } => activity.validate(activity.samples).is_ok(),
             Self::Embedding { outcome, embedding } => {
                 outcome == "embedding"
                     && embedding.len() == 192
@@ -133,7 +139,7 @@ impl AudioHealth {
         if self.version != 1
             || !matches!(
                 self.lane.as_str(),
-                "asr" | "speaker" | "tts" | "voice-design"
+                "asr" | "speaker" | "tts" | "voice-design" | "activity"
             )
             || self.model_revision.len() != 40
             || !self.model_revision.bytes().all(|b| b.is_ascii_hexdigit())
@@ -142,7 +148,7 @@ impl AudioHealth {
                 "unavailable" | "loading" | "loaded_unqualified" | "termination_pending"
             )
             || self.permission_authority
-            || (self.streaming && !matches!(self.lane.as_str(), "asr" | "tts"))
+            || (self.streaming && !matches!(self.lane.as_str(), "asr" | "tts" | "activity"))
             || self.cancellation != "terminate_process"
             || self
                 .last_inference_ms
@@ -193,8 +199,10 @@ impl AudioClient {
         })
     }
     pub fn for_deployment(socket: &Path, lane: &str, revision: &str) -> Result<Self, ErrorCode> {
-        if !matches!(lane, "asr" | "speaker" | "tts" | "voice-design")
-            || revision.len() != 40
+        if !matches!(
+            lane,
+            "asr" | "speaker" | "tts" | "voice-design" | "activity"
+        ) || revision.len() != 40
             || !revision.bytes().all(|b| b.is_ascii_hexdigit())
         {
             return Err(ErrorCode::Malformed);
@@ -386,6 +394,7 @@ impl AudioClient {
         if !matches!(
             (lane.as_str(), &output),
             ("asr", AudioOutput::Transcript { .. })
+                | ("activity", AudioOutput::Activity { .. })
                 | (
                     "speaker",
                     AudioOutput::Embedding { .. } | AudioOutput::Insufficient { .. }

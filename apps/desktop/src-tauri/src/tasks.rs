@@ -1,0 +1,1125 @@
+//! Protected action setup and opaque accepted-turn routing. No text/action IPC.
+use crate::{Runtime, connection, setup::ManagementProof};
+use avesra_contracts::{ErrorCode, actors};
+use avesra_core::{
+    action_permissions::Selection,
+    conversations::{
+        CancellationTarget, DurableTurn, ExactTaskRequest, PlannerRequest, TaskResolution,
+    },
+    ledger::DispatchSession,
+};
+use avesra_windows::effects::{ActionManagement, ActionSnapshot, PublishedReply};
+use serde::Serialize;
+use std::{
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicU8, Ordering},
+    },
+    time::{Duration, Instant},
+};
+use tauri::{Emitter, Manager};
+use uuid::Uuid;
+
+#[derive(Default)]
+pub struct State {
+    panel: Mutex<Option<Panel>>,
+    reader: Arc<tokio::sync::Mutex<()>>,
+    management: Arc<tokio::sync::Mutex<()>>,
+    cancellation: Arc<tokio::sync::Mutex<()>>,
+    accepted: Arc<tokio::sync::Mutex<()>>,
+    page: Mutex<Option<PageResult>>,
+    page_timer: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
+}
+struct PageResult {
+    actor: Uuid,
+    session: connection::SessionIdentity,
+    id: Uuid,
+    started: Instant,
+    delivery: Arc<AtomicU8>,
+    dispatch: Uuid,
+    action_revision: Uuid,
+    view: PageView,
+}
+#[derive(Clone, Serialize)]
+pub struct PageView {
+    task: Uuid,
+    origin: String,
+    blocks: Vec<String>,
+    truncated: bool,
+    excluded_content: bool,
+    remaining_ms: u64,
+}
+struct Panel {
+    id: Uuid,
+    generation: u64,
+    started: Instant,
+    targets: Vec<(Uuid, CancellationTarget)>,
+    sequence: u64,
+}
+impl State {
+    pub fn invalidate(&self) {
+        if let Ok(mut page) = self.page.lock() {
+            *page = None;
+        }
+        if let Ok(mut timer) = self.page_timer.lock()
+            && let Some(timer) = timer.take()
+        {
+            timer.abort();
+        }
+        if let Ok(mut panel) = self.panel.lock() {
+            *panel = None;
+        }
+    }
+}
+fn visible(window: &tauri::WebviewWindow) -> Result<(), String> {
+    if window.label() != "settings" || !window.is_visible().map_err(|_| "Settings unavailable")? {
+        return Err("Use visible Settings for actions".into());
+    }
+    Ok(())
+}
+fn current(app: &tauri::AppHandle, id: Uuid) -> Result<(), String> {
+    let state = app.state::<Runtime>();
+    let local = state.local.lock().map_err(|_| "Local state unavailable")?;
+    let panel = state
+        .tasks
+        .panel
+        .lock()
+        .map_err(|_| "Action panel unavailable")?;
+    if local.locked
+        || !local.connected
+        || panel.as_ref().is_none_or(|p| {
+            p.id != id
+                || p.started.elapsed() >= Duration::from_secs(600)
+                || p.generation != state.connection_generation.load(Ordering::SeqCst)
+        })
+    {
+        return Err("Action panel expired; reopen it".into());
+    }
+    if app
+        .get_webview_window("settings")
+        .is_none_or(|w| !w.is_visible().unwrap_or(false))
+    {
+        return Err("Settings is hidden".into());
+    }
+    Ok(())
+}
+#[tauri::command]
+pub fn open_action_panel(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+) -> Result<Uuid, String> {
+    visible(&window)?;
+    let state = app.state::<Runtime>();
+    let local = state.local.lock().map_err(|_| "Local state unavailable")?;
+    if local.locked || !local.connected {
+        return Err("Connect Spark and unlock Windows first".into());
+    }
+    let id = Uuid::new_v4();
+    *state
+        .tasks
+        .panel
+        .lock()
+        .map_err(|_| "Action panel unavailable")? = Some(Panel {
+        id,
+        generation: state.connection_generation.load(Ordering::SeqCst),
+        started: Instant::now(),
+        targets: Vec::new(),
+        sequence: 0,
+    });
+    Ok(id)
+}
+#[tauri::command]
+pub fn close_action_panel(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    panel: Uuid,
+) -> Result<(), String> {
+    if window.label() != "settings" {
+        return Err("Use Settings".into());
+    }
+    let state = app.state::<Runtime>();
+    let mut slot = state
+        .tasks
+        .panel
+        .lock()
+        .map_err(|_| "Action panel unavailable")?;
+    if slot.as_ref().is_some_and(|p| p.id == panel) {
+        *slot = None;
+    }
+    Ok(())
+}
+async fn receive<T: Send + 'static>(
+    receiver: std::sync::mpsc::Receiver<Result<T, ErrorCode>>,
+) -> Result<T, String> {
+    tokio::task::spawn_blocking(move || receiver.recv())
+        .await
+        .map_err(|_| "Action reader stopped")?
+        .map_err(|_| "Action worker stopped")?
+        .map_err(|e| format!("Action state unavailable ({e:?}). Refresh before another attempt."))
+}
+fn publish(
+    app: &tauri::AppHandle,
+    panel: Uuid,
+    actor: Uuid,
+    snapshot: ActionSnapshot,
+) -> Result<ActionSnapshot, String> {
+    current(app, panel)?;
+    let directory = app
+        .path()
+        .app_data_dir()
+        .map_err(|_| "Owner directory unavailable")?;
+    if !crate::owner::matches_actor(&directory, actor) {
+        return Err("Owner changed".into());
+    }
+    let state = app.state::<Runtime>();
+    let mut slot = state
+        .tasks
+        .panel
+        .lock()
+        .map_err(|_| "Action panel unavailable")?;
+    let value = slot
+        .as_mut()
+        .filter(|p| p.id == panel)
+        .ok_or("Action panel changed")?;
+    if snapshot.sequence < value.sequence {
+        return Err("A newer task snapshot is already available".into());
+    }
+    value.sequence = snapshot.sequence;
+    value.targets = snapshot
+        .tasks
+        .iter()
+        .map(|task| (task.task, task.cancellation))
+        .collect();
+    Ok(snapshot)
+}
+#[derive(Serialize)]
+pub struct Status {
+    snapshot: ActionSnapshot,
+    outputs: Vec<avesra_windows::AudioDevice>,
+    scopes: Vec<avesra_core::browser_scopes::Grant>,
+    page: Option<PageView>,
+}
+/// One accepted coordinator can project alongside the bounded Settings reader.
+/// Native cache is updated before publishing the non-authoritative display rows.
+async fn project(app: &tauri::AppHandle, actor: Uuid) -> Result<(), String> {
+    let panel = app
+        .state::<Runtime>()
+        .tasks
+        .panel
+        .lock()
+        .map_err(|_| "Action panel unavailable")?
+        .as_ref()
+        .map(|p| p.id);
+    let Some(panel) = panel else {
+        return Ok(());
+    };
+    current(app, panel)?;
+    let receiver = app
+        .state::<Runtime>()
+        .effects
+        .actions(ActionManagement::Read { actor })
+        .map_err(|_| "Action projection unavailable")?;
+    let snapshot = publish(app, panel, actor, receive(receiver).await?)?;
+    #[derive(Clone, Serialize)]
+    struct Projection<'a> {
+        panel: Uuid,
+        snapshot: &'a ActionSnapshot,
+    }
+    app.emit_to(
+        "settings",
+        "action-task-snapshot",
+        Projection {
+            panel,
+            snapshot: &snapshot,
+        },
+    )
+    .map_err(|_| "Action projection unavailable".to_owned())
+}
+#[tauri::command]
+pub async fn action_status(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    panel: Uuid,
+) -> Result<Status, String> {
+    visible(&window)?;
+    current(&app, panel)?;
+    let guard = app
+        .state::<Runtime>()
+        .tasks
+        .reader
+        .clone()
+        .try_lock_owned()
+        .map_err(|_| "Action status is busy")?;
+    tauri::async_runtime::spawn(async move {
+        let _guard = guard;
+        let actor = crate::owner::current_actor(&app).await?;
+        current(&app, panel)?;
+        let receiver = app
+            .state::<Runtime>()
+            .effects
+            .actions(ActionManagement::Read { actor })
+            .map_err(|_| "Action worker busy")?;
+        let snapshot = receive(receiver).await?;
+        let directory = app
+            .path()
+            .app_data_dir()
+            .map_err(|_| "Owner directory unavailable")?;
+        let scopes = tokio::task::spawn_blocking(move || {
+            let path = directory.join("browser-scopes.db");
+            if !path.exists() {
+                return Ok(Vec::new());
+            }
+            avesra_core::browser_scopes::Store::open_read_only(&path)?
+                .list(avesra_contracts::browser::Id::new(actor)?)
+        })
+        .await
+        .map_err(|_| "Scope reader stopped")?
+        .map_err(|_: ErrorCode| "Browser scopes unavailable")?;
+        let outputs = tokio::task::spawn_blocking(avesra_windows::audio_devices)
+            .await
+            .map_err(|_| "Device reader stopped")?
+            .map_err(|_| "Output devices unavailable")?
+            .into_iter()
+            .filter(|d| d.direction == "output")
+            .take(64)
+            .collect();
+        Ok(Status {
+            snapshot: publish(&app, panel, actor, snapshot)?,
+            outputs,
+            scopes,
+            page: {
+                let state = app.state::<Runtime>();
+                let local = state.local.lock().map_err(|_| "Local state unavailable")?;
+                let mut page = state
+                    .tasks
+                    .page
+                    .lock()
+                    .map_err(|_| "Page result unavailable")?;
+                if page.as_ref().is_some_and(|p| {
+                    p.actor != actor
+                        || p.started.elapsed() >= Duration::from_secs(60)
+                        || p.session.action_epoch != local.action_epoch
+                        || p.session.generation
+                            != state.connection_generation.load(Ordering::SeqCst)
+                        || local.locked
+                        || !local.connected
+                }) {
+                    *page = None;
+                }
+                page.as_ref()
+                    .filter(|p| p.delivery.load(Ordering::SeqCst) == 1)
+                    .map(|p| {
+                        let mut view = p.view.clone();
+                        view.remaining_ms =
+                            60_000u64.saturating_sub(p.started.elapsed().as_millis() as u64);
+                        view
+                    })
+            },
+        })
+    })
+    .await
+    .map_err(|_| "Action status coordinator stopped")?
+}
+fn proof(app: &tauri::AppHandle) -> Result<ManagementProof, String> {
+    let state = app.state::<Runtime>();
+    let local = state.local.lock().map_err(|_| "Local state unavailable")?;
+    state
+        .setup
+        .management_proof(&local, state.connection_generation.load(Ordering::SeqCst))
+}
+#[tauri::command]
+pub async fn inspect_prompt_surface(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    panel: Uuid,
+    alias: Uuid,
+    revision: Uuid,
+) -> Result<avesra_core::workflows::PromptDiscovery, String> {
+    visible(&window)?;
+    current(&app, panel)?;
+    let guard = app
+        .state::<Runtime>()
+        .tasks
+        .reader
+        .clone()
+        .try_lock_owned()
+        .map_err(|_| "Native inspection is busy")?;
+    tauri::async_runtime::spawn(async move {
+        let _guard = guard;
+        let actor = crate::owner::current_actor(&app).await?;
+        let authorization = authorize(app.clone(), panel, actor, None)?;
+        let receiver = app
+            .state::<Runtime>()
+            .effects
+            .probe_prompt(actor, alias, revision, authorization)
+            .map_err(|_| "Native inspection worker busy")?;
+        let observed = receive(receiver).await?;
+        let mut final_check = authorize(app, panel, actor, None)?;
+        final_check().map_err(|_| "Inspection context changed")?;
+        Ok(observed)
+    })
+    .await
+    .map_err(|_| "Inspection coordinator stopped")?
+}
+fn authorize(
+    app: tauri::AppHandle,
+    panel: Uuid,
+    actor: Uuid,
+    proof: Option<ManagementProof>,
+) -> Result<avesra_windows::effects::CatalogAuthorization, String> {
+    let directory = app
+        .path()
+        .app_data_dir()
+        .map_err(|_| "Owner directory unavailable")?;
+    Ok(Box::new(move || {
+        let state = app.state::<Runtime>();
+        let _owner = state
+            .owner_setup
+            .try_lock()
+            .map_err(|_| ErrorCode::Unavailable)?;
+        if current(&app, panel).is_err()
+            || !crate::owner::matches_actor(&directory, actor)
+            || proof
+                .as_ref()
+                .is_some_and(|proof| !proof.current(&app.state::<Runtime>()))
+        {
+            return Err(ErrorCode::Stale);
+        }
+        Ok(())
+    }))
+}
+#[tauri::command]
+pub async fn grant_app_action(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    panel: Uuid,
+    alias: Uuid,
+    revision: Uuid,
+) -> Result<ActionSnapshot, String> {
+    visible(&window)?;
+    current(&app, panel)?;
+    grant(app, panel, Selection::Application { alias, revision }).await
+}
+#[tauri::command]
+pub async fn grant_browser_read_action(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    panel: Uuid,
+    reference: avesra_contracts::browser::ScopeRef,
+) -> Result<ActionSnapshot, String> {
+    visible(&window)?;
+    current(&app, panel)?;
+    let guard = app
+        .state::<Runtime>()
+        .tasks
+        .management
+        .clone()
+        .try_lock_owned()
+        .map_err(|_| "Permission management is busy")?;
+    tauri::async_runtime::spawn(async move {
+        let _guard = guard;
+        let actor = crate::owner::current_actor(&app).await?;
+        let directory = app
+            .path()
+            .app_data_dir()
+            .map_err(|_| "Owner directory unavailable")?;
+        let path = directory.join("browser-scopes.db");
+        let read_path = path.clone();
+        let scope = tokio::task::spawn_blocking(move || {
+            avesra_core::browser_scopes::Store::open_read_only(&read_path)?.get(
+                avesra_contracts::browser::Id::new(actor)?,
+                reference.id,
+                reference.revision,
+            )
+        })
+        .await
+        .map_err(|_| "Scope reader stopped")?
+        .map_err(|_| "Saved browser scope changed")?;
+        let mut authorization = authorize(app.clone(), panel, actor, Some(proof(&app)?))?;
+        let expected = scope.clone();
+        let receiver =
+            app.state::<Runtime>()
+                .effects
+                .actions(ActionManagement::Grant {
+                    actor,
+                    selection: Selection::BrowserRead {
+                        scope: Box::new(scope),
+                    },
+                    authorize: Box::new(move || {
+                        authorization()?;
+                        let current = avesra_core::browser_scopes::Store::open_read_only(&path)?
+                            .get(expected.actor, expected.id, expected.revision)?;
+                        if current != expected {
+                            return Err(ErrorCode::Stale);
+                        }
+                        authorization()
+                    }),
+                })
+                .map_err(|_| "Permission worker busy")?;
+        publish(&app, panel, actor, receive(receiver).await?)
+    })
+    .await
+    .map_err(|_| "Permission coordinator stopped")?
+}
+#[tauri::command]
+pub async fn grant_volume_action(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    panel: Uuid,
+    endpoint: String,
+) -> Result<ActionSnapshot, String> {
+    visible(&window)?;
+    current(&app, panel)?;
+    grant(app, panel, Selection::Volume { endpoint }).await
+}
+#[tauri::command]
+pub async fn grant_diagnostic_action(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    panel: Uuid,
+    catalog: avesra_core::diagnostics::Catalog,
+) -> Result<ActionSnapshot, String> {
+    visible(&window)?;
+    current(&app, panel)?;
+    grant(app, panel, Selection::Diagnostic { catalog }).await
+}
+#[tauri::command]
+pub async fn bind_prompt_project(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    panel: Uuid,
+    alias: Uuid,
+    revision: Uuid,
+    choices: avesra_core::workflows::BindingChoices,
+) -> Result<ActionSnapshot, String> {
+    visible(&window)?;
+    current(&app, panel)?;
+    let guard = app
+        .state::<Runtime>()
+        .tasks
+        .management
+        .clone()
+        .try_lock_owned()
+        .map_err(|_| "Project setup is busy")?;
+    tauri::async_runtime::spawn(async move {
+        let _guard = guard;
+        let actor = crate::owner::current_actor(&app).await?;
+        let authorize = authorize(app.clone(), panel, actor, Some(proof(&app)?))?;
+        let receiver = app
+            .state::<Runtime>()
+            .effects
+            .actions(ActionManagement::BindPrompt {
+                actor,
+                alias,
+                revision,
+                choices,
+                authorize,
+            })
+            .map_err(|_| "Project setup worker busy")?;
+        publish(&app, panel, actor, receive(receiver).await?)
+    })
+    .await
+    .map_err(|_| "Project setup coordinator stopped")?
+}
+async fn grant(
+    app: tauri::AppHandle,
+    panel: Uuid,
+    selection: Selection,
+) -> Result<ActionSnapshot, String> {
+    let guard = app
+        .state::<Runtime>()
+        .tasks
+        .management
+        .clone()
+        .try_lock_owned()
+        .map_err(|_| "Permission management is busy")?;
+    tauri::async_runtime::spawn(async move {
+        let _guard = guard;
+        let actor = crate::owner::current_actor(&app).await?;
+        current(&app, panel)?;
+        if let Selection::Application { alias, revision } = &selection {
+            let receiver = app
+                .state::<Runtime>()
+                .effects
+                .actions(ActionManagement::Read { actor })
+                .map_err(|_| "Application identity reader busy")?;
+            let observed = receive(receiver).await?;
+            if !observed.aliases.iter().any(|v| {
+                v.id == *alias && v.revision == *revision && v.selected_by == actor && v.available
+            }) {
+                return Err("Saved application changed; refresh permissions".into());
+            }
+        }
+        if let Selection::Volume { endpoint } = &selection {
+            let endpoint = endpoint.clone();
+            let found = tokio::task::spawn_blocking(move || {
+                avesra_windows::audio_devices().map(|devices| {
+                    devices
+                        .into_iter()
+                        .any(|d| d.direction == "output" && d.id == endpoint)
+                })
+            })
+            .await
+            .map_err(|_| "Output reader stopped")?
+            .map_err(|_| "Output devices unavailable")?;
+            if !found {
+                return Err("Select a currently available output".into());
+            }
+        }
+        current(&app, panel)?;
+        let authorization = authorize(app.clone(), panel, actor, Some(proof(&app)?))?;
+        let receiver = app
+            .state::<Runtime>()
+            .effects
+            .actions(ActionManagement::Grant {
+                actor,
+                selection,
+                authorize: authorization,
+            })
+            .map_err(|_| "Permission worker busy")?;
+        let snapshot = receive(receiver).await?;
+        publish(&app, panel, actor, snapshot)
+    })
+    .await
+    .map_err(|_| "Permission coordinator stopped")?
+}
+#[tauri::command]
+pub async fn change_private_memory(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    panel: Uuid,
+    change: avesra_core::memory::Change,
+) -> Result<ActionSnapshot, String> {
+    visible(&window)?;
+    current(&app, panel)?;
+    let guard = app
+        .state::<Runtime>()
+        .tasks
+        .management
+        .clone()
+        .try_lock_owned()
+        .map_err(|_| "Memory management is busy")?;
+    tauri::async_runtime::spawn(async move {
+        let _guard = guard;
+        let actor = crate::owner::current_actor(&app).await?;
+        current(&app, panel)?;
+        let mut authorize = authorize(app.clone(), panel, actor, Some(proof(&app)?))?;
+        authorize().map_err(|_| "Memory context changed")?;
+        let receiver = app
+            .state::<Runtime>()
+            .effects
+            .actions(ActionManagement::Memory {
+                actor,
+                change,
+                authorize,
+            })
+            .map_err(|_| "Memory worker busy")?;
+        publish(&app, panel, actor, receive(receiver).await?)
+    })
+    .await
+    .map_err(|_| "Memory coordinator stopped")?
+}
+#[tauri::command]
+pub async fn revoke_action_permission(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    panel: Uuid,
+    id: Uuid,
+) -> Result<ActionSnapshot, String> {
+    visible(&window)?;
+    current(&app, panel)?;
+    let guard = app
+        .state::<Runtime>()
+        .tasks
+        .management
+        .clone()
+        .try_lock_owned()
+        .map_err(|_| "Permission management is busy")?;
+    tauri::async_runtime::spawn(async move {
+        let _guard = guard;
+        let actor = crate::owner::current_actor(&app).await?;
+        current(&app, panel)?;
+        let mut authorization = authorize(app.clone(), panel, actor, Some(proof(&app)?))?;
+        authorization().map_err(|_| "Permission context changed")?;
+        let receiver = app
+            .state::<Runtime>()
+            .effects
+            .actions(ActionManagement::Revoke {
+                actor,
+                id,
+                authorize: authorization,
+            })
+            .map_err(|_| "Permission worker busy")?;
+        let snapshot = receive(receiver).await?;
+        publish(&app, panel, actor, snapshot)
+    })
+    .await
+    .map_err(|_| "Permission coordinator stopped")?
+}
+#[tauri::command]
+pub async fn cancel_action_task(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    panel: Uuid,
+    task: Uuid,
+) -> Result<(), String> {
+    visible(&window)?;
+    current(&app, panel)?;
+    let guard = app
+        .state::<Runtime>()
+        .tasks
+        .cancellation
+        .clone()
+        .try_lock_owned()
+        .map_err(|_| "Action management is busy")?;
+    tauri::async_runtime::spawn(async move {
+        let _guard = guard;
+        let actor = crate::owner::current_actor(&app).await?;
+        current(&app, panel)?;
+        let target = {
+            let state = app.state::<Runtime>();
+            let slot = state
+                .tasks
+                .panel
+                .lock()
+                .map_err(|_| "Action panel unavailable")?;
+            slot.as_ref()
+                .filter(|p| p.id == panel)
+                .and_then(|p| {
+                    p.targets
+                        .iter()
+                        .find(|(id, target)| *id == task && target.actor == actor)
+                })
+                .map(|(_, target)| *target)
+                .ok_or("Refresh the exact task before cancelling")?
+        };
+        let authorization = authorize(app.clone(), panel, actor, None)?;
+        let receiver = app
+            .state::<Runtime>()
+            .effects
+            .cancel_conversation(
+                actor,
+                target.source,
+                target.id,
+                target.revision,
+                authorization,
+            )
+            .map_err(|_| "Cancellation unavailable; refresh task status")?;
+        receive(receiver).await?;
+        Ok(())
+    })
+    .await
+    .map_err(|_| "Cancellation coordinator stopped")?
+}
+
+/// A real accepted producer transfers its one handle here, before planner claim.
+/// Neither history lookup nor IPC can construct this input.
+pub enum AcceptedResult {
+    Action(avesra_core::execution::ExecutionReceipt),
+    Reply(Box<PublishedReply>),
+    NeedsInput { message: String },
+}
+struct AcceptedContext {
+    target: CancellationTarget,
+    binding: actors::Binding,
+    session: connection::SessionIdentity,
+    capture_epoch: u64,
+    withdrawn: Arc<AtomicBool>,
+    delivery: Arc<AtomicU8>,
+    started: Instant,
+}
+impl AcceptedContext {
+    fn dispatch(&self) -> DispatchSession {
+        DispatchSession {
+            actor_id: self.target.actor,
+            device_id: self.target.source.device,
+            session_id: self.target.source.session,
+            capture_epoch: self.capture_epoch,
+            action_epoch: self.session.action_epoch,
+            active: true,
+        }
+    }
+    fn check(&self, app: &tauri::AppHandle) -> Result<(), ErrorCode> {
+        let state = app.state::<Runtime>();
+        let local = state.local.lock().map_err(|_| ErrorCode::Unavailable)?;
+        if self.withdrawn.load(Ordering::SeqCst)
+            || self.target.source.device != self.session.device
+            || self.target.source.session != self.session.id
+            || local.locked
+            || !local.connected
+            || !local.enrolled
+            || local.settings.paused
+            || local.action_epoch != self.session.action_epoch
+            || state.connection_generation.load(Ordering::SeqCst) != self.session.generation
+            || state
+                .acknowledged_session
+                .lock()
+                .map_err(|_| ErrorCode::Unavailable)?
+                .is_none_or(|s| {
+                    s.id != self.session.id
+                        || s.device != self.session.device
+                        || s.action_epoch != self.session.action_epoch
+                        || s.generation != self.session.generation
+                        || s.server_fingerprint != self.session.server_fingerprint
+                })
+        {
+            return Err(ErrorCode::Stale);
+        }
+        Ok(())
+    }
+    fn prepare(&self, app: &tauri::AppHandle) -> Result<(), ErrorCode> {
+        if self.started.elapsed() >= Duration::from_secs(5) {
+            return Err(ErrorCode::Expired);
+        }
+        self.current_owner(app)
+    }
+    fn current_owner(&self, app: &tauri::AppHandle) -> Result<(), ErrorCode> {
+        self.check(app)?;
+        let state = app.state::<Runtime>();
+        let _owner = state
+            .owner_setup
+            .try_lock()
+            .map_err(|_| ErrorCode::Unavailable)?;
+        let path = app
+            .path()
+            .app_data_dir()
+            .map_err(|_| ErrorCode::Unavailable)?;
+        crate::planner::paired_owner(&path, &self.binding, self.session)
+            .map_err(|_| ErrorCode::Stale)?;
+        self.check(app)
+    }
+}
+async fn execute_accepted(
+    app: &tauri::AppHandle,
+    context: Arc<AcceptedContext>,
+    step: Uuid,
+    target: avesra_core::action_permissions::TaskTarget,
+    proposal: Option<PublishedReply>,
+) -> Result<AcceptedResult, String> {
+    let check = || {
+        if let Some(reply) = &proposal {
+            reply.remaining_ms()?;
+            context.current_owner(app)
+        } else {
+            context.prepare(app)
+        }
+    };
+    check().map_err(|_| "Task context changed; inspect durable task status")?;
+    let _ = project(app, context.target.actor).await;
+    check().map_err(|_| "Task queued but context changed; inspect task status")?;
+    let state = app.state::<Runtime>();
+    let consumer =
+        if let avesra_core::action_permissions::TaskTarget::BrowserRead { scope } = target {
+            let expected = context.clone();
+            let owned_app = app.clone();
+            let origin = scope.origin.as_str().to_owned();
+            Some(avesra_windows::effects::ReadConsumer {
+                scope: *scope,
+                consume: Box::new(move |borrowed| {
+                    expected.current_owner(&owned_app)?;
+                    let reply = borrowed.consume()?;
+                    retain_page(&owned_app, &expected, step, origin, reply)
+                        .map_err(|_| ErrorCode::Stale)
+                }),
+            })
+        } else {
+            None
+        };
+    let waiter = state
+        .effects
+        .submit_with_withdrawal(
+            step,
+            context.dispatch(),
+            consumer,
+            context.withdrawn.clone(),
+        )
+        .map_err(|_| "Task queued but execution unavailable; inspect task status")?;
+    let cancellation = waiter.cancellation();
+    {
+        let mut local = state.local.lock().map_err(|_| "Local state unavailable")?;
+        local.active_task = true;
+        state.publish(&local);
+        let _ = app.emit("runtime-state", local.clone());
+    }
+    let _working = Working {
+        app: app.clone(),
+        epoch: context.session.action_epoch,
+    };
+    let mut result = tokio::task::spawn_blocking(move || {
+        loop {
+            match waiter.receive(Duration::from_secs(1)) {
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                value => return value,
+            }
+        }
+    });
+    loop {
+        tokio::select! {
+            value = &mut result => {
+                let _ = project(app, context.target.actor).await;
+                let receipt=value.map_err(|_| "Effect reader stopped")?
+                    .map_err(|_| "Effect owner stopped")?
+                    .map_err(|e| format!("Effect unresolved ({e:?}); inspect task status"))?;
+                return Ok(AcceptedResult::Action(receipt));
+            }
+            _ = tokio::time::sleep(Duration::from_millis(25)) => {
+                if context.check(app).is_err() || proposal.as_ref().is_some_and(|reply| reply.remaining_ms().is_err()) {
+                    cancellation.cancel();
+                }
+            }
+        }
+    }
+}
+fn retain_page(
+    app: &tauri::AppHandle,
+    context: &AcceptedContext,
+    step: Uuid,
+    origin: String,
+    reply: avesra_contracts::browser::reading::Reply,
+) -> Result<(), String> {
+    use avesra_contracts::browser::reading::Outcome;
+    let source = &reply.context;
+    if source.actor.uuid() != context.target.actor
+        || source.source.device.uuid() != context.session.device
+        || source.source.session.uuid() != context.session.id
+        || source.source.action_epoch != context.session.action_epoch
+        || source.source.capture_epoch != context.capture_epoch
+        || source.step.uuid() != step
+    {
+        return Err("Page result source changed".into());
+    }
+    let (blocks, truncated, excluded_content) = match reply.outcome {
+        Outcome::Excerpt { excerpt } => {
+            (excerpt.blocks, excerpt.truncated, excerpt.excluded_content)
+        }
+        Outcome::Empty => (Vec::new(), false, false),
+        _ => return Err("Page observation incomplete".into()),
+    };
+    // Only the synchronous actual borrowed consumer calls this function. Its
+    // approved scope and validated current read supply exact origin provenance.
+    let state = app.state::<Runtime>();
+    let local = state.local.lock().map_err(|_| "Local state unavailable")?;
+    if context.withdrawn.load(Ordering::SeqCst)
+        || context.delivery.load(Ordering::SeqCst) != 0
+        || local.action_epoch != context.session.action_epoch
+        || local.locked
+        || !local.connected
+        || state.connection_generation.load(Ordering::SeqCst) != context.session.generation
+    {
+        return Err("Page publication withdrawn".into());
+    }
+    let id = Uuid::new_v4();
+    let mut page = state
+        .tasks
+        .page
+        .lock()
+        .map_err(|_| "Page result unavailable")?;
+    if context.delivery.load(Ordering::SeqCst) != 0 {
+        return Err("Page caller was lost".into());
+    }
+    *page = Some(PageResult {
+        actor: context.target.actor,
+        session: context.session,
+        id,
+        started: Instant::now(),
+        delivery: context.delivery.clone(),
+        dispatch: source.dispatch.uuid(),
+        action_revision: source.action_revision.uuid(),
+        view: PageView {
+            task: source.task.uuid(),
+            origin,
+            blocks,
+            truncated,
+            excluded_content,
+            remaining_ms: 60_000,
+        },
+    });
+    drop(page);
+    let mut timer = state
+        .tasks
+        .page_timer
+        .lock()
+        .map_err(|_| "Page timer unavailable")?;
+    if let Some(previous) = timer.take() {
+        previous.abort();
+    }
+    let owned_app = app.clone();
+    *timer = Some(tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        let state = owned_app.state::<Runtime>();
+        if let Ok(mut page) = state.tasks.page.lock()
+            && page.as_ref().is_some_and(|p| p.id == id)
+        {
+            *page = None;
+        }
+    }));
+    Ok(())
+}
+struct Withdraw(Option<Arc<AtomicBool>>);
+/// Distinct from worker cancellation: only polling the original accepted future
+/// to its successful receipt may make its pending display result visible.
+struct PageDelivery {
+    app: tauri::AppHandle,
+    marker: Arc<AtomicU8>,
+}
+impl Drop for PageDelivery {
+    fn drop(&mut self) {
+        if self
+            .marker
+            .compare_exchange(0, 2, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            let state = self.app.state::<Runtime>();
+            if let Ok(mut page) = state.tasks.page.lock()
+                && page
+                    .as_ref()
+                    .is_some_and(|p| Arc::ptr_eq(&p.delivery, &self.marker))
+            {
+                *page = None;
+            }
+        }
+    }
+}
+impl Drop for Withdraw {
+    fn drop(&mut self) {
+        if let Some(signal) = &self.0 {
+            signal.store(true, Ordering::SeqCst);
+        }
+    }
+}
+struct Working {
+    app: tauri::AppHandle,
+    epoch: u64,
+}
+impl Drop for Working {
+    fn drop(&mut self) {
+        let state = self.app.state::<Runtime>();
+        if let Ok(mut local) = state.local.lock()
+            && local.action_epoch == self.epoch
+        {
+            local.active_task = false;
+            state.publish(&local);
+            let _ = self.app.emit("runtime-state", local.clone());
+        }
+    }
+}
+pub async fn accepted(
+    app: tauri::AppHandle,
+    turn: DurableTurn,
+    dispatch: DispatchSession,
+    binding: actors::Binding,
+) -> Result<AcceptedResult, String> {
+    let started = Instant::now();
+    let withdrawn = Arc::new(AtomicBool::new(false));
+    let delivery = Arc::new(AtomicU8::new(0));
+    let delivered = PageDelivery {
+        app: app.clone(),
+        marker: delivery.clone(),
+    };
+    let mut caller = Withdraw(Some(withdrawn.clone()));
+    let guard = app
+        .state::<Runtime>()
+        .tasks
+        .accepted
+        .clone()
+        .try_lock_owned()
+        .map_err(|_| "Accepted action coordinator is busy")?;
+    let result = tauri::async_runtime::spawn(async move {
+        let _guard=guard;
+        let state=app.state::<Runtime>();
+        let session=state.acknowledged_session.lock().map_err(|_|"Session unavailable")?.ok_or("Session unavailable")?;
+        if dispatch.actor_id!=turn.actor()||dispatch.device_id!=turn.source().device||dispatch.session_id!=turn.source().session||dispatch.device_id!=session.device||dispatch.session_id!=session.id||dispatch.action_epoch!=session.action_epoch||dispatch.capture_epoch==0||!dispatch.active||binding.actor!=turn.actor()||binding.device!=session.device||binding.revoked { return Err("Accepted action provenance changed".into()); }
+        binding.validate().map_err(|_|"Invalid registration")?;
+        let context=Arc::new(AcceptedContext {target:CancellationTarget {actor:turn.actor(),source:turn.source(),id:turn.id(),revision:turn.revision()},binding,session,capture_epoch:dispatch.capture_epoch,withdrawn,delivery,started});
+        context.prepare(&app).map_err(|_|"Accepted action context changed")?;
+        let path=app.path().app_data_dir().map_err(|_|"Owner directory unavailable")?;
+        let pairing=crate::planner::paired_owner(&path,&context.binding,session)?;
+        let status_request=actors::Request { version:actors::VERSION,request:Uuid::new_v4(),attempt:Uuid::new_v4(),session:session.id,action_epoch:session.action_epoch,command:actors::Command::Status };
+        let remaining=Duration::from_secs(5).saturating_sub(started.elapsed());
+        let status=tokio::time::timeout(remaining,connection::actor_operation(&pairing,&status_request)).await.map_err(|_|"Accepted action registration check expired")??;
+        if status.binding.as_ref()!=Some(&context.binding) { return Err("Original actor registration changed".into()); }
+        context.prepare(&app).map_err(|_|"Accepted action context changed")?;
+        let expected=context.clone(); let owner_app=app.clone();
+        let request=ExactTaskRequest::new(turn,dispatch).map_err(|_|"Accepted action request invalid")?;
+        let receiver=state.effects.accept_action_task(request,Box::new(move |authority| {
+            if authority.turn!=expected.target.id||authority.turn_revision!=expected.target.revision||authority.session.actor_id!=expected.target.actor||authority.session.capture_epoch!=expected.capture_epoch||authority.session.action_epoch!=expected.session.action_epoch { return Err(ErrorCode::Stale); }
+            expected.prepare(&owner_app)
+        })).map_err(|_|"Action resolver busy")?;
+        let resolution=receive(receiver).await?;
+        context.prepare(&app).map_err(|_|"Accepted action context changed; inspect durable task status")?;
+        match resolution {
+            TaskResolution::Linked(task) => execute_accepted(&app, context, task.step, task.target, None).await,
+            TaskResolution::NeedsInput(turn) => {
+                let expected=context.clone(); let owner_app=app.clone();
+                let request=PlannerRequest::new(turn,context.dispatch(),context.binding.clone()).map_err(|_|"Planner request unavailable")?.with_withdrawal(context.withdrawn.clone());
+                let receiver=state.effects.claim_planner(request,Box::new(move |authority| {
+                    if authority.context.turn!=expected.target.id||authority.context.turn_revision!=expected.target.revision||authority.binding!=&expected.binding { return Err(ErrorCode::Stale); }
+                    expected.prepare(&owner_app)
+                })).map_err(|_|"Planner owner busy")?;
+                let claim=receive(receiver).await?;
+                if avesra_core::notifications::question_kind(&claim.transport().map_err(|_|"Accepted event question expired")?.text).is_some() {
+                    let expected=context.clone();let owner_app=app.clone();
+                    let receiver=state.effects.event_answer(claim,Box::new(move |authority|{
+                        if authority.context.turn!=expected.target.id||authority.context.turn_revision!=expected.target.revision||authority.binding!=&expected.binding{return Err(ErrorCode::Stale);}
+                        expected.prepare(&owner_app)
+                    })).map_err(|_|"Event answer writer busy")?;
+                    let stored=receive(receiver).await?;
+                    context.check(&app).map_err(|_|"Event answer withdrawn")?;
+                    let local=state.local.lock().map_err(|_|"Local state unavailable")?;
+                    if local.action_epoch!=context.session.action_epoch||local.locked||!local.connected{return Err("Event answer context changed".into());}
+                    let reply=state.effects.publish_planner(stored).map_err(|_|"Event answer publication withdrawn")?;
+                    return Ok(AcceptedResult::Reply(Box::new(reply)));
+                }
+                let future=crate::planner::answer(app.clone(),claim);
+                tokio::pin!(future);
+                loop {
+                    tokio::select! {
+                        result=&mut future=>{
+                            let reply=result?;
+                            if matches!(reply.response(), avesra_contracts::planner::Response::Proposal { .. }) {
+                                let Some(task)=reply.proposed_task() else {
+                                    return Ok(AcceptedResult::NeedsInput { message: "Choose one current application alias or speaker output and grant its action in Settings before asking again.".into() });
+                                };
+                                let step=task.step;
+                                let target=task.target.clone();
+                                return execute_accepted(&app, context, step, target, Some(reply)).await;
+                            }
+                            return Ok(AcceptedResult::Reply(Box::new(reply)));
+                        },
+                        _=tokio::time::sleep(Duration::from_millis(25))=>context.check(&app).map_err(|_|"Accepted planning withdrawn")?,
+                    }
+                }
+            }
+        }
+    }).await.map_err(|_|"Accepted task coordinator stopped; inspect durable status")?;
+    // A successful normal reply transfers its source owner to the caller. All
+    // failure/action/clarification paths keep ordinary withdrawal on return.
+    if matches!(&result, Ok(AcceptedResult::Reply(_))) {
+        caller.0.take();
+    }
+    if let Ok(AcceptedResult::Action(receipt)) = &result
+        && receipt.outcome == avesra_contracts::Outcome::Success
+    {
+        let state = delivered.app.state::<Runtime>();
+        let local = state.local.lock().map_err(|_| "Local state unavailable")?;
+        let page = state
+            .tasks
+            .page
+            .lock()
+            .map_err(|_| "Page result unavailable")?;
+        if page.as_ref().is_some_and(|p| {
+            Arc::ptr_eq(&p.delivery, &delivered.marker)
+                && p.dispatch == receipt.dispatch_id
+                && p.action_revision == receipt.action_revision
+                && p.session.action_epoch == local.action_epoch
+                && p.session.generation == state.connection_generation.load(Ordering::SeqCst)
+                && local.connected
+                && !local.locked
+        }) {
+            let _ = delivered
+                .marker
+                .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst);
+        }
+    }
+    result
+}

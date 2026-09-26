@@ -1,6 +1,45 @@
 # Paired actor registration and accepted planner/reply transport
 
-This slice follows the durable native conversation and exact-app producer. It cannot activate voice: there is still no qualified runtime profile or current-profile producer. The normal reasoning/TTS entry point must remain separate from generated-voice setup preview. A model, browser page, extension, frontend flag or received transcript cannot create a native accepted turn.
+## Typed action proposal continuation
+
+Planner wire version 2 accepts strict internally tagged results: `answer` and
+`needs_input` carry `text`; `proposal` carries one typed `action`. Supported
+proposals are `launch_app` with a bounded logical `alias`, or `set_volume` with an
+integer `percent` from 0 through 100 for the owner's configured speakers target.
+The model receives these fixed supported operation shapes, never executable paths,
+commands, grant IDs, approval values or claimed outcomes. Unknown fields/operations,
+invalid arguments and incomplete model terminals reject the whole result.
+
+A proposal is untrusted task data, not an answer, a grant or completed execution.
+The original durable planner worker alone may resolve its alias/target against
+current native catalog and explicit owner grants and atomically link it to that
+accepted conversation. Missing/ambiguous/revoked scope requires clarification;
+neither a guessed target nor a new accepted turn may be constructed from it.
+The original actor/device/session/action epoch, request lifetime and cancellation
+ownership survive the handoff. The existing executor still revalidates immediately
+before effects and reports its actual result or uncertainty. Proposal text is
+never normal speech, and native clarification must not alter the server's original
+response identity or claim an effect occurred. Legacy stored conversations remain
+inspectable through strict storage compatibility; no version-1 wire fallback or
+replay of historical proposals is permitted.
+
+Entry points: `/planner`, `/planner/cancel`, exact tokenizer admission and model
+result parsing use version 2. Native `finish_planner` owns durable proposal
+resolution and the existing accepted coordinator owns dispatch. `/normal-speech`
+explicitly rejects proposal responses; Settings previews are unaffected. This is
+source integration, not reasoning deployment or owner qualification evidence.
+
+This slice follows the durable native conversation and exact-app producer. It cannot itself qualify voice: accepted input still requires the native current-profile producer and its actual qualification evidence. The normal reasoning/TTS entry point remains separate from generated-voice setup preview. A model, browser page, extension, frontend flag or received transcript cannot create a native accepted turn.
+
+Current reasoning source uses the version2 observed exact-container adapter in
+[reasoning-adapter.md](reasoning-adapter.md). Explicit configuration opens the
+private driver; every accepted request still requires a controlled new load,
+current artifact/process/routing observations and exact tokenizer admission before
+its durable model job begins. Missing configuration or evidence remains unavailable.
+Native planner publication and the separate normal speech handoff are implemented
+source paths, with accepted-response/audio runtime proof still outstanding. The
+historical checkpoint sections below describe earlier implementation boundaries;
+their absent-route/producer statements do not override these current contracts.
 
 ## Explicit native actor registration
 
@@ -30,7 +69,7 @@ The planner sees the accepted user text and only separately authorized context. 
 
 The native worker accepts a correlated result only for the actual current stored planner claim and action context, validates its exact source and fixed deadline, then stores an immutable reply revision under that accepted turn. No response received after cancellation may create a replacement turn/reply. A question with no tools remains a legitimate conversation; it is not converted into an empty AcceptedIntent. Task outcome speech must instead reference native observed finalization, preserving UnknownEffect explicitly.
 
-Only an opaque stored reply handle may enter normal TTS. The public synthesis stream binds registered actor, accepted turn/reply/request revision, current paired session, independent playback epoch and exact selected generated-voice identity including audio and metadata digests. The native companion must recheck reply state and current output authority before opening the device lease. No arbitrary setup-preview text endpoint is added. Deafen/Stop/pause/lock/disconnect/output device or voice changes withdraw output; mic mute alone preserves it.
+Only an opaque stored reply handle may enter normal TTS. The public synthesis stream binds registered actor, accepted turn/reply/request revision, current paired session, independent playback epoch and exact selected generated-voice identity including audio and metadata digests. The native companion must recheck reply state and current output authority before opening the device lease. The explicitly requested editable Settings voice test is separately governed by [generated-voices.md](generated-voices.md); its bounded typed text grants no accepted-reply or planner authority. Deafen/Stop/pause/lock/disconnect/output device or voice changes withdraw output; mic mute alone preserves it.
 
 Keep private streaming TTS ownership and fixed synthesis deadline, native startup/prebuffer headroom, paced packet age, sequence/utterance replay checks, final complete/truncated distinction and submitted-versus-heard drain semantics. The preview transport primitives may be reused internally only after this separate accepted-reply admission. Nothing in this contract asserts a live actor registration, planner readiness, reply, generated voice or audible output.
 
@@ -121,3 +160,16 @@ The existing native ledger owner exposes bounded claim/finalize queue commands. 
 Schema checks validate exact SQL, unique indexes/column mapping and attached-object counts before writes. Claims re-read the complete accepted source, reject linked tasks/prior claims, store/read back their immutable request and transition planning in one transaction. Finalization verifies the persisted exact request, stores/readbacks a unique immutable reply, and transitions answered or waiting_input. Original monotonic budget and withdrawal are checked before/after callback and after commit: an overdue/withdrawn post-commit result cannot yield a new authority handle, although its actual committed history remains recoverable. Pending cancellation is transactional; restart suspends pending claims without retry. Cancelling waiting_input retains its already-stored reply, and answered rows are not rewritten or erased. A later normal-TTS lease must withdraw output independently.
 
 This helper checkpoint has no public planner route, no native accepted-transcript command, no qualified profile/current-admission producer, no configured reasoning job, and no normal playback caller. No SQLite migration, transcript, model request or media operation was executed while building the source.
+# Models inspection
+
+The Models conversation card performs a read-only inspection through the paired
+directedness adapter's actual controlled-load observer and tokenizer check. Native
+Settings ownership supplies the current session, selected microphone, owner and
+capture/action epochs; there is no frontend model selector or arbitrary inference
+input. One retained native reader bounds preparation and the original 30-second
+operation. Hiding Settings, changing owner/session/device controls or losing the
+paired session withdraws publication. Successful inspection displays the observed
+artifact and engine incarnation as loaded but unqualified, including whether the
+complete quality fingerprint was available. It does not grant voice/action
+permission, run inference, load a model or alter runtime settings. Unavailable or
+failed inspection remains unverified; vision remains explicitly not integrated.
