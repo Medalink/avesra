@@ -78,7 +78,7 @@ Match existing typed Rust boundaries, bounded queues, native-authoritative state
 
 Name the feature **Voice atmosphere** in product UI. Explain it once as "Voice character and background sound."
 
-1. One master On/Off toggle in Audio & Voice and a matching one-click overlay control. The overlay button remains discoverable while enabled, has a tooltip and `aria-pressed`, and is keyboard accessible. Both show the same native state.
+1. One master On/Off toggle in Audio & Voice. The compact overlay has no atmosphere control (owner decision, 2026-09-26); Settings is the only place to turn it on or off.
 2. Off crossfades within 30 ms to the dry voice at the current master volume, removes the background and effect returns, then clears their state. It never cancels or restarts the sentence. Off while idle never opens an endpoint.
 3. Deafen/Stop/Pause/lock/disconnect remain immediate output invalidation: silence every lane, discard tails and never wait for the cosmetic fade. Mic mute alone continues to preserve valid output authority.
 4. Exactly two presets: **Digital** (default; resonant synthetic character, spacious effects, quiet atmosphere) and **Human** (warm, close, light transparent processing; background off by default). Higher Character/Space values provide the concert-scale sound within Digital, without a third preset. A preset selects DSP/background parameters; it never changes the selected generated voice. Human cannot turn an inherently synthetic source into a different natural speaker; it preserves the source with minimal coloration.
@@ -267,3 +267,7 @@ Future AEC, speech segmentation, a different output backend, reference-preview c
 
 - Owner requested atmosphere On by default, with the approved Digital sound. `SoundSettings::default()` now sets `enabled: true`. Settings without a `sound` field adopt this default through serde; a stored `enabled` value (On or Off) is preserved.
 - The overlay's atmosphere button now uses the shared `av-iconbtn-accent` style (Ruby) while on, instead of `av-iconbtn-on` (amber). Amber stays reserved for input that is off (mute, deafen), matching the design mockups.
+
+### Revision 12: atmosphere button removed from the overlay
+
+- Owner requested removing the atmosphere button from the compact overlay. The master switch in Audio & Voice is now the only control; the overlay's mute, deafen, settings and hide controls are unchanged. The design mockups match.
