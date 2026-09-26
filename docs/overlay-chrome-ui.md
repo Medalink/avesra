@@ -29,6 +29,14 @@ capture absence from legacy enrollment/readiness flags. Expanded
 request/reply text, task steps, recent events and typed requests are still absent;
 the UI keeps that limitation explicit instead of copying prototype content.
 
+Installed `7aa1b8e` expanded-overlay evidence showed the same runtime reason in
+both the introductory paragraph and the status notice. Generic, paused and
+disconnected states now show that reason only in their notice. The introductory
+paragraph remains for actual speaking/preview state and explicit microphone-check
+or enrollment activity, whose separate stop instructions remain visible. This
+only changes duplicate rendering; it adds no status flags or native behavior.
+The correction is source-checked; installed confirmation remains a separate step.
+
 Entry points: Overlay shell classes, expanded control classes and existing status
 notice branch only. App expansion, runtime controls and native sizing remain
 unchanged. The owner prohibits tests, fixtures and harnesses; validation is source
