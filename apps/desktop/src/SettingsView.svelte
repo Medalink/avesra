@@ -102,6 +102,24 @@
     if (value.state !== "observed") return "Unavailable";
     return value.health.state === "loaded_unqualified" ? "Loaded · unqualified" : value.health.state === "loading" ? "Loading" : value.health.state === "termination_pending" ? "Stopping" : "Unavailable";
   }
+  const healthStyles = {
+    not_probed: { label: "Not probed", classes: "text-zinc-300 ring-white/20" },
+    not_configured: { label: "Not configured", classes: "border border-dashed border-white/30 text-zinc-300 ring-0" },
+    loading: { label: "Loading", classes: "bg-white/[0.05] text-zinc-200 ring-white/20" },
+    stopping: { label: "Stopping", classes: "text-zinc-200 ring-white/25" },
+    loaded: { label: "Loaded · unqualified", classes: "bg-amber-400/10 text-amber-200 ring-amber-400/40" },
+    unavailable: { label: "Unavailable", classes: "text-zinc-400 ring-zinc-500/60" },
+    incompatible: { label: "Incompatible", classes: "bg-red-500/10 text-red-300 ring-red-500/40" },
+    not_integrated: { label: "Not integrated", classes: "text-zinc-400 ring-white/15" },
+  } as const;
+  function laneStyle(value: LaneObservation | undefined) {
+    if (!value) return healthStyles.not_probed.classes;
+    if (value.state !== "observed") return healthStyles[value.state].classes;
+    return value.health.state === "loaded_unqualified" ? healthStyles.loaded.classes
+      : value.health.state === "loading" ? healthStyles.loading.classes
+      : value.health.state === "termination_pending" ? healthStyles.stopping.classes
+      : healthStyles.unavailable.classes;
+  }
   const speakerStatus = $derived(laneStatus(audioHealth?.speaker));
   const healthContext = $derived(JSON.stringify({
     active: healthActive,
@@ -249,6 +267,7 @@
     if (index === 2) return {
       title: lane[0], description: lane[1], supported: true,
       status: reasoningHealth ? "Loaded · unqualified" : reasoningError ? "Unavailable · unverified" : "Not probed",
+      statusClasses: reasoningHealth ? healthStyles.loaded.classes : reasoningError ? healthStyles.unavailable.classes : healthStyles.not_probed.classes,
       driver: reasoningHealth ? "Controlled reasoning driver" : "Not verified",
       model: reasoningHealth ? "Observed configured artifact" : "Not verified",
       revision: reasoningHealth?.artifact_revision ?? "",
@@ -258,6 +277,7 @@
     return {
       title: lane[0], description: lane[1], supported: !!key,
       status: key ? laneStatus(observation) : index === 2 ? "Not inspected" : "Not integrated",
+      statusClasses: key ? laneStyle(observation) : healthStyles.not_integrated.classes,
       driver: health ? "Dedicated audio service" : observation?.state === "not_configured" ? "Not configured" : key ? "Not verified" : index === 2 ? "Status not integrated" : "Not integrated",
       model: health ? knownModels[health.model_revision] ?? "Configured audio model" : "Not verified",
       revision: health?.model_revision ?? "",
@@ -476,22 +496,27 @@
           </section>
           <Notifications {runtime} />
         {:else if section === "models"}
-          <div class="warning">
-            {voice.label}: {voice.reason}
+          <div class="av-card flex items-start gap-3 p-3.5">
+            <span class="mt-0.5 shrink-0 text-av-400" aria-hidden="true"><Icon name="models" size={16} /></span>
+            <p class="m-0 flex-1 text-[12.5px] leading-[18px] text-zinc-300">Each lane is one job. It uses a <span class="text-zinc-100">driver</span>, a <span class="text-zinc-100">model</span> and a <span class="text-zinc-100">machine</span>. Probe reads the paired Spark's audio and controlled reasoning metadata without running inference. Loaded status does not grant voice or action permission.</p>
+            <button class="av-btn av-btn-secondary av-btn-sm" disabled={!native || !runtime?.connected || runtime?.locked || probing} onclick={refreshHealth}>Probe all</button>
           </div>
-          <div class="flex items-center gap-3">
-            <p class="av-hint flex-1" role="status">{probing ? "Inspecting configured audio and reasoning services…" : healthError || "Audio and controlled reasoning metadata comes from the paired Spark. Probe reads status without running inference."}</p>
-            <button class="av-btn av-btn-secondary av-btn-sm" disabled={!native || !runtime?.connected || runtime?.locked || probing} onclick={refreshHealth}>Refresh status</button>
+          <div class="flex flex-wrap items-center gap-x-2.5 gap-y-1.5" aria-label="Health legend">
+            {#each Object.values(healthStyles) as health}<span class={`av-chip ${health.classes}`}>{health.label}</span>{/each}
           </div>
+          {#if probing || healthError}<div class="flex items-center gap-2.5 bg-white/[0.04] px-3 py-2 text-[12px] text-zinc-200 ring-1 ring-white/10 ring-inset" role="status">
+            {#if probing}<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" class="av-spin shrink-0 text-av-400" aria-hidden="true"><path d="M12 3a9 9 0 1 1-9 9"></path></svg>{/if}
+            <span>{probing ? "Inspecting configured audio and reasoning services…" : healthError}</span>
+          </div>{/if}
           <div class="flex flex-col gap-2">
-            {#each laneCards as lane}<div class="av-card p-3">
+            {#each laneCards as lane}<div class="av-card p-3.5">
                 <div class="flex items-start gap-3">
-                  <div class="flex-1">
-                    <h2>{lane.title}</h2>
-                    <p class="av-hint mt-0.5">{lane.description}</p>
+                  <div class="flex min-w-0 flex-1 flex-col">
+                    <span class="text-[13px] font-medium text-zinc-50">{lane.title}</span>
+                    <span class="av-hint mt-0.5">{lane.description}</span>
                   </div>
                   <span
-                    class="av-chip bg-amber-400/10 text-amber-200 ring-amber-400/25"
+                    class={`av-chip ${lane.statusClasses}`}
                     >{lane.status}</span
                   >
                 </div>
@@ -506,7 +531,7 @@
                   </div>
                   <div class="flex min-w-0 flex-col gap-0.5">
                     <span class="text-[10.5px] text-zinc-400">Machine</span>
-                    <span class="truncate text-[12.5px] text-zinc-200">{lane.machine}</span>
+                    <span class="flex min-w-0 items-center gap-1.5"><span class="truncate text-[12.5px] text-zinc-200">{lane.machine}</span>{#if lane.machine === "Paired Spark"}<span class="av-chip shrink-0 text-zinc-300 ring-white/15">Local</span>{/if}</span>
                   </div>
                   <button class="av-btn av-btn-ghost av-btn-sm" disabled={!lane.supported || !native || !runtime?.connected || runtime?.locked || probing} onclick={refreshHealth}>Probe</button>
                 </div>
