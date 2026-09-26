@@ -24,8 +24,8 @@ already-running registration operation to settle through its existing busy
 notification. The name editor uses the actual parent owner status instead of
 showing an unconditional missing-owner prerequisite. A busy or failed native read remains explicit; there is no timed retry.
 
-The neutral card uses the mock's status dot, 88px/11px score label, blue Profile
-chips, and expanding phrase-list treatment. Listening is readiness/control state,
+The neutral card uses the mock's status dot, 88px/11px score label, literal blue Profile chips (`text-[#c3cdff] ring-[#3a5dd8]/50`) and neutral
+Held-out chips (`text-zinc-300 ring-white/15`), both without a colored background, and expanding phrase-list treatment. Listening is readiness/control state,
 not a measured speaker match. The signal panel remains unavailable and the score
 remains Not measured without a native current-source observation. Completed
 VoiceCheck results remain separate from live activity.
