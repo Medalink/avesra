@@ -30,6 +30,8 @@
       focus-visible:outline-1 focus-visible:outline-offset-1 focus-visible:outline-av-400;
   }
   .av-iconbtn-on { @apply bg-amber-400 text-amber-950 hover:bg-amber-300 hover:text-amber-950 active:bg-amber-500; }
+  /* A feature switched on (not an input switched off): Ruby, never amber */
+  .av-iconbtn-accent { @apply bg-av-500/15 text-av-300 ring-1 ring-av-500/60 ring-inset hover:bg-av-500/25 hover:text-av-200 active:bg-av-500/30; }
   .av-iconbtn-soft { @apply bg-amber-400/15 text-amber-200 hover:bg-amber-400/25 hover:text-amber-100; }
   /* Overlay controls: hidden until the overlay is hovered or focused */
   .av-reveal { @apply pointer-events-none opacity-0 group-hover/ov:pointer-events-auto group-hover/ov:opacity-100 group-focus-within/ov:pointer-events-auto group-focus-within/ov:opacity-100; }
