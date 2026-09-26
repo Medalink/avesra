@@ -4,10 +4,10 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use std::{
     os::unix::fs::{FileTypeExt, MetadataExt},
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -172,7 +172,19 @@ pub struct AudioClient {
     epoch: AtomicU64,
     admission: Arc<Semaphore>,
     deployment: Option<(String, String)>,
+    load_attempted: AtomicBool,
     recent_streams: std::sync::Mutex<std::collections::HashMap<Uuid, std::time::Instant>>,
+}
+struct LoadRetirement {
+    client: Arc<AudioClient>,
+    uncertain: bool,
+}
+impl Drop for LoadRetirement {
+    fn drop(&mut self) {
+        if self.uncertain {
+            self.client.admission.close();
+        }
+    }
 }
 impl AudioClient {
     fn observed_admission(
@@ -191,23 +203,33 @@ impl AudioClient {
         result.map_err(|_| ErrorCode::Unavailable)
     }
     pub fn new(socket: &Path) -> Result<Self, ErrorCode> {
-        let metadata = std::fs::symlink_metadata(socket).map_err(|_| ErrorCode::Unavailable)?;
+        let value = Self::configured_socket(socket)?;
+        value.socket_identity()?;
+        Ok(value)
+    }
+    fn configured_socket(socket: &Path) -> Result<Self, ErrorCode> {
+        use std::os::unix::ffi::OsStrExt;
+        let bytes = socket.as_os_str().as_bytes();
+        if !socket.is_absolute()
+            || bytes.len() >= 108
+            || bytes.contains(&0)
+            || socket.file_name().is_none()
+            || socket
+                .components()
+                .any(|part| !matches!(part, Component::RootDir | Component::Normal(_)))
+            || socket
+                .components()
+                .collect::<PathBuf>()
+                .as_os_str()
+                .as_bytes()
+                != bytes
+        {
+            return Err(ErrorCode::Malformed);
+        }
         let own_uid = std::fs::metadata("/proc/self")
             .map_err(|_| ErrorCode::Unavailable)?
             .uid();
-        let parent = std::fs::symlink_metadata(socket.parent().ok_or(ErrorCode::Malformed)?)
-            .map_err(|_| ErrorCode::Unavailable)?;
-        if !socket.is_absolute()
-            || !metadata.file_type().is_socket()
-            || metadata.uid() != own_uid
-            || metadata.mode() & 0o077 != 0
-            || parent.uid() != own_uid
-            || parent.mode() & 0o077 != 0
-            || !parent.is_dir()
-        {
-            return Err(ErrorCode::Denied);
-        }
-        Ok(Self {
+        let value = Self {
             socket: socket.into(),
             uid: own_uid,
             session_id: Uuid::new_v4(),
@@ -215,8 +237,69 @@ impl AudioClient {
             epoch: AtomicU64::new(1),
             admission: Arc::new(Semaphore::new(1)),
             deployment: None,
+            load_attempted: AtomicBool::new(false),
             recent_streams: std::sync::Mutex::new(std::collections::HashMap::new()),
-        })
+        };
+        // Services may not yet have created /run/avesra. Existing unsafe
+        // objects still fail construction; absence never creates directories.
+        value.check_path(true)?;
+        Ok(value)
+    }
+    fn check_path(&self, allow_missing: bool) -> Result<Option<(u64, u64)>, ErrorCode> {
+        let parent_path = self.socket.parent().ok_or(ErrorCode::Malformed)?;
+        match std::fs::symlink_metadata(parent_path) {
+            Ok(parent) => {
+                if !parent.is_dir()
+                    || parent.uid() != self.uid
+                    || parent.mode() & 0o077 != 0
+                    || std::fs::canonicalize(parent_path).map_err(|_| ErrorCode::Denied)?
+                        != parent_path
+                {
+                    return Err(ErrorCode::Denied);
+                }
+            }
+            Err(error) if allow_missing && error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(None);
+            }
+            Err(_) => return Err(ErrorCode::Unavailable),
+        }
+        match std::fs::symlink_metadata(&self.socket) {
+            Ok(metadata) => {
+                if !metadata.file_type().is_socket()
+                    || metadata.uid() != self.uid
+                    || metadata.mode() & 0o077 != 0
+                {
+                    return Err(ErrorCode::Denied);
+                }
+                Ok(Some((metadata.dev(), metadata.ino())))
+            }
+            Err(error) if allow_missing && error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(_) => Err(ErrorCode::Unavailable),
+        }
+    }
+    fn socket_identity(&self) -> Result<(u64, u64), ErrorCode> {
+        self.check_path(false)?.ok_or(ErrorCode::Unavailable)
+    }
+    async fn connect_checked(&self) -> Result<UnixStream, ErrorCode> {
+        self.connect_checked_to(None).await
+    }
+    async fn connect_checked_to(
+        &self,
+        expected: Option<(u64, u64)>,
+    ) -> Result<UnixStream, ErrorCode> {
+        let identity = self.socket_identity()?;
+        if expected.is_some_and(|expected| expected != identity) {
+            return Err(ErrorCode::Stale);
+        }
+        let connection = UnixStream::connect(&self.socket)
+            .await
+            .map_err(|_| ErrorCode::Unavailable)?;
+        if connection.peer_cred().map_err(|_| ErrorCode::Denied)?.uid() != self.uid
+            || self.socket_identity()? != identity
+        {
+            return Err(ErrorCode::Denied);
+        }
+        Ok(connection)
     }
     pub fn for_deployment(socket: &Path, lane: &str, revision: &str) -> Result<Self, ErrorCode> {
         if !matches!(
@@ -227,7 +310,7 @@ impl AudioClient {
         {
             return Err(ErrorCode::Malformed);
         }
-        let mut value = Self::new(socket)?;
+        let mut value = Self::configured_socket(socket)?;
         value.deployment = Some((lane.into(), revision.into()));
         Ok(value)
     }
@@ -249,16 +332,26 @@ impl AudioClient {
         request: serde_json::Value,
         deadline: Duration,
     ) -> Result<serde_json::Value, ErrorCode> {
+        self.exchange_until(request, tokio::time::Instant::now() + deadline, None)
+            .await
+    }
+    async fn exchange_until(
+        &self,
+        request: serde_json::Value,
+        deadline: tokio::time::Instant,
+        identity: Option<(u64, u64)>,
+    ) -> Result<serde_json::Value, ErrorCode> {
+        if tokio::time::Instant::now() >= deadline {
+            return Err(ErrorCode::Expired);
+        }
         let encoded = serde_json::to_vec(&request).map_err(|_| ErrorCode::Malformed)?;
         if encoded.len() > MAX_PACKET {
             return Err(ErrorCode::TooLarge);
         }
-        tokio::time::timeout(deadline, async {
-            let mut connection = UnixStream::connect(&self.socket)
-                .await
-                .map_err(|_| ErrorCode::Unavailable)?;
-            if connection.peer_cred().map_err(|_| ErrorCode::Denied)?.uid() != self.uid {
-                return Err(ErrorCode::Denied);
+        tokio::time::timeout_at(deadline, async {
+            let mut connection = self.connect_checked_to(identity).await?;
+            if tokio::time::Instant::now() >= deadline {
+                return Err(ErrorCode::Expired);
             }
             connection
                 .write_u32(encoded.len() as u32)
@@ -314,7 +407,17 @@ impl AudioClient {
             serde_json::json!({"version":1,"operation":operation,"request_id":request_id,"session_id":self.session_id,"capture_epoch":epoch,"sequence":sequence,"issued_at_ms":issued,"expires_at_ms":expires}),
         )
     }
+    pub fn load_attempted(&self) -> bool {
+        self.load_attempted.load(Ordering::SeqCst)
+    }
+    /// Local uncertainty is distinct from a service-reported health state.
+    pub fn load_quarantined(&self) -> bool {
+        self.admission.is_closed()
+    }
     pub async fn health(&self) -> Result<AudioHealth, ErrorCode> {
+        if self.load_quarantined() {
+            return Err(ErrorCode::Unavailable);
+        }
         let value = self
             .exchange(
                 serde_json::json!({"version":1,"operation":"health"}),
@@ -329,24 +432,111 @@ impl AudioClient {
         }) {
             return Err(ErrorCode::Unsupported);
         }
-        Ok(health)
-    }
-    pub async fn load(&self) -> Result<(), ErrorCode> {
-        let _permit = self.observed_admission(avesra_core::engine_observer::Operation::Load)?;
-        let epoch = self.epoch.load(Ordering::SeqCst);
-        let result = self
-            .exchange(
-                self.request("load", Uuid::new_v4(), epoch, 120_000)?,
-                Duration::from_secs(120),
-            )
-            .await?;
-        if self.epoch.load(Ordering::SeqCst) != epoch {
-            return Err(ErrorCode::Stale);
-        }
-        if result != serde_json::json!({"state":"loaded_unqualified"}) {
+        if self.load_quarantined() {
             return Err(ErrorCode::Unavailable);
         }
-        Ok(())
+        Ok(health)
+    }
+    pub async fn startup_health(&self) -> Result<AudioHealth, ErrorCode> {
+        let health = self.health().await?;
+        if self.deployment.as_ref().is_some_and(|(lane, _)| {
+            matches!(lane.as_str(), "activity" | "tts") && !health.streaming
+        }) {
+            return Err(ErrorCode::Unsupported);
+        }
+        Ok(health)
+    }
+    pub async fn load(self: &Arc<Self>) -> Result<(), ErrorCode> {
+        let permit = self.observed_admission(avesra_core::engine_observer::Operation::Load)?;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
+        let epoch = self.epoch.load(Ordering::SeqCst);
+        let request_id = Uuid::new_v4();
+        let request = self.request("load", request_id, epoch, 120_000)?;
+        let client = self.clone();
+        // Dropping the caller detaches, never aborts this actual owner. All
+        // preparation and worker scheduling consume the original deadline.
+        tokio::spawn(async move {
+            let _permit = permit;
+            let mut retirement = LoadRetirement {
+                client: client.clone(),
+                uncertain: false,
+            };
+            let identity = client.socket_identity()?;
+            let health = tokio::time::timeout_at(deadline, client.startup_health())
+                .await
+                .map_err(|_| ErrorCode::Expired)??;
+            if health.state == "loaded_unqualified" {
+                return Ok(());
+            }
+            if health.busy || health.state != "unavailable" {
+                return Err(ErrorCode::Unavailable);
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(ErrorCode::Expired);
+            }
+            if client.socket_identity()? != identity {
+                return Err(ErrorCode::Stale);
+            }
+            if client.load_attempted.swap(true, Ordering::SeqCst) {
+                return Err(ErrorCode::InvalidTransition);
+            }
+            retirement.uncertain = true;
+            let result = client
+                .exchange_until(request, deadline, Some(identity))
+                .await
+                .and_then(|value| {
+                    if value != serde_json::json!({"state":"loaded_unqualified"}) {
+                        Err(ErrorCode::Malformed)
+                    } else {
+                        Ok(())
+                    }
+                });
+            if result.is_ok() {
+                // The exact terminal settles loading. Subsequent health failure
+                // must never cancel/unload that successfully retired operation.
+                retirement.uncertain = false;
+                if tokio::time::Instant::now() >= deadline {
+                    return Err(ErrorCode::Expired);
+                }
+                if client.epoch.load(Ordering::SeqCst) != epoch {
+                    return Err(ErrorCode::Stale);
+                }
+                if client.socket_identity()? != identity {
+                    return Err(ErrorCode::Stale);
+                }
+                let health = tokio::time::timeout_at(deadline, client.startup_health())
+                    .await
+                    .map_err(|_| ErrorCode::Expired)??;
+                if tokio::time::Instant::now() >= deadline {
+                    return Err(ErrorCode::Expired);
+                }
+                if client.socket_identity()? != identity {
+                    return Err(ErrorCode::Stale);
+                }
+                if health.state != "loaded_unqualified" {
+                    return Err(ErrorCode::Unavailable);
+                }
+            } else {
+                let cancel_deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+                let cancel = client.request("cancel", request_id, epoch, 3_000)?;
+                if client
+                    .exchange_until(cancel, cancel_deadline, Some(identity))
+                    .await
+                    .is_ok_and(|value| value == serde_json::json!({"outcome":"cancelled"}))
+                {
+                    retirement.uncertain = false;
+                }
+                // Unknown request, changed socket and terminal/timeout races
+                // leave the Drop guard armed; no next admission can enter.
+            }
+            result
+        })
+        .await
+        .map_err(|_| {
+            // An unexpected worker failure is not proof that remote work stopped.
+            self.admission.close();
+            ErrorCode::Unavailable
+        })?
     }
     /// Payload remains transient and may only be supplied by the bounded media
     /// controller. The result is not accepted identity or authorization.

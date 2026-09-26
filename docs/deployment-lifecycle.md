@@ -52,6 +52,50 @@ separate explicit deletion was requested.
 
 ## Spark package contract
 
+### Selected audio model startup
+
+The controller snapshots only the configured speaker, ASR, activity and TTS
+deployments. Its single background coordinator starts after configuration succeeds;
+TLS binding does not wait for models. Voice-design is excluded. No inference,
+qualification, deployment replacement or supervisor mutation occurs here.
+
+Configured socket paths must be absolute, normalized and bounded. An absent
+socket or its absent private parent is a temporary startup condition, not a fatal
+controller configuration error. Present unsafe objects are rejected. Every actual
+connection rechecks the exact socket and private parent, same-user ownership,
+permissions, non-symlink identity and peer UID. The standalone unconfigured audio
+CLI constructor still requires the socket to exist. Nothing creates runtime paths.
+
+One original 60-second availability window bounds read-only startup health waits.
+Each later lane still gets one health observation if earlier loading consumed that
+window. A loaded lane is skipped even when busy, without consuming a load attempt.
+Loading, busy or termination-pending work is never replaced. If it cannot retire
+within the availability window, the coordinator stops rather than overlapping a
+possibly active load. Missing lanes do not prevent observing other configured lanes.
+
+Model admissions are sequential. Each client may submit at most one load in this
+controller incarnation, with one original 120-second deadline established before
+worker enqueue and retained through preparation. The spawned worker owns admission
+even if its caller disappears. Success must be the exact private loaded terminal followed, within that same
+deadline, by exact lane/revision loaded health from the same socket. Selected
+activity/TTS must advertise streaming. Once that terminal settles the load, later
+health failure reports unavailable without cancelling or unloading it.
+On a lost, invalid or expired terminal it retains admission while requesting exact
+request cancellation for at most three additional seconds. Those seconds only
+settle the original request; they cannot extend its model-loading lifetime.
+Confirmed cancellation permits retirement. Otherwise the local client closes its
+admission permanently for this incarnation and reports local quarantine separately
+in controller diagnostics; its health becomes unavailable without inventing service
+health. The coordinator stops on quarantine, and never retries a load or infers
+retirement from an unknown request. A new controller observes current service health
+again; it does not repair credentials or resurrect a previous operation.
+
+Entry points: `transport::router` owns the startup coordinator; `AudioClient::load`
+owns the retained load; generic audio exchanges and the direct TTS stream use the
+same checked connector. Deployment installers, pinned supervisors and ordinary
+inference deadlines are unchanged. Verification is source/static only under the
+owner's no-tests instruction; actual reboot-to-listening evidence remains required.
+
 Pin controller executable, audio images, model revisions and serving manifests.
 Do not use floating image tags as installation identity. A persistent user unit
 owns only Avesra's controller. Its configuration path remains the existing

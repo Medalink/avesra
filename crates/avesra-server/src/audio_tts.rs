@@ -232,12 +232,7 @@ impl AudioClient {
             first,
         };
         tokio::time::timeout(Duration::from_secs(3), async {
-            let mut socket = UnixStream::connect(&self.socket)
-                .await
-                .map_err(|_| ErrorCode::Unavailable)?;
-            if socket.peer_cred().map_err(|_| ErrorCode::Denied)?.uid() != self.uid {
-                return Err(ErrorCode::Denied);
-            }
+            let mut socket = self.connect_checked().await?;
             // The caller's exact source/device/actor/output check follows all
             // preparation/peer awaits and immediately precedes request send.
             authorize().await?;

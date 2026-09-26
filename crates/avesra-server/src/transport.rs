@@ -24,6 +24,9 @@ use uuid::Uuid;
 #[path = "actor_registration.rs"]
 mod actor_registration;
 #[cfg(unix)]
+#[path = "audio_startup.rs"]
+mod audio_startup;
+#[cfg(unix)]
 #[path = "directedness.rs"]
 mod directedness;
 #[cfg(unix)]
@@ -159,6 +162,13 @@ pub fn router(
     };
     #[cfg(not(unix))]
     let _ = directory;
+    #[cfg(unix)]
+    let startup = [
+        ("speaker", speaker.clone()),
+        ("asr", asr.clone()),
+        ("activity", activity.clone()),
+        ("tts", tts.clone()),
+    ];
     let router = Router::new()
         .route("/pair", post(pair))
         .route("/pair-local", post(pair_local))
@@ -230,6 +240,8 @@ pub fn router(
             #[cfg(unix)]
             actor_cancellations: Arc::new(Semaphore::new(2)),
         }));
+    #[cfg(unix)]
+    audio_startup::start(startup);
     Ok(router)
 }
 async fn planner(
@@ -395,33 +407,88 @@ fn audio_client(
     directory: &std::path::Path,
     lane: &str,
 ) -> Result<Option<Arc<avesra_server::audio::AudioClient>>, String> {
-    use std::io::Read;
+    use std::{io::Read, os::unix::fs::MetadataExt};
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Configuration {
         socket: std::path::PathBuf,
         model_revision: String,
     }
-    let file = match std::fs::File::open(directory.join(format!("{lane}-deployment.json"))) {
-        Ok(file) => file,
+    let path = directory.join(format!("{lane}-deployment.json"));
+    let metadata = match std::fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(_) => return Err("Speaker deployment cannot be read".into()),
+        Err(_) => return Err("Audio deployment cannot be read".into()),
     };
+    let own_uid = std::fs::metadata("/proc/self")
+        .map_err(|_| "Audio deployment owner unavailable")?
+        .uid();
+    let parent = std::fs::symlink_metadata(directory)
+        .map_err(|_| "Audio deployment directory unavailable")?;
+    if !metadata.is_file()
+        || metadata.uid() != own_uid
+        || metadata.mode() & 0o077 != 0
+        || !parent.is_dir()
+        || parent.uid() != own_uid
+        || parent.mode() & 0o077 != 0
+    {
+        return Err("Audio deployment must be private and owned".into());
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let mut file = options
+        .open(&path)
+        .map_err(|_| "Audio deployment cannot be read")?;
+    let opened = file
+        .metadata()
+        .map_err(|_| "Audio deployment cannot be read")?;
+    if !opened.is_file()
+        || opened.uid() != own_uid
+        || opened.mode() & 0o077 != 0
+        || opened.dev() != metadata.dev()
+        || opened.ino() != metadata.ino()
+    {
+        return Err("Audio deployment changed while opening".into());
+    }
     let mut bytes = vec![];
-    file.take(4097)
+    (&mut file)
+        .take(4097)
         .read_to_end(&mut bytes)
-        .map_err(|_| "Speaker deployment cannot be read")?;
+        .map_err(|_| "Audio deployment cannot be read")?;
+    let final_metadata = file
+        .metadata()
+        .map_err(|_| "Audio deployment cannot be read")?;
+    let current =
+        std::fs::symlink_metadata(&path).map_err(|_| "Audio deployment cannot be read")?;
+    if !current.is_file()
+        || current.dev() != opened.dev()
+        || current.ino() != opened.ino()
+        || current.uid() != own_uid
+        || current.mode() & 0o077 != 0
+        || final_metadata.len() != opened.len()
+        || final_metadata.mtime() != opened.mtime()
+        || final_metadata.mtime_nsec() != opened.mtime_nsec()
+        || final_metadata.ctime() != opened.ctime()
+        || final_metadata.ctime_nsec() != opened.ctime_nsec()
+    {
+        return Err("Audio deployment changed while reading".into());
+    }
     if bytes.len() > 4096 {
-        return Err("Speaker deployment exceeds limit".into());
+        return Err("Audio deployment exceeds limit".into());
     }
     let config: Configuration =
-        serde_json::from_slice(&bytes).map_err(|_| "Invalid speaker deployment")?;
+        serde_json::from_slice(&bytes).map_err(|_| "Invalid audio deployment")?;
     let client = avesra_server::audio::AudioClient::for_deployment(
         &config.socket,
         lane,
         &config.model_revision,
     )
-    .map_err(|_| "Speaker deployment is unavailable")?;
+    .map_err(|_| "Audio deployment path is invalid or unsafe")?;
     Ok(Some(Arc::new(client)))
 }
 async fn authenticate_headers(auth: Shared, headers: &HeaderMap) -> Result<Uuid, StatusCode> {
