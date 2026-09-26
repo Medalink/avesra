@@ -1,21 +1,23 @@
 <script lang="ts">
   import { onMount, untrack, tick } from "svelte";
   import { listen } from "@tauri-apps/api/event";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import OwnerName from "./OwnerName.svelte";
   import ActorRegistration from "./ActorRegistration.svelte";
   import YourVoiceCard from "./YourVoiceCard.svelte";
+  import VoiceAvatarPreview from "./VoiceAvatar.svelte";
   import VoiceCheck from "./VoiceCheck.svelte";
   import { command, native, type Runtime } from "./runtime";
   import { ensureManagementVerification } from "./setup";
   import { latestRead } from "./latest-read";
-  import { readSpeakerStore, unavailableAvatar, type VoiceAvatar, type SpeakerCandidate as Candidate } from "./speaker-profiles";
+  import { readSpeakerStore, decodeAvatar, unavailableAvatar, type VoiceAvatar, type SpeakerCandidate as Candidate } from "./speaker-profiles";
   import { personalVoiceView, type RegistrationView } from "./owner-setup";
   let { runtime, navigate, control }: { runtime: Runtime | null; navigate: (section: string, target?: string) => void; control: (value: string) => Promise<void> } = $props();
   type Status = { enrollment: string; completed_segments: number; next_segment: string | null; reason: string };
   let status = $state<Status | null>(null);
   let candidates = $state<Candidate[]>([]);
   let avatar = $state<VoiceAvatar>(unavailableAvatar());
-  let visible = $state(true);
+  let visible = $state(false);
   let readEpoch = 0;
   let eventsReady = false;
   let sourceContext = "";
@@ -23,7 +25,7 @@
   let diagnostics: HTMLDivElement | undefined = $state();
   let recordingTools: HTMLDetailsElement | undefined = $state();
   function readContext() { return `${runtime?.connected}:${runtime?.locked}:${runtime?.action_epoch}:${runtime?.capture_epoch}:${runtime?.settings.microphone}:${visible}:${readEpoch}`; }
-  function clearVoiceView() { readEpoch++; avatar = unavailableAvatar(); candidates = []; diagnosticCandidate = null; candidatesLoaded = false; storageDirectory = ""; }
+  function clearVoiceView() { discardRedraw(); readEpoch++; avatar = unavailableAvatar(); candidates = []; diagnosticCandidate = null; candidatesLoaded = false; storageDirectory = ""; }
   const boundCandidate = $derived(avatar.candidate ? candidates.find(c => c.id === avatar.candidate?.id && c.revision === avatar.candidate?.revision && c.segments === 6) : undefined);
   const listening = $derived(!!runtime?.connected && !runtime.locked && runtime.voice_ready && !runtime.settings.explicit_mute && !runtime.settings.deafened && !runtime.settings.paused);
   const listeningLabel = $derived(!runtime?.connected ? "Disconnected" : runtime.locked ? "Locked" : runtime.settings.paused ? "Paused" : runtime.settings.deafened ? "Deafened" : runtime.settings.explicit_mute ? "Muted" : "Not listening");
@@ -43,6 +45,11 @@
   let registrationBusy = $state(false);
   let ownerGeneration = 0;
   let ownerContext = "";
+  type Redraw = { ticket: string; preview: VoiceAvatar; context: string; expires: number };
+  let redraw = $state<Redraw | null>(null), redrawBusy = $state(false), redrawError = $state(""), redrawNote = $state("");
+  let confirmingTicket: string | null = null;
+  let redrawGeneration = 0, redrawTimer: ReturnType<typeof setTimeout> | undefined;
+  let redrawNeedsRead = $state(false);
   let busy = $state(false);
   let progress = $state("");
   let note = $state("");
@@ -63,7 +70,7 @@
   let ownsEnrollment = false;
   let advanced = $state(false);
   const unavailable = $derived(!runtime?.connected ? "Connect your Spark to continue setup." : runtime.locked ? "Unlock Windows to continue setup." : runtime.settings.paused ? "Resume Avesra before continuing setup." : "");
-  const acting = $derived(busy || registrationBusy);
+  const acting = $derived(busy || registrationBusy || redrawBusy);
   const audioAction = $derived(runtime?.settings.paused ? { label: "Resume Avesra", value: "resume" } : runtime?.settings.deafened ? { label: "Turn off Deafen", value: "undeafen" } : runtime?.settings.explicit_mute ? { label: "Unmute microphone", value: "unmute" } : null);
   function restoreAudio() { if (audioAction) void control(audioAction.value).catch(e => error = String(e)); else navigate("audio"); }
   const candidateReader = latestRead(
@@ -91,7 +98,7 @@
     if (next !== context) { context = next;
       const source = `${runtime?.action_epoch}:${runtime?.connected}:${runtime?.locked}:${runtime?.settings.microphone}:${visible}`;
       if (source !== sourceContext) { sourceContext = source; untrack(clearVoiceView); }
-      else untrack(() => { readEpoch++; avatar = unavailableAvatar(); }); if (!busy) { generation++; status = null; } if (mounted && native && visible && !runtime?.locked) untrack(() => void refresh().catch(e => { if (mounted) error = String(e); })); }
+      else untrack(() => { discardRedraw(); readEpoch++; avatar = unavailableAvatar(); }); if (!busy) { generation++; status = null; } if (mounted && native && visible && !runtime?.locked) untrack(() => void refresh().catch(e => { if (mounted) error = String(e); })); }
   });
   async function refresh() {
     await candidateReader.refresh();
@@ -185,16 +192,127 @@
     catch (e) { error = String(e); }
     finally { busy = false; progress = ""; }
   }
+  $effect(() => { if (!advanced) untrack(discardRedraw); });
+  const redrawAllowed = $derived(native && mounted && visible && !!runtime?.connected && !runtime.locked && ownerComplete && !acting && !redrawNeedsRead);
+  function cancelTicket(ticket: string) { void command("cancel_voice_avatar_redraw", { ticket }).catch(() => {}); }
+  function discardRedraw() {
+    redrawGeneration++;
+    if (redrawTimer) clearTimeout(redrawTimer);
+    redrawTimer = undefined;
+    if (redraw) cancelTicket(redraw.ticket);
+    if (confirmingTicket) cancelTicket(confirmingTicket);
+    redraw = null; redrawError = ""; redrawNote = "";
+  }
+  function redrawCurrent(operation: number, key: string) {
+    return mounted && visible && !runtime?.locked && !!runtime?.connected && operation === redrawGeneration && key === readContext();
+  }
+  async function prepareRedraw() {
+    if (!redrawAllowed || redraw) return;
+    redrawBusy = true; redrawError = ""; redrawNote = "";
+    const operation = ++redrawGeneration, key = readContext();
+    try {
+      await ensureManagementVerification(() => redrawCurrent(operation, key), message => { if (redrawCurrent(operation, key)) redrawNote = message; });
+      if (!redrawCurrent(operation, key)) return;
+      const started = performance.now();
+      const result = await command<{version: number; ticket: string; remaining_ms: number; preview: unknown}>("prepare_voice_avatar_redraw");
+      const ticket = result?.ticket;
+      const validTicket = typeof ticket === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(ticket);
+      const preview = decodeAvatar(result?.preview);
+      if (!validTicket || result.version !== 1 || !Number.isInteger(result.remaining_ms) || result.remaining_ms <= 0 || result.remaining_ms > 30000 || preview.state !== "ready_without_portrait" || !preview.parameters) {
+        if (validTicket) cancelTicket(ticket);
+        throw new Error("The proposed avatar response is incompatible. Nothing was saved.");
+      }
+      const expires = started + result.remaining_ms;
+      if (!redrawCurrent(operation, key) || performance.now() >= expires) { cancelTicket(ticket); if (redrawCurrent(operation, key)) redrawNote = "The preview expired before it arrived. Prepare a new preview to continue."; return; }
+      redraw = {ticket, preview, context: key, expires}; redrawNote = "";
+      redrawTimer = setTimeout(() => {
+        if (redraw?.ticket === ticket) { discardRedraw(); redrawNote = "The preview expired. Prepare a new preview to continue."; }
+      }, Math.max(0, expires - performance.now()));
+    } catch (e) { if (redrawCurrent(operation, key)) { redrawError = String(e); redrawNote = ""; } }
+    finally { redrawBusy = false; }
+  }
+  async function reconcileRedraw() {
+    if (!native || !mounted || !visible || runtime?.locked || redrawBusy) return;
+    redrawBusy = true;
+    const key = readContext();
+    try {
+      await refresh();
+      if (mounted && visible && key === readContext() && candidatesLoaded && !candidatesError) redrawNeedsRead = false;
+    } finally { redrawBusy = false; }
+  }
+  async function confirmRedraw() {
+    const pending = redraw;
+    if (!pending || redrawBusy || !redrawCurrent(redrawGeneration, pending.context) || performance.now() >= pending.expires) { discardRedraw(); return; }
+    const operation = redrawGeneration;
+    readEpoch++;
+    const confirmationContext = readContext();
+    confirmingTicket = pending.ticket;
+    redrawBusy = true; redrawError = ""; redrawNote = ""; redraw = null; avatar = unavailableAvatar("Saving the proposed avatar…");
+    if (redrawTimer) clearTimeout(redrawTimer);
+    redrawTimer = undefined;
+    // The consumed ticket is never replayed, even if its response is lost.
+    redrawNeedsRead = true;
+    try {
+      const result = decodeAvatar(await command<unknown>("confirm_voice_avatar_redraw", {ticket: pending.ticket}));
+      if (result.state !== "ready_without_portrait" || !result.parameters) throw new Error("The saved avatar result could not be read. Refresh its current state before preparing another preview.");
+      if (redrawCurrent(operation, confirmationContext)) { avatar = result; redrawNote = "Avatar saved. Your voice permissions are unchanged."; }
+    } catch (e) { if (redrawCurrent(operation, confirmationContext)) redrawError = String(e); }
+    finally {
+      if (redrawCurrent(operation, confirmationContext)) {
+        await refresh();
+        if (redrawCurrent(operation, confirmationContext) && candidatesLoaded && !candidatesError) redrawNeedsRead = false;
+      }
+      if (confirmingTicket === pending.ticket) confirmingTicket = null;
+      redrawBusy = false;
+    }
+  }
   onMount(() => {
-    mounted = true; visible = !document.hidden;
-    const visibilityChanged = () => { visible = !document.hidden; clearVoiceView(); };
+    mounted = true;
+    let visibilityGeneration = 0, checkingVisibility = false, visibilityPending = false;
+    const stops: (() => void)[] = [];
+    const hide = () => {
+      visibilityGeneration++; visible = false; clearVoiceView();
+      ownerGeneration++; owner = null;
+    };
+    const confirmVisible = async () => {
+      if (!native || !mounted || !eventsReady) return;
+      if (checkingVisibility) { visibilityPending = true; return; }
+      checkingVisibility = true;
+      const observed = visibilityGeneration;
+      try {
+        const shown = await getCurrentWindow().isVisible();
+        if (!mounted || observed !== visibilityGeneration) return;
+        if (!shown || document.hidden) { hide(); return; }
+        visible = true;
+        if (!runtime?.locked) { void refreshOwner(); void refresh(); }
+      } catch { if (mounted && observed === visibilityGeneration) hide(); }
+      finally {
+        checkingVisibility = false;
+        if (visibilityPending && mounted) { visibilityPending = false; void confirmVisible(); }
+      }
+    };
+    const requestVisible = () => { visibilityGeneration++; void confirmVisible(); };
+    const visibilityChanged = () => { if (document.hidden) hide(); else requestVisible(); };
     document.addEventListener("visibilitychange", visibilityChanged);
-    let stopHidden: (() => void) | undefined;
-    if (native) void listen("settings-hidden", () => { visible = false; clearVoiceView(); ownerGeneration++; owner = null; }).then(stop => { if (mounted) { stopHidden = stop; eventsReady = true; if (visible) void refresh(); } else stop(); }).catch(() => { if (mounted) { visible = false; clearVoiceView(); } });
-    const refreshSavedVoice = () => { if (native && mounted && eventsReady && !document.hidden) { visible = true; void refresh(); } };
-    refreshSavedVoice();
-    window.addEventListener("focus", refreshSavedVoice);
-    return () => { mounted = false; stopHidden?.(); document.removeEventListener("visibilitychange", visibilityChanged); clearVoiceView(); window.removeEventListener("focus", refreshSavedVoice); candidateReader.dispose(); generation++; ownerGeneration++; if (native && ownsEnrollment) void command("cancel_setup").catch(() => {}); };
+    window.addEventListener("focus", requestVisible);
+    if (native) void (async () => {
+      try {
+        for (const [event, handler] of [["settings-hidden", hide], ["settings-shown", requestVisible]] as const) {
+          const stop = await listen(event, handler);
+          if (!mounted) { stop(); return; }
+          stops.push(stop);
+        }
+        eventsReady = true; requestVisible();
+      } catch { if (mounted) { stops.splice(0).forEach(stop => stop()); hide(); } }
+    })();
+    return () => {
+      mounted = false; eventsReady = false; visibilityGeneration++;
+      stops.forEach(stop => stop());
+      document.removeEventListener("visibilitychange", visibilityChanged);
+      window.removeEventListener("focus", requestVisible);
+      clearVoiceView(); candidateReader.dispose(); generation++; ownerGeneration++;
+      if (native && ownsEnrollment) void command("cancel_setup").catch(() => {});
+    };
   });
 </script>
 <section class="section">
@@ -203,6 +321,16 @@
   <details class="av-card p-3.5" bind:open={advanced}>
     <summary class="cursor-pointer text-[12.5px] font-medium">Advanced voice tools</summary>
     <p class="av-hint my-3">Optional owner management, saved recordings and diagnostics. These are not required to start talking.</p>
+  <div class="flex flex-col gap-3 border-b border-white/[0.06] pb-3 mb-3">
+    <div class="flex items-center gap-3"><div class="min-w-0 flex-1"><p class="m-0 text-[12.5px] font-medium">Redraw your avatar</p><p class="av-hint mt-1">Preview a visual from your current saved voice. This does not record audio or change who can use Avesra.</p></div><button class="av-btn av-btn-secondary av-btn-sm" disabled={!redrawAllowed || !!redraw} onclick={prepareRedraw}>{redrawBusy ? "Working…" : "Prepare preview"}</button></div>
+    {#if redraw}
+      <div class="flex items-center gap-4"><VoiceAvatarPreview parameters={redraw.preview.parameters} name={displayName} owner={ownerComplete} /><div class="flex flex-col gap-2"><span class="av-chip self-start text-zinc-300 ring-white/10">Pending · not saved</span><p class="av-hint">Save this proposed avatar, or cancel to keep the saved one.</p><div class="flex gap-2"><button class="av-btn av-btn-primary av-btn-sm" disabled={redrawBusy} onclick={confirmRedraw}>Save avatar</button><button class="av-btn av-btn-ghost av-btn-sm" disabled={redrawBusy} onclick={discardRedraw}>Cancel</button></div></div></div>
+    {/if}
+    {#if redrawNote}<p class="av-hint" role="status">{redrawNote}</p>{/if}
+    {#if redrawError}<p class="av-hint text-amber-200" role="alert">{redrawError}</p>{/if}
+    {#if redrawNeedsRead}<div class="flex items-center gap-2"><p class="av-hint">Read the saved avatar before preparing another preview.</p><button class="av-btn av-btn-ghost av-btn-sm" disabled={redrawBusy || !visible || !!runtime?.locked} onclick={reconcileRedraw}>Refresh avatar</button></div>{/if}
+  </div>
+
     {#if advanced}
     <OwnerName {runtime} />
     <p class="av-hint">{voice.reason}</p>
