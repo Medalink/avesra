@@ -1,8 +1,11 @@
 <script lang="ts">
+  import { PreferenceDraft } from "./preference-draft.svelte";
+  import PreferencesFooter from "./PreferencesFooter.svelte";
   import Performance from "./Performance.svelte";
   import Notifications from "./Notifications.svelte";
   import { onMount, tick } from "svelte";
   import Icon from "./Icon.svelte";
+  import SelectFrame from "./SelectFrame.svelte";
   import SetupOverview from "./SetupOverview.svelte";
   import { personalVoiceView } from "./owner-setup";
   import { sparkConnection } from "./runtime";
@@ -11,7 +14,7 @@
   import VoiceAtmosphere from "./VoiceAtmosphere.svelte";
   import ShortcutSettings from "./ShortcutSettings.svelte";
   import EnrollmentView from "./EnrollmentView.svelte";
-  import OwnerName from "./OwnerName.svelte";
+  import SetupLock from "./SetupLock.svelte";
   import MicrophoneMeter from "./MicrophoneMeter.svelte";
   import AppCatalog from "./AppCatalog.svelte";
   import ActionTasks from "./ActionTasks.svelte";
@@ -30,9 +33,8 @@
     refreshDevices,
     error,
     notice,
-    saving,
     control,
-    update,
+    accept,
     hide,
     drag,
   }: {
@@ -44,19 +46,23 @@
     refreshDevices: () => Promise<void>;
     error: string;
     notice: string;
-    saving: boolean;
     control: (value: string) => Promise<void>;
-    update: (patch: Partial<Settings>) => Promise<void>;
+    accept: (value: Runtime) => void;
     hide: () => Promise<void>;
     drag: (event: PointerEvent) => Promise<void>;
   } = $props();
+  const draft = new PreferenceDraft(() => runtime, (value) => accept(value));
+  $effect(() => draft.observe());
+  onMount(() => draft.mount());
+  const saving = $derived(draft.blocked);
+  const update = (patch: Parameters<PreferenceDraft["edit"]>[0]) => draft.edit(patch);
   const voice = $derived(personalVoiceView(runtime));
   const spark = $derived(sparkConnection(runtime));
   function restoredSection() {
     try {
       const saved = localStorage.getItem("avesra.settings.section");
-      return saved && ["setup", "audio", "models", "profiles", "people", "awareness", "memory"].includes(saved) ? saved : "setup";
-    } catch { return "setup"; }
+      return saved && ["audio", "models", "profiles", "people", "awareness", "memory"].includes(saved) ? saved : "audio";
+    } catch { return "audio"; }
   }
   let section = $state(restoredSection());
   let content: HTMLElement;
@@ -256,7 +262,9 @@
     };
   }));
   const meta = $derived(section === "setup" ? ["setup", "Get started", "Your setup, one step at a time."] : sections.find((s) => s[0] === section)!);
-  const s = $derived(runtime?.settings);
+  const s = $derived(draft.settings);
+  const actualMicrophone = $derived(devices.find(device => device.id === runtime?.settings.microphone)?.name ?? "unavailable microphone");
+  const actualSpeaker = $derived(devices.find(device => device.id === runtime?.settings.speaker)?.name ?? "unavailable output");
   const interfaceScales = [100, 110, 125, 150, 175];
 </script>
 
@@ -266,8 +274,8 @@
   <header
     class="flex h-11 shrink-0 items-center gap-2.5 border-b border-white/[0.06] pr-2 pl-4"
   >
-    <span class="text-av-400"><Icon name="audio" /></span><button
-      class="flex-1 self-stretch text-left text-[13px] font-medium"
+    <span class="text-av-400"><Icon name="brand" /></span><button
+      class="flex-1 self-stretch text-left text-[13px] font-medium text-zinc-100"
       onpointerdown={drag}
       aria-label="Drag settings window">Avesra Settings</button
     >
@@ -279,7 +287,7 @@
       onclick={() => navigate("profiles", "spark-pairing")}
       >Spark · {spark.label}<Icon name="arrow" size={10} /></button
     ><span class="av-chip bg-white/[0.04] text-zinc-300 ring-white/10"
-      >Profile · {s?.profile === "gaming" ? "Gaming" : "Single Spark"}</span
+      >Profile · {runtime?.settings.profile === "gaming" ? "Gaming" : runtime?.settings.profile === "accelerated" ? "Accelerated" : "Single Spark"}</span
     >
     <button class="av-iconbtn size-7" onclick={hide} aria-label="Close settings"
       ><Icon name="close" size={14} /></button
@@ -290,8 +298,6 @@
       class="flex w-[200px] shrink-0 flex-col gap-0.5 border-r border-white/[0.06] bg-black/20 p-2.5"
       aria-label="Settings sections"
     >
-      <button class="av-nav-btn mb-3" aria-current={section === "setup" ? "page" : undefined} onclick={() => navigate("setup")}><span class="grid size-5 place-items-center"><Icon name="setup" /></span><span>Get started</span></button>
-      <span class="av-kicker px-2.5 pb-2 text-[9px]">Settings</span>
       {#each sections as item}<button
           class="av-nav-btn"
           aria-current={section === item[0] ? "page" : undefined}
@@ -302,7 +308,7 @@
         >{/each}
       <span class="flex-1"></span>
       <div class="flex flex-col gap-0.5 px-2.5 pb-1">
-        <span class="caption text-zinc-400">Avesra 0.1 · development</span><span
+        <span class="font-mono text-[10.5px] text-zinc-400">Avesra 0.1 · development</span><span
           class="text-[10.5px] leading-[14px] text-zinc-400"
           >{native ? runtime ? "Native Windows companion" : "Connecting to companion…" : "Browser view · controls unavailable"}</span
         >
@@ -334,9 +340,9 @@
             <div class="grid grid-cols-2 gap-4">
               <div class="flex flex-col gap-1.5">
                 <label class="av-label" for="microphone">Microphone</label
-                ><select
+                ><SelectFrame><select
                   id="microphone"
-                  class="av-input"
+                  class="av-input av-select"
                   value={s?.microphone ?? ""}
                   disabled={!s || saving || devicesLoading || !!devicesError}
                   onchange={(e) =>
@@ -349,13 +355,14 @@
                         ? " · default"
                         : ""}</option
                     >{/each}</select
-                >
+                ></SelectFrame>
+                {#if draft.changes.microphone}<p class="av-hint text-amber-200">Currently using {actualMicrophone} for checks; Save changes to switch.</p>{/if}
                 <MicrophoneMeter {runtime} {signal} />
               </div>
               <div class="flex flex-col gap-1.5">
-                <label class="av-label" for="speaker">Speakers</label><select
+                <label class="av-label" for="speaker">Speakers</label><SelectFrame><select
                   id="speaker"
-                  class="av-input"
+                  class="av-input av-select"
                   value={s?.speaker ?? ""}
                   disabled={!s || saving || devicesLoading || !!devicesError}
                   onchange={(e) =>
@@ -368,8 +375,8 @@
                         ? " · default"
                         : ""}</option
                     >{/each}</select
-                ><span class="av-hint"
-                  >Replies and voice previews use this output. Your selected Avesra voice is kept.</span
+                ></SelectFrame><span class="av-hint"
+                  >{#if draft.changes.speaker}Currently using {actualSpeaker}; Save changes to switch.{:else}Replies and voice previews use this output. Your selected Avesra voice is kept.{/if}</span
                 >
               </div>
             </div>
@@ -397,6 +404,7 @@
             </div>
           </section>
           <ShortcutSettings {runtime} />
+          {#if draft.changes.speaker}<p class="av-hint text-amber-200">Voice previews currently use {actualSpeaker}; Save changes to switch.</p>{/if}
           <div id="voice-designer"><VoiceDesigner {runtime} /></div>
           <VoiceAtmosphere {runtime} />
           <section class="section">
@@ -426,7 +434,7 @@
                     style:transform={s?.[
                       item[0] as "learning_chime" | "action_chime"
                     ]
-                      ? "translateX(19px)"
+                      ? "translateX(18px)"
                       : "translateX(3px)"}
                   ></span></button
                 >
@@ -525,6 +533,7 @@
           <section class="section">
             <span class="av-kicker">Machines</span>
             <div id="spark-pairing"><Pairing {runtime} /></div>
+            <button type="button" class="av-btn av-btn-ghost av-btn-sm self-start" onclick={() => navigate("setup")}>Open setup guide</button>
             <div id="browser-setup"><BrowserSetup {runtime} /></div>
           </section>
           <section class="section">
@@ -567,26 +576,34 @@
                 ><span
                   class="av-knob"
                   style:transform={s?.always_on_top
-                    ? "translateX(19px)"
+                    ? "translateX(18px)"
                     : "translateX(3px)"}
                 ></span></button
               >
             </div>
           </section>
         {:else if section === "people"}
+          <SetupLock {runtime} />
           <EnrollmentView {runtime} {navigate} {control} />
-          <OwnerName {runtime} />
-          <section class="section">
-            <span class="av-kicker">Other people</span>
-            <p class="av-hint">
-              No additional people are enrolled. Only the authenticated owner
-              can add people or change permissions.
-            </p>
+          <section class="flex flex-col gap-2.5">
+            <div class="flex items-center justify-between">
+              <span class="av-kicker">Other people</span>
+              <button type="button" class="av-btn av-btn-ghost av-btn-sm" disabled title="Additional-person enrollment is not available in this build">Enroll a person</button>
+            </div>
+            <div class="av-card flex flex-col gap-2.5 p-3.5">
+              <span class="text-[13px] font-medium text-zinc-50">Additional people are not available yet</span>
+              <p class="av-hint">Personal conversation uses the current Windows owner's voice association. Additional-person enrollment and permissions are not available in this build.</p>
+            </div>
           </section>
-          <div class="warning">
-            A voice match alone cannot change ownership or approve high-impact
-            actions.
-          </div>
+          <section class="flex flex-col gap-2">
+            <span class="av-kicker">Rules that don’t change</span>
+            <div class="av-card flex flex-col divide-y divide-white/[0.06]">
+              <div class="px-3.5 py-2.5 text-[12.5px] text-zinc-300">For a new Personal voice, the first accepted natural utterance is treated as the Windows owner's provisional voice. After that initial association, mismatching voices do not update it.</div>
+              <div class="px-3.5 py-2.5 text-[12.5px] text-zinc-300">A voice match never grants permissions or changes ownership. Protected management requires Windows verification.</div>
+              <div class="px-3.5 py-2.5 text-[12.5px] text-zinc-300">Voice ID is not secure authentication. Recordings, synthesis or illness can fool it; a voice association is not identity verification.</div>
+              <div class="px-3.5 py-2.5 text-[12.5px] text-zinc-300">Raw enrollment audio stays in memory. Saved voice features are protected on this PC; selected advanced profiles are not retuned by Personal learning.</div>
+            </div>
+          </section>
         {:else if section === "awareness"}
           <section class="section">
             <span class="av-kicker">Observation scope</span>
@@ -675,4 +692,5 @@
       </div>
     </main>
   </div>
+  <PreferencesFooter {draft} {devices} />
 </div>

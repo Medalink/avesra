@@ -8,6 +8,23 @@ to control their active desktop, capture their microphone or record other apps.
 
 ## Evidence boundaries
 
+The manual inspector defaults to the exact Settings production URL. Its optional
+fourth CLI argument selects `settings` or `overlay`; the observed overlay URL is
+`http://tauri.localhost/`, while Settings uses
+`http://tauri.localhost/index.html?window=settings`. It requires one matching
+CDP page and a port-9475 loopback WebSocket. Other labels/URLs are rejected.
+First inspect the actual page list of the owned diagnostic process; do not use
+this against another app or the owner's input desktop. For example:
+
+```powershell
+node scripts/inspect-webview.mjs 'document.title' 'E:/Dev/Avesra/artifacts/settings-new.png'
+node scripts/inspect-webview.mjs 'document.title' 'E:/Dev/Avesra/artifacts/overlay-new.png' overlay
+```
+
+Choose an unused absolute screenshot path. Both commands inspect the actual
+production WebView; no simulated values or assertions are supplied. A screenshot
+proves only its observed rendered state, not complete visual or functional parity.
+
 | Artifact | What it establishes | What it does not establish |
 | --- | --- | --- |
 | Production Settings WebView screenshot | The actual bundled UI rendered the observed state through the native bridge | Foreground keyboard/mouse interaction or an owner workflow |
