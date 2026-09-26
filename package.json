@@ -8,7 +8,7 @@
     "build": "pnpm -r build"
   },
   "devDependencies": {
-    "prettier": "3.9.9",
+    "prettier": "3.9.8",
     "prettier-plugin-svelte": "4.1.1"
   }
 }
