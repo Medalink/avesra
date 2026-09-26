@@ -978,6 +978,7 @@ fn main() {
             tasks::teaching::start_demonstration,
             tasks::teaching::stop_demonstration,
             tasks::teaching::change_demonstration,
+            tasks::history::inspect_conversation_history,
             tasks::memory::memory_forget_status,
             tasks::memory::approve_memory_forget,
             tasks::memory::cancel_memory_forget,

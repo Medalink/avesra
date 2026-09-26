@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import Teaching from "./Teaching.svelte";
+  import ConversationHistory from "./ConversationHistory.svelte";
   import SetupLock from "./SetupLock.svelte";
   import { command, native, type Runtime } from "./runtime";
   let { runtime }: { runtime: Runtime | null } = $props();
@@ -18,6 +19,8 @@
   let editing = $state<Entry | null>(null);
   let disabled = $state(false);
   let busy = $state(false);
+  let historyBusy = $state(false);
+  let historySource = $state<{ memory: string; revision: string } | null>(null);
   let error = $state("");
   let notice = $state("");
   let mounted = false;
@@ -27,12 +30,12 @@
   const bytes = $derived(new TextEncoder().encode(value).length);
   const limit = $derived(editing?.content.kind === "named_fact" ? 512 : kind === "fact" ? 1024 : 256);
   const valid = $derived(value.trim().length > 0 && bytes <= limit && !/[\x00-\x08\x0b-\x1f\x7f]/.test(value));
-  function invalidate() { const old = panel; generation++; panel = null; snapshot = null; pendingDelete = null; editing = null; task = ""; value = ""; if (old && native) void command("close_action_panel", { panel: old }).catch(() => {}); }
-  $effect(() => { const next = `${runtime?.connected}:${runtime?.locked}:${runtime?.action_epoch}`; if (next !== context) { context = next; invalidate(); } });
+  function invalidate() { historySource = null; const old = panel; generation++; panel = null; snapshot = null; pendingDelete = null; editing = null; task = ""; value = ""; if (old && native) void command("close_action_panel", { panel: old }).catch(() => {}); }
+  $effect(() => { const next = `${runtime?.connected}:${runtime?.locked}:${runtime?.action_epoch}:${runtime?.capture_epoch}:${runtime?.settings.owner_name?.actor}`; if (next !== context) { context = next; invalidate(); } });
   function apply(next: Snapshot) { if (Number.isSafeInteger(next.sequence) && next.sequence > 0 && (!snapshot || next.sequence >= snapshot.sequence)) snapshot = next; }
   async function run(work: (current: number) => Promise<void>) {
-    if (busy || !enabled) return;
-    busy = true; error = ""; notice = "";
+    if (busy || historyBusy || !enabled) return;
+    busy = true; historySource = null; error = ""; notice = "";
     const current = ++generation;
     try { await work(current); } catch (e) { if (mounted && current === generation) error = `${String(e)} Refresh before retrying a change.`; } finally { busy = false; }
   }
@@ -71,20 +74,22 @@
 </script>
 
 <section class="section">
-  <div class="flex items-center justify-between"><span class="av-kicker">Private facts & routines</span><button class="av-btn av-btn-ghost av-btn-sm" disabled={!enabled || busy} onclick={refresh}>{busy ? "Working…" : "Refresh"}</button></div>
+  <div class="flex items-center justify-between"><span class="av-kicker">Private facts & routines</span><button class="av-btn av-btn-ghost av-btn-sm" disabled={!enabled || busy || historyBusy} onclick={refresh}>{busy ? "Working…" : "Refresh"}</button></div>
   <p class="av-hint">Say “Remember that my coffee preference is black coffee” to save a named fact from your accepted request. You can also save a fact or one-step routine from a verified task below. Facts are your assertions; only your records appear here.</p>
   <SetupLock {runtime} purpose="private memory" />
-  {#if pendingDelete}<div class="row"><div><h3>Delete the saved fact “{pendingDelete.key}”?</h3><p class="av-hint">This approves only the exact saved revision requested in your current conversation. Conversation history and backups are unchanged.</p></div><div class="flex gap-2"><button class="av-btn av-btn-secondary" disabled={!enabled || busy} onclick={() => resolveDelete(true)}>Approve deletion</button><button class="av-btn av-btn-ghost" disabled={!enabled || busy} onclick={() => resolveDelete(false)}>Cancel</button></div></div>{/if}
-  {#if !editing}<label class="av-label" for="memory-task">Verified source task</label><select id="memory-task" class="av-select" bind:value={task} disabled={!enabled || busy}><option value="">Choose a successful task</option>{#each snapshot?.tasks.filter(t => t.outcome === "success") ?? [] as item}<option value={item.task}>{item.payload.kind.replaceAll("_", " ")} · {new Date(item.created_ms).toLocaleString()}</option>{/each}</select>
-    <label class="av-label" for="memory-kind">Save as</label><select id="memory-kind" class="av-select" bind:value={kind} disabled={!enabled || busy}><option value="fact">Explicit private fact</option><option value="routine">Named one-step routine</option></select>
+  {#if pendingDelete}<div class="row"><div><h3>Delete the saved fact “{pendingDelete.key}”?</h3><p class="av-hint">This approves only the exact saved revision requested in your current conversation. Conversation history and backups are unchanged.</p></div><div class="flex gap-2"><button class="av-btn av-btn-secondary" disabled={!enabled || busy || historyBusy} onclick={() => resolveDelete(true)}>Approve deletion</button><button class="av-btn av-btn-ghost" disabled={!enabled || busy || historyBusy} onclick={() => resolveDelete(false)}>Cancel</button></div></div>{/if}
+  {#if !editing}<label class="av-label" for="memory-task">Verified source task</label><select id="memory-task" class="av-select" bind:value={task} disabled={!enabled || busy || historyBusy}><option value="">Choose a successful task</option>{#each snapshot?.tasks.filter(t => t.outcome === "success") ?? [] as item}<option value={item.task}>{item.payload.kind.replaceAll("_", " ")} · {new Date(item.created_ms).toLocaleString()}</option>{/each}</select>
+    <label class="av-label" for="memory-kind">Save as</label><select id="memory-kind" class="av-select" bind:value={kind} disabled={!enabled || busy || historyBusy}><option value="fact">Explicit private fact</option><option value="routine">Named one-step routine</option></select>
   {/if}
-  <label class="av-label" for="memory-value">{kind === "fact" ? "Fact" : "Routine name"}</label><textarea id="memory-value" class="av-textarea" rows="3" bind:value disabled={!enabled || busy}></textarea>
+  <label class="av-label" for="memory-value">{kind === "fact" ? "Fact" : "Routine name"}</label><textarea id="memory-value" class="av-textarea" rows="3" bind:value disabled={!enabled || busy || historyBusy}></textarea>
   <p class="av-hint">{bytes} / {limit} UTF-8 bytes. {kind === "routine" ? "Use a short unique name with letters, numbers, spaces, apostrophes or hyphens. Say ‘Run routine NAME’ in a newly accepted request; current action permissions are still required." : "Keep this brief. Do not save passwords, credentials or complete messages."}</p>
-  {#if editing && kind === "routine"}<label class="av-hint"><input type="checkbox" bind:checked={disabled} disabled={busy} /> Disable this routine</label>{/if}
-  <div class="flex gap-2"><button class="av-btn av-btn-secondary" disabled={!enabled || busy || !panel || !valid || (!editing && !task)} onclick={save}>{editing ? "Save correction" : "Save with source"}</button>{#if editing}<button class="av-btn av-btn-ghost" disabled={busy} onclick={() => { editing = null; value = ""; disabled = false; }}>Cancel edit</button>{/if}</div>
+  {#if editing && kind === "routine"}<label class="av-hint"><input type="checkbox" bind:checked={disabled} disabled={busy || historyBusy} /> Disable this routine</label>{/if}
+  <div class="flex gap-2"><button class="av-btn av-btn-secondary" disabled={!enabled || busy || historyBusy || !panel || !valid || (!editing && !task)} onclick={save}>{editing ? "Save correction" : "Save with source"}</button>{#if editing}<button class="av-btn av-btn-ghost" disabled={busy || historyBusy} onclick={() => { editing = null; value = ""; disabled = false; }}>Cancel edit</button>{/if}</div>
   <div class="line"></div>
-  {#if !snapshot}<p class="av-hint">Refresh to inspect your durable records.</p>{:else if snapshot.memories.length === 0}<p class="av-hint">No saved facts or routines for the current owner.</p>{:else}{#each snapshot.memories as item}<div class="row"><div><h3>{item.entry.content.kind === "named_fact" ? `${item.entry.content.key}: ${item.entry.content.value}` : item.entry.content.kind === "fact" ? item.entry.content.value : item.entry.content.name}</h3><p class="av-hint">{item.entry.content.kind !== "routine" ? "Explicit fact" : item.entry.content.disabled ? "Disabled routine" : item.validated ? "Routine · verified invocation" : "Routine candidate · not yet invoked"}{item.entry.corrected ? " · corrected revision" : ""} · {new Date(item.entry.created_ms).toLocaleString()}</p><p class="av-hint">{item.entry.source ? `Source task ${item.entry.source.task}` : `Accepted source ${item.entry.accepted_source?.turn ?? "unavailable"}`}</p></div><div class="flex gap-2"><button class="av-btn av-btn-ghost av-btn-sm" disabled={!enabled || busy} onclick={() => edit(item.entry)}>Correct</button><button class="av-btn av-btn-ghost av-btn-sm" disabled={!enabled || busy} onclick={() => remove(item.entry)}>Delete</button></div></div>{/each}{/if}
+  {#if !snapshot}<p class="av-hint">Refresh to inspect your durable records.</p>{:else if snapshot.memories.length === 0}<p class="av-hint">No saved facts or routines for the current owner.</p>{:else}{#each snapshot.memories as item}<div class="row"><div><h3>{item.entry.content.kind === "named_fact" ? `${item.entry.content.key}: ${item.entry.content.value}` : item.entry.content.kind === "fact" ? item.entry.content.value : item.entry.content.name}</h3><p class="av-hint">{item.entry.content.kind !== "routine" ? "Explicit fact" : item.entry.content.disabled ? "Disabled routine" : item.validated ? "Routine · verified invocation" : "Routine candidate · not yet invoked"}{item.entry.corrected ? " · corrected revision" : ""} · {new Date(item.entry.created_ms).toLocaleString()}</p><p class="av-hint">{item.entry.source ? `Source task ${item.entry.source.task}` : `Accepted source ${item.entry.accepted_source?.turn ?? "unavailable"}`}</p></div><div class="flex gap-2">{#if item.entry.content.kind === "named_fact" && item.entry.accepted_source}<button class="av-btn av-btn-ghost av-btn-sm" disabled={!enabled || busy || historyBusy || !panel} onclick={() => historySource = { memory: item.entry.id, revision: item.entry.revision }}>Inspect accepted source</button>{/if}<button class="av-btn av-btn-ghost av-btn-sm" disabled={!enabled || busy || historyBusy} onclick={() => edit(item.entry)}>Correct</button><button class="av-btn av-btn-ghost av-btn-sm" disabled={!enabled || busy || historyBusy} onclick={() => remove(item.entry)}>Delete</button></div></div>{/each}{/if}
   {#if error}<p class="av-hint text-amber-200" role="status">{error}</p>{/if}{#if notice}<p class="av-hint" role="status">{notice}</p>{/if}
 </section>
+
+<ConversationHistory {runtime} {panel} source={historySource} blocked={busy} onbusy={value => historyBusy = value} />
 
 <Teaching {runtime} {panel} aliases={snapshot?.aliases ?? []} />

@@ -16,6 +16,7 @@
   import AppCatalog from "./AppCatalog.svelte";
   import ActionTasks from "./ActionTasks.svelte";
   import PrivateMemory from "./PrivateMemory.svelte";
+  import HistoryPanel from "./HistoryPanel.svelte";
   import BrowserSetup from "./BrowserSetup.svelte";
   import type { SignalFrame } from "./Signal.svelte";
   import type { Runtime, Settings, AudioDevice } from "./runtime";
@@ -647,13 +648,7 @@
                 onclick={() => (tab = t)}>{t}</button
               >{/each}
           </div>
-          {#if tab === "Memory"}<PrivateMemory {runtime} />{:else if tab === "History"}<div class="empty">
-              <h2>No accepted requests</h2>
-              <p class="av-hint">
-                History begins after owner setup. Unknown voices are not saved
-                as conversations.
-              </p>
-            </div>{:else if tab === "Performance"}<Performance {runtime} />{:else}<div class="av-card p-4">
+          {#if tab === "Memory"}<PrivateMemory {runtime} />{:else if tab === "History"}<HistoryPanel {runtime} />{:else if tab === "Performance"}<Performance {runtime} />{:else}<div class="av-card p-4">
               <div class="row">
                 <h2>Local companion</h2>
                 <span class="av-chip text-zinc-300 ring-white/15"

@@ -5,6 +5,9 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+#[path = "conversation_history.rs"]
+pub mod history;
+
 #[path = "conversation_planner.rs"]
 mod planner;
 #[path = "conversation_tasks.rs"]

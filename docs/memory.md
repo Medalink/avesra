@@ -133,3 +133,62 @@ withdraw earlier pending replies and published value-bearing recalls before the
 writer changes storage. Publication and every normal-speech freshness check use
 that same withdrawal signal. Save/delete acknowledgments contain no saved value;
 already rendered audio cannot be erased retroactively.
+## Protected accepted-history inspection
+
+Settings History offers read-only accepted conversation history; Settings Memory
+also links exact named-fact source drilldown. It uses the existing ledger worker and current protected Windows
+owner, owner revision, device and paired server; a webview cannot select an actor.
+The first read consumes the existing management proof into one native reader handle.
+That handle expires with the original proof (at most sixty seconds), panel, challenge
+or connection context; later pages cannot renew it. Every operation has its own
+original twelve-second deadline and retains actual reader/owner admission through
+worker retirement. Lock, hide, caller loss or changed context prevents publication.
+
+Pages return at most twenty actor/device-matching accepted turns. The first page
+freezes the actual highest rowid; subsequent native-only keyset cursors walk backward
+without adding newly accepted turns. At most two hundred rowid-indexed headers are
+scanned per call, with at most twenty bounded bodies. Sparse windows may return fewer
+or no matching rows with a continuation; only actual keyset exhaustion means no older
+history remains. No full-history load, FTS/index migration or model-context expansion
+is introduced. Responses are bounded to 512 KiB; malformed or oversize stored rows
+fail explicitly, never masquerade as an empty page.
+
+Rows distinguish original accepted text/time/state, stored planner response and typed
+provenance, and an optional linked task ID/state. A stored reply is not proof of speech
+playback or a successful action; persisted playback outcome is unavailable in this
+view. Historical owner-registration metadata remains historical; a paired-server
+identity absent from the record remains unavailable and is never backfilled.
+
+A named-fact source request supplies only the current memory ID/revision. The same
+worker validates that exact current private entry and resolves its original accepted
+turn/revision and any accepted correction source. It displays the current fact value
+separately from the historical request/reply; a protected Settings correction without
+an accepted-turn correction source is labeled accordingly. Deleted, changed, foreign-
+actor/device or malformed references are refused. This read path constructs no live
+turn, output capability or action, and cannot replay a stored reply. Text is escaped.
+
+The UI clears loaded history/source content on lock, hide, owner/context change and
+component disposal, and discards stale command completions. Selected-history deletion,
+search and independently retained backups remain separate work; inspecting a deleted
+fact's original accepted command does not undo that fact's removal from memory retrieval.
+
+### Manual history verification (not yet performed)
+
+Use the ordinary owner's existing Windows Hello management flow, then inspect
+History after genuine accepted conversation turns. Open the first page and move
+to older pages; accept a new turn between pages and verify the existing reader's
+frozen history window does not gain it. Reopen with a fresh protected reader to
+see the new turn. A sparse page with continuation must not claim history ended.
+
+Speak a real named-fact save, inspect its accepted source from Memory, then make
+an explicit correction and inspect again. Confirm the current value is separate
+from the unchanged original accepted request and any accepted correction source.
+Check absent replies/playback evidence remain labeled unavailable. Lock Windows,
+hide Settings, change owner/context, and allow the original proof to expire;
+loaded content must clear and stale pending reads must not republish it.
+
+These are manual product checks, not an automated runner or synthetic-turn ingress.
+If genuine accepted records or the owner's live management proof are unavailable,
+record the corresponding case as **unrun**. A silent diagnostic desktop can prove
+only the visible locked/unverified controls; it cannot establish successful Hello,
+accepted history, source correctness or the complete A16 deletion workflow.

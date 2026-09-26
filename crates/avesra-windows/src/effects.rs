@@ -71,6 +71,13 @@ impl Management {
     }
 }
 enum Command {
+    History {
+        actor: Uuid,
+        device: Uuid,
+        query: avesra_core::conversations::history::Query,
+        authorize: CatalogAuthorization,
+        reply: SyncSender<Result<avesra_core::conversations::history::ResultView, ErrorCode>>,
+    },
     Teaching(
         Box<teaching::Request>,
         SyncSender<Result<teaching::ResultValue, ErrorCode>>,
@@ -1440,6 +1447,11 @@ impl NativeEffects {
                             );
                             continue;
                         }
+                        Command::History{actor,device,query,mut authorize,reply}=>{
+                            let result=controller.management().conversation_history(actor,device,query,&mut authorize);
+                            let _=reply.try_send(result);
+                            continue;
+                        }
                         Command::ConversationStatus {
                             actor,
                             source,
@@ -1814,6 +1826,30 @@ impl NativeEffects {
         self.send
             .try_send(Command::AcceptConversation {
                 conversation,
+                authorize,
+                reply,
+            })
+            .map_err(|_| ErrorCode::Unavailable)?;
+        Ok(receive)
+    }
+    /// Protected native history reader. Returns bounded historical content only;
+    /// authorization remains retained through the actual ledger read.
+    pub fn conversation_history(
+        &self,
+        actor: Uuid,
+        device: Uuid,
+        query: avesra_core::conversations::history::Query,
+        authorize: CatalogAuthorization,
+    ) -> Result<
+        Receiver<Result<avesra_core::conversations::history::ResultView, ErrorCode>>,
+        ErrorCode,
+    > {
+        let (reply, receive) = mpsc::sync_channel(1);
+        self.send
+            .try_send(Command::History {
+                actor,
+                device,
+                query,
                 authorize,
                 reply,
             })

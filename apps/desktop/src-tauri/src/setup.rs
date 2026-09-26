@@ -18,6 +18,14 @@ struct Proof {
 }
 pub struct ManagementProof(Proof);
 impl ManagementProof {
+    /// Presentation bound only; native operations must still call current().
+    pub(crate) fn remaining_ms(&self) -> u64 {
+        Duration::from_secs(60)
+            .checked_sub(self.0.verified_at.elapsed())
+            .map(|value| value.as_millis() as u64)
+            .unwrap_or(0)
+    }
+
     pub fn current(&self, state: &Runtime) -> bool {
         let Ok(local) = state.local.lock() else {
             return false;

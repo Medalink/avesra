@@ -21,6 +21,8 @@ use tauri::{Emitter, Manager};
 use uuid::Uuid;
 #[path = "tasks_download.rs"]
 pub mod download;
+#[path = "tasks_history.rs"]
+pub mod history;
 #[path = "tasks_memory.rs"]
 pub mod memory;
 
@@ -29,6 +31,7 @@ pub mod teaching;
 
 #[derive(Default)]
 pub struct State {
+    history: history::State,
     teaching: teaching::State,
     download_pending: Mutex<Option<download::Pending>>,
     memory_pending: Mutex<Option<memory::Pending>>,
@@ -81,6 +84,7 @@ struct Panel {
 }
 impl State {
     pub fn invalidate(&self) {
+        self.history.invalidate();
         self.teaching.invalidate();
         if let Ok(mut pending) = self.memory_pending.lock() {
             *pending = None;

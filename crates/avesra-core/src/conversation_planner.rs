@@ -540,6 +540,30 @@ fn read_reply(db: &Connection, plan: &Plan) -> Result<Option<ReplyRecord>, Error
     }
     Ok(Some(value))
 }
+pub(super) fn history(
+    db: &Connection,
+    record: &Record,
+) -> Result<Option<super::history::Planner>, ErrorCode> {
+    let Some((plan, state)) = read_plan(db, record)? else {
+        return Ok(None);
+    };
+    let reply = read_reply(db, &plan)?;
+    if (state == "replied") != reply.is_some() {
+        return Err(ErrorCode::Malformed);
+    }
+    Ok(Some(super::history::Planner {
+        request: plan.request.context.request,
+        state,
+        owner_revision: plan.binding.owner_revision,
+        registration_revision: plan.binding.registration_revision,
+        server_fingerprint: None,
+        reply: reply.map(|v| super::history::Reply {
+            revision: v.revision,
+            response: v.reply.response,
+            provenance: v.provenance,
+        }),
+    }))
+}
 pub(super) fn summary(
     db: &Connection,
     record: &Record,
