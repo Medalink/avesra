@@ -206,6 +206,7 @@
 {#if settingsWindow}<SettingsView
     {runtime}
     {signal}
+    {outputSignal}
     {devices}
     {devicesLoading}
     {devicesError}

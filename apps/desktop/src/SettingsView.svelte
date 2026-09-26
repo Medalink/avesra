@@ -28,6 +28,7 @@
   let {
     runtime,
     signal,
+    outputSignal,
     devices,
     devicesLoading,
     devicesError,
@@ -41,6 +42,7 @@
   }: {
     runtime: Runtime | null;
     signal: SignalFrame | null;
+    outputSignal: SignalFrame | null;
     devices: AudioDevice[];
     devicesLoading: boolean;
     devicesError: string;
@@ -452,7 +454,7 @@
           </section>
           <ShortcutSettings {runtime} />
           {#if draft.changes.speaker}<p class="av-hint text-amber-200">Voice previews currently use {actualSpeaker}; Save changes to switch.</p>{/if}
-          <div id="voice-designer"><VoiceDesigner {runtime} /></div>
+          <div id="voice-designer"><VoiceDesigner {runtime} {outputSignal} /></div>
           <VoiceAtmosphere {runtime} />
           <section class="flex flex-col gap-2">
             <span class="av-kicker">Learning & action chimes</span

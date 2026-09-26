@@ -66,3 +66,46 @@ microphone checking and all VoiceDesigner operations are unaffected. This
 presentation slice uses focused Svelte checking and source review; the owner's
 no-tests/harness restriction applies. No playback, capture, runtime or complete
 visual-parity proof is claimed. Real preview bars remain a separate integration.
+
+## Exact preview display receipt
+
+The native `preview_voice` command accepts one per-invocation Tauri channel for
+a display-only receipt. After the existing Settings/panel/current-session checks,
+shared output reservation and successful `open_preview`, native sends at most
+one `{ output, epoch }` value identifying that actual output lease. Failure to
+deliver the receipt does not fail audio, renew a deadline, release ownership or
+retry anything. The terminal command result and actual output retirement are
+unchanged. The receipt alone never means speech has been submitted or heard.
+
+All three VoiceDesigner entry points use this channel: Generate's saved-candidate
+autoplay, saved-reference Preview/Repeat (a fresh channel for each take), and
+editable Play text. Native greeting and the explicit voice-check playback trial
+do not issue this receipt. The private audio operation with the same name and the
+controller preview protocol are unaffected; no new generic command is added.
+
+App passes its existing validated, calibrated output frame separately through
+SettingsView. VoiceDesigner displays the mock's 93-by-20-pixel, 16-bar Signal only
+when that frame matches both native receipt IDs, preview purpose, assistant speech,
+the current playback epoch and this still-pending local invocation/panel. Signal
+keeps the original frame expiry; no busy-state waveform, input frame, greeting or
+reply can substitute. Missing or malformed receipts and missing frames show no
+bars. Bars observe submitted output, not acoustic delivery.
+During Play text, the strip shows the exact locally submitted text snapshot and
+labels it as test text; it never pairs those bars with the saved reference copy.
+
+Receipt callbacks are bound to the original invocation and visibility generation.
+Native Settings-hidden events, lock, disconnect, output restriction, unmount and
+command settlement discard the display attempt. Reopening does not revive it.
+Native shown/hidden listeners are registered before an initial actual visibility
+read; late registration/read results cannot publish after hide or unmount.
+Document-visible restoration also requests a fresh native visibility read,
+limited to one in flight and one coalesced pending check; it never revives a
+previous invocation. Native shown events can restore display eligibility without
+DOM focus or visibility changes.
+Listener/visibility failures disable bars without disabling ordinary preview.
+No timer polls window visibility and no observer changes audio ownership.
+
+Validation is scoped Svelte/Rust static checking and independent source review,
+with no automated tests, fixtures or runtime work. Exact native display receipt
+is a desktop IPC change; controller, core contracts and telemetry schemas remain
+unchanged. Matching native and frontend desktop artifacts must ship together.
