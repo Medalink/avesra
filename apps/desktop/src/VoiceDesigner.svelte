@@ -220,7 +220,7 @@
   {/if}
   {#if busy === "generate" || busy === "preview" || busy === "test"}
     <div class="flex items-center gap-3 border border-rose-500/30 bg-rose-500/5 p-3" role="status" aria-live="polite">
-      <span class="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-rose-400/30 border-t-rose-400 motion-reduce:animate-none" aria-hidden="true"></span>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" class="av-spin shrink-0 text-av-400 motion-reduce:animate-none" aria-hidden="true"><path d="M12 3a9 9 0 1 1-9 9"></path></svg>
       <span class="av-hint">{busy === "generate" ? "Generating your voice… It will play automatically when ready." : busy === "test" ? "Synthesizing and playing your test text…" : "Playing preview… Your selected voice stays unchanged."}</span>
     </div>
   {/if}

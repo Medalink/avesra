@@ -37,3 +37,32 @@ survive collapse and default/custom testing remains accessible. Preview/repeat,
 output interruption and custom speech need separately authorized real playback
 proof; source checks and screenshots do not establish acoustic success. No runtime
 proof is performed by this presentation change.
+
+## Audio detail geometry
+
+The Devices input meter follows the 24-pixel height in
+`design/mockups/Settings.dc.html` lines 80–85, including the shared Signal
+renderer height. Its real measurements, unavailable state, check command,
+freshness and capture ownership are unchanged.
+
+The Chimes section follows the grouped card in that mock's lines 324–343:
+an eight-pixel section gap, one divided card, and rows padded 14 pixels
+horizontally and 10 pixels vertically. Toggle labels use 12.5-pixel normal text.
+The two real learning/action volume controls remain independent, as required by
+`notifications.md`, rather than collapsing them into the mock's single slider.
+Their labels, ranges, values, disabled states and preferences draft/save behavior
+remain unchanged. No chime Preview button is added without a real preview path.
+The committed-events view following the controls remains in place.
+
+VoiceDesigner request progress uses the existing `av-spin` SVG arc pattern from
+the Settings mock instead of a rounded border spinner, which conflicts with the
+shared square-corner rule. Its existing busy conditions and status text remain
+unchanged; the arc indicates request progress, not measured audio output.
+
+Entry points changed are only SettingsView's Chimes markup and
+MicrophoneMeter's meter/Signal height, plus VoiceDesigner's progress icon.
+Preference updates, event delivery,
+microphone checking and all VoiceDesigner operations are unaffected. This
+presentation slice uses focused Svelte checking and source review; the owner's
+no-tests/harness restriction applies. No playback, capture, runtime or complete
+visual-parity proof is claimed. Real preview bars remain a separate integration.
