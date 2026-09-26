@@ -2,13 +2,24 @@
 use super::*;
 use avesra_core::conversations::history as core;
 use serde::Deserialize;
+use std::sync::atomic::AtomicU64;
+#[path = "tasks_history_deletion.rs"]
+pub mod deletion;
 
 #[derive(Default)]
 pub struct State {
     reader: Mutex<Option<Arc<Reader>>>,
+    generation: AtomicU64,
+    pending: Mutex<Option<Arc<deletion::Ticket>>>,
 }
 impl State {
     pub(super) fn invalidate(&self) {
+        let _ = self
+            .generation
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| v.checked_add(1));
+        if let Ok(mut pending) = self.pending.lock() {
+            *pending = None;
+        }
         if let Ok(mut value) = self.reader.lock() {
             *value = None;
         }
@@ -35,6 +46,7 @@ impl Binding {
     }
 }
 struct Reader {
+    generation: u64,
     id: Uuid,
     panel: Uuid,
     binding: Binding,
@@ -80,7 +92,17 @@ fn eligible(
     Ok(())
 }
 fn reader_current(app: &tauri::AppHandle, reader: &Reader) -> Result<(), ErrorCode> {
-    if current(app, reader.panel).is_err() || !reader.proof.current(&app.state::<Runtime>()) {
+    if reader.generation == u64::MAX
+        || app
+            .state::<Runtime>()
+            .tasks
+            .history
+            .generation
+            .load(Ordering::SeqCst)
+            != reader.generation
+        || current(app, reader.panel).is_err()
+        || !reader.proof.current(&app.state::<Runtime>())
+    {
         return Err(ErrorCode::Stale);
     }
     let state = app.state::<Runtime>();
@@ -168,7 +190,14 @@ pub async fn inspect_conversation_history(
                 .lock()
                 .map_err(|_| "Local state unavailable")?
                 .action_epoch;
+            app.state::<Runtime>().tasks.history.invalidate();
             let value = Arc::new(Reader {
+                generation: app
+                    .state::<Runtime>()
+                    .tasks
+                    .history
+                    .generation
+                    .load(Ordering::SeqCst),
                 id: Uuid::new_v4(),
                 panel,
                 binding,

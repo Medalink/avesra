@@ -81,11 +81,11 @@ Results are exact ordered context echoes with enum-only states:
 - `unknown`: any retained context/provenance conflict, missing Model completion,
   conflicting identity or ordinal above the high-water. It is never permission.
 
-No native frontend command or unused native client is added at this checkpoint.
-The future genuine deletion coordinator must derive contexts from its protected
-ledger, retain its original authority/deadline and current TLS-pinned pairing,
-connection generation and acknowledged session across the request, strictly
-validate every echo, and discard the result on replacement/withdrawal. It must
+The protected selected-history deletion coordinator consumes this read-only API.
+It derives exact contexts from its protected ledger, retains its original
+authority/deadline and current TLS-pinned pairing, connection generation and
+acknowledged session across the request, strictly validates every echo, and
+discards the result on replacement/withdrawal. It must
 also retain its native mutation barrier and require actual native content owners
 to have retired. This query neither deletes history nor proves physical erasure,
 historical-session retirement, user audibility or a completed external effect.

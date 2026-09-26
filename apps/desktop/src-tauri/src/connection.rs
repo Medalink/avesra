@@ -1,6 +1,8 @@
 use crate::{ModeSnapshot, Runtime};
 #[path = "directedness.rs"]
 pub(crate) mod directedness;
+#[path = "planner_retirement.rs"]
+pub(crate) mod retirement;
 use avesra_contracts::{
     ConnectionStatus, ControlMessage, Envelope, MAX_CONTROL_BYTES, PROTOCOL_VERSION, ServerStatus,
 };

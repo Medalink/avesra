@@ -12,6 +12,7 @@ pub mod history;
 mod planner;
 #[path = "conversation_tasks.rs"]
 mod tasks;
+pub use planner::deletion;
 pub use planner::{
     MemoryAnswer, ObservationClaim, ObservationRequest, PendingMemory, PlannerAuthority,
     PlannerCancellation, PlannerClaim, PlannerLifetime, PlannerRequest, PlannerRetirement,
@@ -26,6 +27,7 @@ const MAX_BODY: usize = 65_536;
 pub(crate) const SCHEMA: &str = "CREATE TABLE accepted_conversations(id TEXT PRIMARY KEY CHECK(length(id)=36),revision TEXT UNIQUE NOT NULL CHECK(length(revision)=36),actor TEXT NOT NULL CHECK(length(actor)=36),device TEXT NOT NULL CHECK(length(device)=36),session TEXT NOT NULL CHECK(length(session)=36),utterance TEXT NOT NULL CHECK(length(utterance)=36),body TEXT NOT NULL CHECK(length(body)<=65536),state TEXT NOT NULL CHECK(state IN ('accepted','planning','waiting_input','answered','cancelled','suspended')),UNIQUE(device,session,utterance))";
 
 pub(crate) fn check_schema(db: &Connection, version: u64) -> Result<(), ErrorCode> {
+    deletion::check_schema(db, version)?;
     tasks::check_schema(db, version)?;
     planner::check_schema(db, version)?;
     let attached:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE tbl_name='accepted_conversations' AND type NOT IN ('table','index'))",[],|r|r.get(0)).map_err(|_|ErrorCode::Malformed)?;
@@ -60,6 +62,12 @@ pub(crate) fn check_schema(db: &Connection, version: u64) -> Result<(), ErrorCod
         let unique: i64 = row.get(2).map_err(|_| ErrorCode::Malformed)?;
         let origin: String = row.get(3).map_err(|_| ErrorCode::Malformed)?;
         let partial: i64 = row.get(4).map_err(|_| ErrorCode::Malformed)?;
+        if name == "conversation_history_scope" && version >= 29 {
+            if unique != 0 || partial != 0 || origin != "c" {
+                return Err(ErrorCode::Malformed);
+            }
+            continue;
+        }
         let index = match (name.as_str(), origin.as_str()) {
             ("sqlite_autoindex_accepted_conversations_1", "pk") => 0,
             ("sqlite_autoindex_accepted_conversations_2", "u") => 1,
@@ -288,6 +296,10 @@ impl Store {
         let Some((id, revision, body, state)) = row else {
             return Ok(None);
         };
+        deletion::require_source(
+            &self.connection,
+            Uuid::parse_str(&id).map_err(|_| ErrorCode::Malformed)?,
+        )?;
         if body.len() > MAX_BODY {
             return Err(ErrorCode::Malformed);
         }

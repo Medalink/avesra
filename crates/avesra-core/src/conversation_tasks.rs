@@ -185,6 +185,13 @@ fn encode(value: &impl Serialize) -> Result<String, ErrorCode> {
     serde_json::to_string(value).map_err(|_| ErrorCode::Malformed)
 }
 pub(super) fn read_record(db: &Connection, turn: Uuid) -> Result<(Record, String), ErrorCode> {
+    super::deletion::require_source(db, turn)?;
+    history_record(db, turn)
+}
+pub(super) fn history_record(db: &Connection, turn: Uuid) -> Result<(Record, String), ErrorCode> {
+    if super::deletion::read(db, turn)?.is_some_and(|v| v.selected) {
+        return Err(ErrorCode::Stale);
+    }
     let (body,state,revision,actor,device,session,utterance):(Vec<u8>,String,String,String,String,String,String)=db.query_row("SELECT substr(CAST(body AS BLOB),1,65537),substr(state,1,32),substr(revision,1,37),substr(actor,1,37),substr(device,1,37),substr(session,1,37),substr(utterance,1,37) FROM accepted_conversations WHERE id=?1",[turn.to_string()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?))).map_err(|_|ErrorCode::Stale)?;
     if body.len() > super::MAX_BODY {
         return Err(ErrorCode::Malformed);

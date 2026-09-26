@@ -192,3 +192,86 @@ If genuine accepted records or the owner's live management proof are unavailable
 record the corresponding case as **unrun**. A silent diagnostic desktop can prove
 only the visible locked/unverified controls; it cannot establish successful Hello,
 accepted history, source correctness or the complete A16 deletion workflow.
+
+
+## Selected ordinary conversation deletion (schema29)
+
+History offers an explicit preparation and confirmation for one exact accepted
+turn/revision. This first deletion scope supports only completed ordinary Model
+answers/clarifications in the current live paired control session. It refuses
+linked tasks, memory commands/sources, event-derived answers, other provenance,
+incomplete records, unsupported deletion records and unknown dependencies. These
+refusals leave content unchanged; this is partial A16, not general task or memory
+history deletion.
+
+Preparation reads the indexed same-owner/device/session suffix from the selected
+turn through the current high-water. At most 128 records and 2 MiB of encoded bodies
+may enter the closure; observing a 129th record or exceeding the byte bound refuses.
+Because old planner dialogue has no source IDs, confirmation explicitly includes
+removal of all later stored planner requests/dialogue/model replies in that suffix.
+Later independently accepted user text is preserved. The selected accepted text
+is removed too. The ticket retains exact metadata and a digest, never raw text.
+A native-only ticket is bound to the original protected History reader, panel,
+owner revision/pairing, live session/generation and a 30-second preparation lifetime;
+confirmation and network waits never renew it or the original Hello proof.
+
+Confirmation holds the actual accepted-work coordinator, revalidates the complete
+closure, refuses live native reply/claim/retirement owners, and obtains exact
+current-session controller retirement observations. Only retired or same-session
+closed-and-compacted contexts with separately validated stored Model replies
+(or validated prior deletion tombstones recording that eligibility) are eligible. Busy, uncertain, missing/restarted sessions or lost original authority
+refuse. The final ledger transaction rebuilds and compares the closure and checks
+current authorization immediately before commit. No action is cancelled merely to
+make its history deletable.
+
+Schema29 preserves accepted/plan/reply IDs, native ordinals and replay constraints.
+Content-free tombstones distinguish removed accepted text from removed dependent
+planner content. Replaced bodies contain only an empty JSON object. Source,
+planner and reconstruction readers reject tombstones; History skips deleted
+accepted records and explicitly labels retained user text whose model response
+was deleted. Neither tombstones nor stored metadata recreate a live capability.
+
+This is logical product deletion and exclusion from retrieval. The writer verifies
+SQLite secure_delete is enabled before mutation; a post-commit WAL truncation is
+best effort and its result is reported separately from the committed deletion.
+It is not forensic erasure of old pages, filesystem snapshots, process memory or
+offline backups. No existing backup is rewritten. Settings projections clear on
+confirmation, lock/hide or expired authority. Development must never invoke this
+operation against user data or manufacture accepted records for proof.
+
+Validated schema29 tombstones are content-free members of subsequent same-session
+suffix closures. They retain exact original request/turn/reply identities and the
+original native transaction's ordinary-Model eligibility; they do not reconstruct a
+reply or confer authority. Every member still needs a fresh current-session remote
+retirement result and dead native content owners. The digest includes the existing
+tombstone and any surviving accepted body. Selecting a dependent-only tombstone
+removes only that turn's surviving accepted text; previously selected rows stay
+removed. Later independent originals remain available in History with an explicit
+response-deleted state and are never reused as planner dialogue.
+
+The native History reader carries a content-generation value. Any deletion commit
+invalidates that generation and emits `conversation-history-changed`, so queued
+old reads and WebView callbacks cannot republish removed content. Preparation and
+confirmation retain the actual native reader and owner guards; confirmation also
+retains the accepted-work coordinator. The original Settings challenge, Hello
+proof, panel, connected session generation and action epoch remain current through
+the ledger authorization. A dropped caller withdraws publication but does not
+release actual blocking work. Confirmation consumes its ticket and reads the same
+pinned controller retirement API; unknown or missing sessions fail closed. It
+never cancels work to manufacture retirement.
+
+Manual proof remains unrun: after genuine ordinary accepted replies have retired,
+open verified History and prepare one current-session ordinary turn. Check the
+exact selected text and later response cascade before confirming. Reopen History
+to inspect absence of the selected original, retained later independent originals,
+and explicit deleted-response labels; later select one such retained original to
+check repeated deletion. Lock/hide or let the original confirmation expire before
+confirming to observe refusal. Task/fact-linked, uncertain, old-session and oversized
+closures must refuse without deletion. Do not use this procedure on content the
+owner wishes to retain. Source/static checks are not proof that deletion ran.
+
+Each preparation/confirmation operation also keeps its own original twelve-second
+management deadline, bounded by the same original thirty-second ticket and Hello
+expiry. This does not extend the ticket. A successful ledger commit invokes its
+owned content-invalidation callback before sending the result, even if the caller
+has gone away; receiving the result is not the invalidation owner.

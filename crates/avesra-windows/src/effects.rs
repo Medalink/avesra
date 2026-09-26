@@ -71,6 +71,17 @@ impl Management {
     }
 }
 enum Command {
+    PrepareHistoryDeletion {
+        selection: avesra_core::conversations::deletion::Selection,
+        authorize: CatalogAuthorization,
+        reply: SyncSender<Result<avesra_core::conversations::deletion::Prepared, ErrorCode>>,
+    },
+    DeleteHistory {
+        committed: Box<dyn FnOnce() + Send>,
+        prepared: avesra_core::conversations::deletion::Prepared,
+        authorize: CatalogAuthorization,
+        reply: SyncSender<Result<avesra_core::conversations::deletion::Deleted, ErrorCode>>,
+    },
     History {
         actor: Uuid,
         device: Uuid,
@@ -1453,6 +1464,17 @@ impl NativeEffects {
                             );
                             continue;
                         }
+                        Command::PrepareHistoryDeletion{selection,mut authorize,reply}=>{
+                            let result=controller.management().prepare_history_deletion(selection,&mut authorize);
+                            let _=reply.try_send(result);
+                            continue;
+                        }
+                        Command::DeleteHistory{prepared,mut authorize,committed,reply}=>{
+                            let result=controller.management().delete_conversation_content(&prepared,&mut authorize);
+                            if result.is_ok(){committed();}
+                            let _=reply.try_send(result);
+                            continue;
+                        }
                         Command::History{actor,device,query,mut authorize,reply}=>{
                             let result=controller.management().conversation_history(actor,device,query,&mut authorize);
                             let _=reply.try_send(result);
@@ -1846,6 +1868,74 @@ impl NativeEffects {
         self.send
             .try_send(Command::AcceptConversation {
                 conversation,
+                authorize,
+                reply,
+            })
+            .map_err(|_| ErrorCode::Unavailable)?;
+        Ok(receive)
+    }
+    /// Actual content owners, including withdrawn replies still awaiting output.
+    pub fn history_sources_retired(
+        &self,
+        contexts: &[avesra_contracts::planner::Context],
+    ) -> Result<(), ErrorCode> {
+        if contexts.is_empty() || contexts.len() > 128 {
+            return Err(ErrorCode::Malformed);
+        }
+        let state = self.state.lock().map_err(|_| ErrorCode::Unavailable)?;
+        for c in contexts {
+            let matches = |target: &CancellationTarget| {
+                target.actor == c.actor
+                    && target.source.device == c.device
+                    && target.source.session == c.session
+                    && target.source.utterance == c.utterance
+                    && target.id == c.turn
+                    && target.revision == c.turn_revision
+            };
+            if state
+                .planners
+                .iter()
+                .any(|(t, _, l)| matches(t) && l.is_alive())
+                || state
+                    .replies
+                    .iter()
+                    .any(|r| matches(&r.target) && r.lifetime.is_alive())
+            {
+                return Err(ErrorCode::Unavailable);
+            }
+        }
+        Ok(())
+    }
+    pub fn prepare_history_deletion(
+        &self,
+        selection: avesra_core::conversations::deletion::Selection,
+        authorize: CatalogAuthorization,
+    ) -> Result<
+        Receiver<Result<avesra_core::conversations::deletion::Prepared, ErrorCode>>,
+        ErrorCode,
+    > {
+        let (reply, receive) = mpsc::sync_channel(1);
+        self.send
+            .try_send(Command::PrepareHistoryDeletion {
+                selection,
+                authorize,
+                reply,
+            })
+            .map_err(|_| ErrorCode::Unavailable)?;
+        Ok(receive)
+    }
+    pub fn delete_history(
+        &self,
+        committed: Box<dyn FnOnce() + Send>,
+        prepared: avesra_core::conversations::deletion::Prepared,
+        authorize: CatalogAuthorization,
+    ) -> Result<Receiver<Result<avesra_core::conversations::deletion::Deleted, ErrorCode>>, ErrorCode>
+    {
+        let (reply, receive) = mpsc::sync_channel(1);
+        self.send
+            .try_send(Command::DeleteHistory {
+                committed,
+                prepared,
                 authorize,
                 reply,
             })

@@ -221,7 +221,7 @@ Example operator commands (hashes are from the trusted build record, never
 guessed; these commands are not executed by writing this specification):
 
 ```powershell
-./scripts/package-windows.ps1 -SourceIdentity <source-archive-sha256> -StoreSchema <13-through-16-from-frozen-build> -Output <new-package-directory>
+./scripts/package-windows.ps1 -SourceIdentity <source-archive-sha256> -StoreSchema <13-through-29-from-frozen-build> -Output <new-package-directory>
 python ./scripts/install-windows.py prepare-extension --package <package-directory> --sha256 <manifest-sha256>
 # Explicitly load/reload the printed stable extension path and inspect its ID.
 python ./scripts/install-windows.py stage --package <package-directory> --sha256 <manifest-sha256> --extension-id <actual-id>
@@ -233,14 +233,14 @@ that old trusted package's extension, reload the browser, then
 `rollback --version <that-retained-version> --browser chrome --data <actual-app-data>`.
 The explicit target is never inferred from a previous pointer modified by
 unregistration. Rollback refuses a store schema newer than the package's declared
-support. Package creation requires schema13 through26 to match the actual frozen
+support. Package creation requires schema13 through29 to match the actual frozen
 source's schema marker; the trusted build record must also bind those executables
 to that source archive. The installer never guesses schema from a filename and
 never restores an old database. `unregister` retains package directories, source
 manifests, extensions and protected data. Incomplete staging directories are
 retained and reported for explicit inspection, never silently overwritten.
 
-Current source writes schema26. Schema25 adds the bounded owner demonstration journal; schema26 adds NativeMailbox reply provenance and adds no tables. Schema23 rebuilds private memory source columns for mutually exclusive task/accepted-turn provenance while preserving foreign keys; schema24 adds typed Gmail targets, payloads and bounded mailbox observations without new tables. Schema20 preserves explicit already-satisfied action outcomes; schema21 adds exact X-ready targets; schema22 adds typed model/native-event reply provenance. These compatibility markers prevent old readers from reopening newly written serialized records; they add no tables. Schema17 adds the monotonically increasing native
+Current source writes schema29 (the preceding source marker was28). Schema29 adds the content-free conversation tombstone table and exact actor/device/session history index in both stores opened by the shared Store implementation. The migration is additive: accepted-conversation rowids and replay constraints are preserved without rebuilding that table. Once either store has migrated, rollback to a package declaring support below29 is refused; the installer does not downgrade or restore a database. Schema27 adds the passive teaching journal; schema28 adds typed disk-activity diagnostic observations. Schema25 adds the bounded owner demonstration journal; schema26 adds NativeMailbox reply provenance and adds no tables. Schema23 rebuilds private memory source columns for mutually exclusive task/accepted-turn provenance while preserving foreign keys; schema24 adds typed Gmail targets, payloads and bounded mailbox observations without new tables. Schema20 preserves explicit already-satisfied action outcomes; schema21 adds exact X-ready targets; schema22 adds typed model/native-event reply provenance. These compatibility markers prevent old readers from reopening newly written serialized records; they add no tables. Schema17 adds the monotonically increasing native
 planner claim counter;18 and19 mark VPN and browser-provider record compatibility.
 No database downgrade or counter reset is performed. Native/controller deployments
 must match planner-v4 and normal-speech-v5; older wire versions reject.

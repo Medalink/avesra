@@ -15,6 +15,8 @@ use uuid::Uuid;
 #[path = "conversation_observation.rs"]
 mod observation;
 pub use observation::{ObservationClaim, ObservationRequest};
+#[path = "conversation_deletion.rs"]
+pub mod deletion;
 
 const MAX_BODY: usize = 65_536;
 #[path = "conversation_memory.rs"]
@@ -467,6 +469,7 @@ fn matches_source(plan: &Plan, record: &Record) -> bool {
         && plan.request.text == record.text
 }
 fn read_plan(db: &Connection, record: &Record) -> Result<Option<(Plan, String)>, ErrorCode> {
+    deletion::require_source(db, record.id)?;
     let row:Option<(String,String,Vec<u8>,String)>=db.query_row("SELECT substr(request,1,37),substr(actor,1,37),substr(CAST(body AS BLOB),1,65537),substr(state,1,32) FROM conversation_plans WHERE turn=?1",[record.id.to_string()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional().map_err(|_|ErrorCode::Storage)?;
     let Some((request, actor, body, state)) = row else {
         return Ok(None);
@@ -489,6 +492,7 @@ fn read_plan(db: &Connection, record: &Record) -> Result<Option<(Plan, String)>,
     Ok(Some((plan, state)))
 }
 fn read_reply(db: &Connection, plan: &Plan) -> Result<Option<ReplyRecord>, ErrorCode> {
+    deletion::require_source(db, plan.request.context.turn)?;
     let row:Option<(String,String,Vec<u8>)>=db.query_row("SELECT substr(revision,1,37),substr(request,1,37),substr(CAST(body AS BLOB),1,65537) FROM conversation_replies WHERE turn=?1",[plan.request.context.turn.to_string()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional().map_err(|_|ErrorCode::Storage)?;
     let Some((revision, request, body)) = row else {
         return Ok(None);
@@ -568,6 +572,20 @@ pub(super) fn history(
     db: &Connection,
     record: &Record,
 ) -> Result<Option<super::history::Planner>, ErrorCode> {
+    if let Some(deleted) = deletion::read(db, record.id)? {
+        if deleted.selected {
+            return Err(ErrorCode::Stale);
+        }
+        return Ok(Some(super::history::Planner {
+            request: deleted.context.request,
+            state: "response_deleted".to_owned(),
+            owner_revision: deleted.owner_revision,
+            registration_revision: deleted.context.registration_revision,
+            reply: None,
+            server_fingerprint: None,
+            content_deleted: true,
+        }));
+    }
     let Some((plan, state)) = read_plan(db, record)? else {
         return Ok(None);
     };
@@ -576,6 +594,7 @@ pub(super) fn history(
         return Err(ErrorCode::Malformed);
     }
     Ok(Some(super::history::Planner {
+        content_deleted: false,
         request: plan.request.context.request,
         state,
         owner_revision: plan.binding.owner_revision,
@@ -641,6 +660,9 @@ fn recent_dialogue(
     while let Some(row) = rows.next().map_err(|_| ErrorCode::Storage)? {
         let id: String = row.get(0).map_err(|_| ErrorCode::Malformed)?;
         let id = Uuid::parse_str(&id).map_err(|_| ErrorCode::Malformed)?;
+        if deletion::read(db, id)?.is_some() {
+            continue;
+        }
         let (record, state) = super::tasks::read_record(db, id)?;
         if record.actor != current.actor
             || record.source.device != current.source.device

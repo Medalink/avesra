@@ -22,6 +22,7 @@ pub struct Reply {
 }
 #[derive(Serialize)]
 pub struct Planner {
+    pub content_deleted: bool,
     pub request: Uuid,
     pub state: String,
     pub owner_revision: Uuid,
@@ -75,7 +76,7 @@ fn row(
     id: Uuid,
     revision: Option<Uuid>,
 ) -> Result<Row, ErrorCode> {
-    let (record, state) = tasks::read_record(db, id)?;
+    let (record, state) = tasks::history_record(db, id)?;
     if record.actor != actor
         || record.source.device != device
         || revision.is_some_and(|v| v != record.revision)
@@ -205,13 +206,12 @@ impl Store {
                     last = Some(*position);
                     examined += 1;
                     if owner == &actor_key && endpoint == &device_key {
-                        rows.push(row(
-                            &self.connection,
-                            actor,
-                            device,
-                            Uuid::parse_str(id).map_err(|_| ErrorCode::Malformed)?,
-                            None,
-                        )?);
+                        let id = Uuid::parse_str(id).map_err(|_| ErrorCode::Malformed)?;
+                        if super::deletion::read(&self.connection, id)?.is_some_and(|v| v.selected)
+                        {
+                            continue;
+                        }
+                        rows.push(row(&self.connection, actor, device, id, None)?);
                         if rows.len() == 20 {
                             break;
                         }

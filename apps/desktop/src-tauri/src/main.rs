@@ -1047,6 +1047,8 @@ fn main() {
             tasks::teaching::stop_demonstration,
             tasks::teaching::change_demonstration,
             tasks::history::inspect_conversation_history,
+            tasks::history::deletion::prepare_conversation_deletion,
+            tasks::history::deletion::confirm_conversation_deletion,
             tasks::memory::memory_forget_status,
             tasks::memory::approve_memory_forget,
             tasks::memory::cancel_memory_forget,
