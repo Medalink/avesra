@@ -32,4 +32,4 @@ sox==1.5.0
 soxr==1.1.0
 threadpoolctl==3.7.0
 tomlkit==0.14.0
-transformers==4.57.3
+transformers==5.10.1
