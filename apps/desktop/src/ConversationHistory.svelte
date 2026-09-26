@@ -212,9 +212,18 @@
   <fieldset disabled={!enabled || busy} class="av-card p-3 mt-3">
     <legend class="av-hint">Search protected history</legend>
     <p class="av-hint">Search your requests and saved replies. All entered words must match.</p>
-    <div class="flex flex-wrap gap-2">
-      <label class="av-hint">Search by <select class="av-select" bind:value={searchMode}><option value="text">Accepted and response text</option><option value="turn">Exact turn ID</option><option value="task">Exact task ID</option><option value="app">Exact linked app ID</option></select></label>
-      <label class="av-hint">{searchMode === "text" ? "Search terms" : "Exact UUID"}<input class="av-input" bind:value={searchText} maxlength="256" placeholder={searchMode === "text" ? "Words that must all match" : "00000000-0000-0000-0000-000000000000"} /></label>
+    <div class="flex flex-wrap items-end gap-2">
+      <div class="flex min-w-0 flex-col gap-1.5">
+        <label class="av-label" for="history-search-mode">Search by</label>
+        <div class="relative">
+          <select id="history-search-mode" class="av-input av-select" bind:value={searchMode}><option value="text">Accepted and response text</option><option value="turn">Exact turn ID</option><option value="task">Exact task ID</option><option value="app">Exact linked app ID</option></select>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" class="pointer-events-none absolute top-1/2 right-2.5 -translate-y-1/2 text-zinc-400" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+        </div>
+      </div>
+      <div class="flex min-w-[180px] flex-1 flex-col gap-1.5">
+        <label class="av-label" for="history-search-query">{searchMode === "text" ? "Search terms" : "Exact UUID"}</label>
+        <input id="history-search-query" class="av-input" bind:value={searchText} maxlength="256" placeholder={searchMode === "text" ? "Words that must all match" : "00000000-0000-0000-0000-000000000000"} />
+      </div>
       <button class="av-btn av-btn-ghost av-btn-sm" disabled={!searchValid} onclick={search}>Search history</button>
       <button class="av-btn av-btn-ghost av-btn-sm" disabled={pageKind !== "search" || !reader || !searchCursor} onclick={() => { if (searchCursor) void inspect({ kind: "search_more", cursor: searchCursor }); }}>More search results</button>
     </div>

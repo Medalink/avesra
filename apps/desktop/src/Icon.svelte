@@ -36,8 +36,24 @@
   viewBox="0 0 24 24"
   fill="none"
   stroke="currentColor"
-  stroke-width="1.8"
+  stroke-width={name === "close" ? 2 : 1.8}
   stroke-linecap="square"
   stroke-linejoin="miter"
-  aria-hidden="true"><path d={paths[name] ?? paths.audio} /></svg
+  aria-hidden="true"
 >
+  {#if name === "brand"}
+    <circle cx="12" cy="12" r="10" />
+    <path d="M8.5 10v4M12 7.5v9M15.5 10v4" stroke-width="2" />
+  {:else if name === "memory"}
+    <ellipse cx="12" cy="5" rx="8" ry="3" />
+    <path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3" stroke-linecap="butt" />
+  {:else if name === "people"}
+    <circle cx="9" cy="8" r="3.5" />
+    <path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.5a3.5 3.5 0 0 1 0 7M18 14a6.5 6.5 0 0 1 3.5 6" />
+  {:else if name === "awareness"}
+    <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" />
+    <circle cx="12" cy="12" r="3" />
+  {:else}
+    <path d={paths[name] ?? paths.audio} />
+  {/if}
+</svg>
