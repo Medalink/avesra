@@ -3,7 +3,7 @@
   import type { VoiceAvatar as Avatar, SpeakerCandidate } from "./speaker-profiles";
   let { avatar, candidate, name, owner, listening, paused, loading, blocked, prompts, ontest, onenroll }: { avatar: Avatar; candidate: SpeakerCandidate | undefined; name: string; owner: boolean; listening: boolean; paused: string; loading: boolean; blocked: boolean; prompts: string[]; ontest: () => void; onenroll: () => void } = $props();
   let phrasesOpen = $state(false);
-  const ready = $derived(avatar.state === "ready_without_portrait" && !!avatar.parameters);
+  const ready = $derived((avatar.state === "ready_without_portrait" || avatar.state === "ready_with_portrait") && !!avatar.parameters);
   const personal = $derived(ready && avatar.candidate === null);
 </script>
 <section class="flex flex-col gap-2.5">

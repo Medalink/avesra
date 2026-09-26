@@ -6,6 +6,7 @@
   import ActorRegistration from "./ActorRegistration.svelte";
   import YourVoiceCard from "./YourVoiceCard.svelte";
   import VoiceAvatarPreview from "./VoiceAvatar.svelte";
+  import VoicePortrait from "./VoicePortrait.svelte";
   import VoiceCheck from "./VoiceCheck.svelte";
   import { command, native, type Runtime } from "./runtime";
   import { ensureManagementVerification } from "./setup";
@@ -338,7 +339,7 @@
     <summary class="cursor-pointer text-[12.5px] font-medium">Advanced voice tools</summary>
     <p class="av-hint my-3">Optional owner management, saved recordings and diagnostics. These are not required to start talking.</p>
   <div class="flex flex-col gap-3 border-b border-white/[0.06] pb-3 mb-3">
-    <div class="flex items-center gap-3"><div class="min-w-0 flex-1"><p class="m-0 text-[12.5px] font-medium">Redraw your avatar</p><p class="av-hint mt-1">Preview a visual from your current saved voice. This does not record audio or change who can use Avesra.</p></div><button class="av-btn av-btn-secondary av-btn-sm" disabled={!redrawAllowed || !!redraw} onclick={prepareRedraw}>{redrawBusy ? "Working…" : "Prepare preview"}</button></div>
+    <div class="flex items-center gap-3"><div class="min-w-0 flex-1"><p class="m-0 text-[12.5px] font-medium">Redraw your avatar</p><p class="av-hint mt-1">Preview a visual from your current saved voice. This does not record audio or change who can use Avesra. Saving a redraw removes optional portrait features.</p></div><button class="av-btn av-btn-secondary av-btn-sm" disabled={!redrawAllowed || !!redraw} onclick={prepareRedraw}>{redrawBusy ? "Working…" : "Prepare preview"}</button></div>
     {#if redraw}
       <div class="flex items-center gap-4"><VoiceAvatarPreview parameters={redraw.preview.parameters} name={displayName} owner={ownerComplete} /><div class="flex flex-col gap-2"><span class="av-chip self-start text-zinc-300 ring-white/10">Pending · not saved</span><p class="av-hint">Save this proposed avatar, or cancel to keep the saved one.</p><div class="flex gap-2"><button class="av-btn av-btn-primary av-btn-sm" disabled={redrawBusy} onclick={confirmRedraw}>Save avatar</button><button class="av-btn av-btn-ghost av-btn-sm" disabled={redrawBusy} onclick={discardRedraw}>Cancel</button></div></div></div>
     {/if}
@@ -348,6 +349,7 @@
   </div>
 
     {#if advanced}
+    <VoicePortrait context={`${runtime?.capture_epoch}:${runtime?.action_epoch}:${runtime?.settings.microphone}:${owner?.actor}:${owner?.revision}`} {visible} blocked={acting} connected={!!runtime?.connected} locked={!!runtime?.locked} onbusy={value => busy = value} onrefresh={refresh} />
     <OwnerName {runtime} ownerReady={ownerComplete} blocked={acting || candidatesLoading} />
     <p class="av-hint">{voice.reason}</p>
     <div class="flex flex-wrap gap-2 pt-1">
