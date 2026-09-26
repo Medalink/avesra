@@ -2,6 +2,7 @@
   import PerformanceTable from "./PerformanceTable.svelte";
   import AppTimings from "./AppTimings.svelte";
   import { onMount } from "svelte";
+  import { listen } from "@tauri-apps/api/event";
   import AcceptedTraces from "./AcceptedTraces.svelte";
   import { command, native, type Runtime } from "./runtime";
   let { runtime }: { runtime: Runtime | null } = $props();
@@ -17,24 +18,48 @@
   let error = $state("");
   let mounted = false;
   let generation = 0;
-  $effect(() => { if (runtime?.locked) { generation++; snapshot = null; } });
+  let visible = $state(false);
+  let eventsReady = $state(false);
+  let reopenPending = false;
+  function clear() { generation++; snapshot = null; error = ""; endpoint = null; reopenPending = false; }
+  function hide() { visible = false; clear(); }
+  $effect(() => { if (runtime?.locked) clear(); });
   const ms = (value: number | null) => value === null ? "Unavailable" : `${value.toFixed(1)} ms`;
   async function refresh() {
-    if (busy || !native || !runtime || runtime.locked) return;
+    if (busy || !mounted || !visible || !eventsReady || !native || !runtime || runtime.locked) return;
     busy = true; error = "";
     const current = ++generation;
-    try { const result = await command<Snapshot>("performance_snapshot"); if (mounted && generation === current) snapshot = result; }
-    catch (e) { if (mounted && generation === current) error = String(e); }
-    finally { busy = false; }
+    try { const result = await command<Snapshot>("performance_snapshot"); if (mounted && visible && !runtime?.locked && generation === current) snapshot = result; }
+    catch (e) { if (mounted && visible && !runtime?.locked && generation === current) error = String(e); }
+    finally { busy = false; if (reopenPending) { reopenPending = false; void refresh(); } }
   }
-  onMount(() => { mounted = true; void refresh(); return () => { mounted = false; generation++; }; });
+  onMount(() => {
+    mounted = true; visible = !document.hidden;
+    let stopHidden: (() => void) | undefined;
+    function reopen() {
+      if (!mounted || document.hidden) return;
+      visible = true;
+      if (!eventsReady) return;
+      if (busy) reopenPending = true;
+      else void refresh();
+    }
+    const visibilityChanged = () => { if (document.hidden) hide(); else reopen(); };
+    document.addEventListener("visibilitychange", visibilityChanged);
+    window.addEventListener("focus", reopen);
+    if (native) void listen("settings-hidden", hide).then(stop => {
+      if (!mounted) { stop(); return; }
+      stopHidden = stop; eventsReady = true;
+      if (visible && !document.hidden) void refresh();
+    }).catch(() => { if (mounted) { hide(); error = "Performance view visibility is unavailable. Reload this app window to try again."; } });
+    return () => { mounted = false; hide(); eventsReady = false; stopHidden?.(); document.removeEventListener("visibilitychange", visibilityChanged); window.removeEventListener("focus", reopen); };
+  });
 </script>
 
 <section class="flex flex-col gap-3" aria-label="Performance">
   <div class="flex items-center gap-3 bg-white/[0.04] px-3 py-2 ring-1 ring-white/10 ring-inset">
     <span class="av-chip text-zinc-300 ring-white/20">OBSERVED</span>
     <span class="flex-1 text-[12px] text-zinc-300">{busy ? "Reading local measurements…" : "Real retained observations. No release gate is established."}</span>
-    <button class="av-btn av-btn-ghost av-btn-sm" disabled={busy || !native || !runtime || runtime.locked} onclick={refresh}>Refresh</button>
+    <button class="av-btn av-btn-ghost av-btn-sm" disabled={busy || !visible || !eventsReady || !native || !runtime || runtime.locked} onclick={refresh}>Refresh</button>
   </div>
   <div class="grid grid-cols-3 gap-2">
     <div class="av-card flex flex-col gap-1 p-3">
@@ -76,7 +101,7 @@
   </details>
   <details class="av-card px-3.5 py-2" bind:open={traceDetails}>
     <summary class="cursor-pointer text-[12px] text-zinc-300">Accepted traces, resources &amp; saved comparisons</summary>
-    <div class="mt-3"><AcceptedTraces {runtime} onEndpoint={(value) => { endpoint = value; }} /></div>
+    <div class="mt-3"><AcceptedTraces {runtime} onEndpoint={(value) => { endpoint = mounted && visible && !runtime?.locked ? value : null; }} /></div>
   </details>
   <details class="av-card px-3.5 py-2">
     <summary class="cursor-pointer text-[12px] text-zinc-300">App timings &amp; export</summary>
