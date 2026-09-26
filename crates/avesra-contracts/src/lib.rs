@@ -1,7 +1,9 @@
 //! Versioned data contracts. Validation is not peer authentication.
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+pub mod activity;
 pub mod actors;
+pub mod directedness;
 pub mod discovery;
 pub mod media;
 pub mod planner;

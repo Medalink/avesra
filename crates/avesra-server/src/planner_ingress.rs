@@ -186,11 +186,11 @@ pub(super) async fn operation(
     if !current(&state, &context) || Instant::now() >= deadline {
         return Err(StatusCode::CONFLICT);
     }
-    let (driver, qualification) = state
+    let driver = state
         .reasoning
         .as_ref()
         .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
-    let answer = driver.answer(qualification.clone(), request, started, check.clone());
+    let answer = driver.answer(request, started, check.clone());
     tokio::pin!(answer);
     let mut inspection = tokio::time::interval(Duration::from_millis(250));
     inspection.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);

@@ -46,6 +46,7 @@ fn device_failed(app: &tauri::AppHandle, epoch: u64, output: bool, reason: &'sta
 
 #[derive(Clone)]
 struct OutputLease {
+    volume: Option<u8>,
     purpose: crate::playback_signal::Purpose,
     id: uuid::Uuid,
     epoch: u64,
@@ -75,8 +76,14 @@ struct Configuration {
     playback: bool,
     capture_deadline: Option<Instant>,
     voice_window: bool,
-    last_voice_epoch: u64,
+    voice_lease: Option<uuid::Uuid>,
     output_lease: Option<OutputLease>,
+    output_generation: u64,
+}
+/// Absence of native assistant output, not external replay/room acoustics proof.
+pub struct NoOutput {
+    epoch: u64,
+    generation: u64,
 }
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -120,6 +127,37 @@ pub struct MediaWorker {
     applied_revision: Arc<AtomicU64>,
 }
 impl MediaWorker {
+    pub fn capture_owned(&self) -> bool {
+        self.configuration.lock().map_or(true, |v| v.capture)
+    }
+    pub fn observe_output(
+        &self,
+        output: uuid::Uuid,
+    ) -> Result<crate::playback_signal::OutputObservation, String> {
+        self.telemetry.observe_output(output)
+    }
+    pub fn no_output(&self, local: &LocalState) -> Option<NoOutput> {
+        let config = self.configuration.lock().ok()?;
+        (!config.playback
+            && config.output_lease.is_none()
+            && config.output_generation < u64::MAX
+            && config.playback_epoch == local.playback_epoch
+            && self.applied_revision.load(Ordering::SeqCst) >= config.revision)
+            .then_some(NoOutput {
+                epoch: config.playback_epoch,
+                generation: config.output_generation,
+            })
+    }
+    pub fn no_output_current(&self, proof: &NoOutput, local: &LocalState) -> bool {
+        self.configuration.lock().is_ok_and(|config| {
+            !config.playback
+                && config.output_lease.is_none()
+                && proof.epoch == local.playback_epoch
+                && proof.epoch == config.playback_epoch
+                && proof.generation == config.output_generation
+                && config.output_generation < u64::MAX
+        })
+    }
     pub fn sound_diagnostics(&self) -> Result<SoundDiagnostics, String> {
         self.sound_diagnostics
             .lock()
@@ -188,6 +226,34 @@ impl MediaWorker {
             crate::playback_signal::Purpose::Reply,
         )
     }
+    pub fn open_notification(
+        &self,
+        local: &LocalState,
+        id: uuid::Uuid,
+        caller: Arc<AtomicBool>,
+        volume: u8,
+    ) -> Result<(), String> {
+        if volume > 100 || local.active_task || local.enrollment_capture || local.microphone_check {
+            return Err("Notification output is suppressed".into());
+        }
+        self.open_output(
+            local,
+            id,
+            None,
+            Some(local.action_epoch),
+            caller,
+            crate::playback_signal::Purpose::Notification,
+        )?;
+        let mut config = self.configuration.lock().map_err(|_| "Media unavailable")?;
+        config
+            .output_lease
+            .as_mut()
+            .filter(|v| v.id == id)
+            .ok_or("Notification ownership changed")?
+            .volume = Some(volume);
+        self.sound.publish(&local.settings.sound, volume);
+        Ok(())
+    }
     fn open_output(
         &self,
         local: &LocalState,
@@ -215,6 +281,7 @@ impl MediaWorker {
             *diagnostics = SoundDiagnostics::default();
         }
         config.output_lease = Some(OutputLease {
+            volume: None,
             purpose,
             id,
             epoch: local.playback_epoch,
@@ -223,10 +290,13 @@ impl MediaWorker {
             action_epoch,
             caller,
         });
+        config.output_generation = config.output_generation.saturating_add(1);
         self.telemetry.open(local.playback_epoch, id, purpose);
         config.playback = true;
         config.revision = config.revision.saturating_add(1);
         self.playback_gate.publish(true, local.playback_epoch);
+        self.sound
+            .publish(&local.settings.sound, local.settings.speech_volume);
         Ok(())
     }
     /// Read under Runtime.local; setup cleanup cannot revoke accepted output.
@@ -291,8 +361,12 @@ impl MediaWorker {
         Ok(())
     }
     /// Called with Runtime.local held after validating a fresh paired WSS ack.
-    pub fn open_voice_window(&self, local: &LocalState) -> Result<(), String> {
-        if !local.capture_allowed() || local.enrollment_capture || !local.voice_ready {
+    pub fn open_voice_window(&self, local: &LocalState, lease: uuid::Uuid) -> Result<(), String> {
+        if lease.is_nil()
+            || !local.capture_allowed()
+            || local.enrollment_capture
+            || !local.voice_ready
+        {
             return Err("Normal voice capture is unavailable".into());
         }
         let mut config = self
@@ -302,26 +376,32 @@ impl MediaWorker {
         if config.epoch != local.capture_epoch
             || config.capture
             || config.input.is_none()
-            || local.capture_epoch <= config.last_voice_epoch
+            || config.voice_lease.is_some()
         {
             return Err("Media capture already owned or stale".into());
         }
+        self.outbound
+            .lock()
+            .map_err(|_| "Capture queue unavailable")?
+            .clear();
         config.voice_window = true;
-        config.last_voice_epoch = local.capture_epoch;
+        config.voice_lease = Some(lease);
         config.capture = true;
         config.capture_deadline = Some(Instant::now() + Duration::from_secs(11));
         config.revision = config.revision.saturating_add(1);
         self.capture_gate.publish(true, local.capture_epoch);
         Ok(())
     }
-    pub fn close_voice_window(&self, epoch: u64) {
+    pub fn close_voice_window(&self, epoch: u64, lease: uuid::Uuid) {
         if let Ok(mut config) = self.configuration.lock()
             && config.epoch == epoch
             && config.voice_window
+            && config.voice_lease == Some(lease)
         {
             self.capture_gate.publish(false, epoch);
             config.capture = false;
             config.voice_window = false;
+            config.voice_lease = None;
             config.capture_deadline = None;
             config.revision = config.revision.saturating_add(1);
             if let Ok(mut frames) = self.outbound.lock() {
@@ -353,6 +433,22 @@ impl MediaWorker {
             return Err("Capture lost freshness".into());
         }
         Ok(value)
+    }
+    pub fn take_voice_frame(
+        &self,
+        epoch: u64,
+        lease: uuid::Uuid,
+    ) -> Result<Option<AudioFrame>, String> {
+        {
+            let config = self.configuration.lock().map_err(|_| "Media unavailable")?;
+            if config.epoch != epoch || config.voice_lease != Some(lease) || !config.voice_window {
+                return Err("Capture lease retired".into());
+            }
+            if self.applied_revision.load(Ordering::SeqCst) < config.revision {
+                return Ok(None);
+            }
+        }
+        self.take_capture_frame(epoch)
     }
     pub fn signal_clock(&self) -> f64 {
         self.telemetry.clock()
@@ -399,7 +495,8 @@ impl MediaWorker {
                         let capture_changed = config.epoch != previous.epoch
                             || config.input != previous.input
                             || config.capture != previous.capture
-                            || config.capture_deadline != previous.capture_deadline;
+                            || config.capture_deadline != previous.capture_deadline
+                            || config.voice_lease != previous.voice_lease;
                         let playback_changed = config.playback_epoch != previous.playback_epoch
                             || config.output != previous.output
                             || config.playback != previous.playback
@@ -634,7 +731,8 @@ impl MediaWorker {
                                 }
                             }
                         }
-                        // Display uses submitted samples only; echo/identity remain unqualified.
+                        // Exact submitted output feeds display and rejection-only
+                        // overlap observations; it cannot establish clean audio.
                         for _ in 0..64 {
                             let Ok(mut reference) = stream.reference.try_recv() else {
                                 break;
@@ -713,8 +811,6 @@ impl MediaWorker {
     }
     /// Called inside the serialized local-state update, before disk/network IO.
     pub fn publish(&self, local: &LocalState) {
-        self.sound
-            .publish(&local.settings.sound, local.settings.speech_volume);
         let allowed = local.capture_allowed() && local.settings.microphone.is_some();
         let microphone_check = local.microphone_check_allowed();
         let mut clear_capture = true;
@@ -735,6 +831,13 @@ impl MediaWorker {
                     && v.action_epoch
                         .is_none_or(|epoch| epoch == local.action_epoch)
             });
+            self.sound.publish(
+                &local.settings.sound,
+                output_lease
+                    .as_ref()
+                    .and_then(|v| v.volume)
+                    .unwrap_or(local.settings.speech_volume),
+            );
             let playback = output_lease.is_some();
             let voice_window = config.voice_window
                 && config.epoch == local.capture_epoch
@@ -790,8 +893,13 @@ impl MediaWorker {
                 playback,
                 capture_deadline,
                 voice_window,
-                last_voice_epoch: config.last_voice_epoch,
+                voice_lease: if voice_window {
+                    config.voice_lease
+                } else {
+                    None
+                },
                 output_lease,
+                output_generation: config.output_generation,
             };
         } else {
             self.capture_gate.publish(false, local.capture_epoch);

@@ -1,0 +1,6 @@
+{
+  "lane": "activity",
+  "model_path": "/models/diar_streaming_sortformer_4spk-v2.1",
+  "model_revision": "cd03eee90fbec18297ac31b8c21546e596b7f71c",
+  "cache_path": "/cache/activity"
+}

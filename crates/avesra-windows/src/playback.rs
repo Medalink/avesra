@@ -282,6 +282,9 @@ where
     let mut tail: Option<Tail> = None;
     let mut invalidated = false;
     let error_gate = gate.clone();
+    let diagnostic_silent = crate::output_recording::enabled();
+    let mut recording = crate::output_recording::Tap::open(output_rate, config.channels)
+        .map_err(|_| ErrorCode::Unavailable)?;
     device
         .build_output_stream(
             config,
@@ -457,6 +460,14 @@ where
                         });
                         gate.close_attempt();
                     }
+                }
+                if diagnostic_silent {
+                    if let Some(recording) = recording.as_mut() {
+                        recording.capture(output, channels);
+                    }
+                    // This stays enabled for the entire process, even after recording
+                    // has ended or failed. Never unexpectedly resume audible output.
+                    output.fill(T::from_sample(0.0));
                 }
             },
             move |_| error_gate.close_attempt(),

@@ -6,9 +6,15 @@ pub mod audio;
 pub mod authentication;
 pub mod credentials;
 #[cfg(windows)]
+pub mod diagnostics;
+#[cfg(windows)]
 pub mod effects;
 #[cfg(windows)]
+pub mod output_recording;
+#[cfg(windows)]
 mod playback;
+#[cfg(windows)]
+pub mod prompt;
 #[cfg(windows)]
 mod resampling;
 #[cfg(windows)]
@@ -19,6 +25,8 @@ pub mod shortcuts;
 pub mod sound;
 #[cfg(windows)]
 pub mod volume;
+#[cfg(windows)]
+pub mod vpn;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AudioDevice {

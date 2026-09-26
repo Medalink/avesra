@@ -1,6 +1,6 @@
 # Accepted reply speech transport
 
-Normal answer speech is separate from explicit generated-reference preview. Its native entry point consumes the actual published reply from native-planner.md; it never accepts arbitrary frontend text, a saved row, browser output, an imported response or a mere reply UUID. This source slice must preserve the inactive qualified voice/owner boundary and must not generate, select or play a voice while implementing it.
+Normal answer speech is separate from explicit generated-reference preview and the bounded editable Settings voice test in [generated-voices.md](generated-voices.md). Its native entry point consumes the actual published reply from native-planner.md; it never accepts arbitrary frontend text, a saved row, browser output, an imported response or a mere reply UUID. This source slice must preserve the inactive qualified voice/owner boundary and must not generate, select or play a voice while implementing it.
 
 ## Source ownership and admission
 
@@ -67,7 +67,7 @@ The controller computes its completed-response digest from the canonical serde s
 
 ## Source checkpoint: controller streaming bridge
 
-The paired `/normal-speech` WSS route now reserves the completed source once, checks the active device/exact actor binding and independent action/output permission, and verifies the selected private voice before calling `synthesize`/`TtsStream`. Startup explicitly rejects this route while the reasoning qualification is absent. No history/frontend text path or qualification constructor was added. The immutable native reply revision is a trusted paired-native assertion; the controller validates its exact completed Response digest rather than claiming it can inspect the PC ledger.
+The paired `/normal-speech` WSS route reserves the completed source once, checks the active device/exact actor binding and independent action/output permission, and verifies the selected private voice before calling `synthesize`/`TtsStream`. Missing reasoning configuration rejects the route. A configured driver alone supplies no speech authority: only a completed planner response produced after fresh observed reasoning qualification can populate the completed-source digest. No history/frontend text path creates that source. The immutable native reply revision is a trusted paired-native assertion; the controller validates its exact completed Response digest rather than claiming it can inspect the PC ledger.
 
 A single route holds the existing voice operation permit, including actual blocking authorization reads after a waiter times out. Private synthesis and public output run concurrently with a64-codec-chunk queue (at most245760 PCM bytes, plus current chunk/held frame). This is early streaming with bounded backpressure, not whole-wave preview. The producer retains the original30-second budget including queue stalls. Ready follows actual first audio; Play must arrive within3seconds. Output has32seconds from Play, while the entire socket session has70seconds. Slower synthesis can explicitly fail these budgets; no throughput or latency qualification is claimed.
 
@@ -92,7 +92,7 @@ The private synthesis client requires a caller authorization future after privat
 
 ## Source checkpoint: native accepted playback
 
-`speech::speak` now consumes PublishedReply, validates its text limit and exact source/binding, performs owned native owner/pairing/registration preparation, and connects only to the paired certificate-bound `/normal-speech` endpoint. There is no Tauri command, caller-supplied plaintext or history-to-speech adapter. Current enrolled/voice-ready state remains mandatory and unavailable; the qualified producer still supplies no reply. This code has not opened a device, emitted audio or invoked a model.
+`speech::speak` consumes PublishedReply, validates its text limit and exact source/binding, performs owned native owner/pairing/registration preparation, and connects only to the paired certificate-bound `/normal-speech` endpoint. There is no Tauri command, caller-supplied plaintext or history-to-speech adapter. Current enrolled/voice-ready state remains mandatory. The configured reasoning adapter now has a concrete observed qualifier, but an eligible controlled load and accepted reply/audio evidence remain runtime gates; source checks do not establish them.
 
 The accepted output lease carries an original PlannerCancellation clone plus caller-withdrawal atomic directly into the CPAL attempt gate. Callback checks need no runtime/database locks or allocations and remain effective if native device construction is blocked. The same actual output owner is shared with Settings preview, whose async command now retains a spawned coordinator on caller loss. Logical withdrawal closes the gate immediately. Actual admission ownership is not released until the media worker acknowledges the post-withdrawal configuration revision after native construction/drop has completed. An indefinitely stuck OS operation therefore keeps admission busy; poisoned retirement state likewise does not authorize a replacement. Timer expiry is not proof that native work ended.
 

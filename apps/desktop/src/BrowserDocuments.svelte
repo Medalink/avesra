@@ -71,7 +71,7 @@
       {:else}<p class="av-hint py-2.5">No eligible top-level documents were observed.</p>{/each}
     </div>
   {:else if status?.phase.state === "selected"}
-    <p class="av-hint">Revalidated metadata reference. Page operations remain unavailable; future actions require fresh document and accepted-task authority.</p>
+    <p class="av-hint">Selected document metadata. To read a partial excerpt, grant this saved site in Actions and make an accepted “Read page at ORIGIN” request. Every read revalidates this exact document and browser permission; metadata alone grants no reading authority.</p>
     <p class="break-all font-mono text-[11px] text-zinc-300">{status.phase.candidate.url}<br />Reference {status.phase.identity} / {status.phase.revision}</p>
   {:else if status}
     <p class="av-hint text-amber-200" role="status">{status.phase.state === "waiting" ? "Waiting for the selected extension" : status.phase.state === "expired" ? "Document observation expired. Verify and refresh explicitly." : status.phase.state === "too_many" ? "More than 16 matching tabs; no target was guessed." : "Document metadata unavailable; no page was opened."}</p>

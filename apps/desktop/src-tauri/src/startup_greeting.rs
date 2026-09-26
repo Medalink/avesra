@@ -5,6 +5,10 @@ use std::{sync::atomic::Ordering, time::Duration};
 use tauri::{Emitter, Manager};
 
 pub(crate) async fn run(app: tauri::AppHandle, generation: u64, epoch: u64) {
+    #[cfg(windows)]
+    if avesra_windows::output_recording::enabled() {
+        return;
+    }
     // Expected context was captured before saved credential loading.
     let state = app.state::<Runtime>();
     let current = || {

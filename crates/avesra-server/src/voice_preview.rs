@@ -1,8 +1,8 @@
-//! Explicit reference-asset output. Never selects a voice or starts microphone input.
+//! Explicit voice preview output. Never selects a voice or starts microphone input.
 use super::{Shared, active, authenticate_headers, voice_setup};
 use avesra_contracts::{
     ErrorCode,
-    preview::{PreviewControl, PreviewEvent, PreviewMessage, PreviewRequest},
+    preview::{self, PreviewControl, PreviewEvent, PreviewMessage, PreviewRequest},
 };
 use axum::{
     extract::{
@@ -13,7 +13,7 @@ use axum::{
     response::Response,
 };
 use std::time::Duration;
-use tokio::sync::OwnedSemaphorePermit;
+use tokio::sync::{OwnedSemaphorePermit, mpsc};
 use uuid::Uuid;
 
 pub(super) async fn upgrade(
@@ -144,17 +144,14 @@ async fn stream(
     device: Uuid,
     request: &PreviewRequest,
 ) -> Result<(), ErrorCode> {
+    if request.greeting.is_some() || request.test_text.is_some() {
+        return synthesized_stream(socket, auth, device, request).await;
+    }
     let lane = auth.tts.as_ref().ok_or(ErrorCode::Unavailable)?;
     let pcm = tokio::select! {
         biased;
         _=socket.recv()=>return Err(ErrorCode::Stale),
-        value=tokio::time::timeout(Duration::from_secs(31),async {
-            if request.greeting.is_some() {
-                greeting_pcm(auth,device,request).await
-            } else {
-                lane.preview_voice(1,&request.voice).await
-            }
-        })=>value.map_err(|_|ErrorCode::Expired)??,
+        value=tokio::time::timeout(Duration::from_secs(31),lane.preview_voice(1,&request.voice))=>value.map_err(|_|ErrorCode::Expired)??,
     };
     let samples = pcm.len() as u64;
     send(
@@ -204,17 +201,23 @@ async fn stream(
     Ok(())
 }
 
-async fn greeting_pcm(
+enum Piece {
+    Audio(Vec<i16>),
+    Complete { samples: usize },
+}
+
+async fn produce(
     auth: &Shared,
     device: Uuid,
     request: &PreviewRequest,
-) -> Result<Vec<i16>, ErrorCode> {
+    tx: mpsc::Sender<Piece>,
+) -> Result<(), ErrorCode> {
     use avesra_server::audio::synthesis::{Completion, SpeechEvent};
-    let text = request
-        .greeting
-        .as_ref()
-        .ok_or(ErrorCode::Malformed)?
-        .text()?;
+    let text = match (&request.greeting, &request.test_text) {
+        (Some(greeting), None) => greeting.text()?,
+        (None, Some(text)) => text.clone(),
+        _ => return Err(ErrorCode::Malformed),
+    };
     let lane = auth.tts.as_ref().ok_or(ErrorCode::Unavailable)?;
     let status = lane.voice_status(1).await?;
     if status.selection_state != "available"
@@ -241,21 +244,174 @@ async fn greeting_pcm(
             }
         })
         .await?;
-    let mut pcm = Vec::new();
+    let mut received = 0usize;
     loop {
         match stream.next().await? {
             SpeechEvent::Audio { samples, .. } => {
-                if pcm.len() + samples.len() > 720_000 {
+                if samples.len() != 1920 || received + samples.len() > preview::MAX_SAMPLES as usize
+                {
                     return Err(ErrorCode::TooLarge);
                 }
-                pcm.extend(samples);
+                received += samples.len();
+                tx.send(Piece::Audio(samples))
+                    .await
+                    .map_err(|_| ErrorCode::Stale)?;
             }
             SpeechEvent::End {
                 outcome: Completion::Complete,
                 samples,
                 ..
-            } if samples == pcm.len() && !pcm.is_empty() => return Ok(pcm),
+            } if samples == received && received != 0 => {
+                tx.send(Piece::Complete { samples })
+                    .await
+                    .map_err(|_| ErrorCode::Stale)?;
+                return Ok(());
+            }
             _ => return Err(ErrorCode::Unavailable),
         }
     }
+}
+
+async fn synthesized_stream(
+    socket: &mut WebSocket,
+    auth: &Shared,
+    device: Uuid,
+    request: &PreviewRequest,
+) -> Result<(), ErrorCode> {
+    // Includes status, private preparation and blocked queue sends. Neither
+    // backpressure nor a later private start renews this original budget.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    // 64 * 1920 samples = 245760 PCM bytes, with one producer chunk and
+    // one consumer chunk plus its held final frame outside the queue.
+    let (tx, rx) = mpsc::channel(64);
+    let producer = async {
+        tokio::time::timeout_at(deadline, produce(auth, device, request, tx))
+            .await
+            .map_err(|_| ErrorCode::Expired)?
+    };
+    // No detached producer: either branch's failure drops the private stream,
+    // whose Drop retains its actual lane permit through cancellation settlement.
+    tokio::try_join!(producer, consume(socket, request, rx))?;
+    Ok(())
+}
+
+async fn next(socket: &mut WebSocket, rx: &mut mpsc::Receiver<Piece>) -> Result<Piece, ErrorCode> {
+    tokio::select! { biased;
+        _=socket.recv()=>Err(ErrorCode::Stale),
+        value=rx.recv()=>value.ok_or(ErrorCode::Unavailable),
+    }
+}
+
+async fn packet(
+    socket: &mut WebSocket,
+    request: &PreviewRequest,
+    origin: tokio::time::Instant,
+    sequence: u64,
+    samples: Vec<i16>,
+    last_sent: &mut Option<tokio::time::Instant>,
+) -> Result<(), ErrorCode> {
+    let due = origin + Duration::from_millis((sequence - 1) * 20);
+    let send_at = last_sent.map_or(due, |last| due.max(last + Duration::from_millis(10)));
+    tokio::select! { biased;
+        _=socket.recv()=>return Err(ErrorCode::Stale),
+        _=tokio::time::sleep_until(send_at)=>{},
+    }
+    if tokio::time::Instant::now().saturating_duration_since(due) > Duration::from_millis(100) {
+        return Err(ErrorCode::Expired);
+    }
+    *last_sent = Some(tokio::time::Instant::now());
+    send(
+        socket,
+        request,
+        PreviewMessage::Audio {
+            sequence,
+            sample_offset: (sequence - 1) * preview::FRAME_SAMPLES,
+            samples,
+        },
+    )
+    .await
+}
+
+async fn consume(
+    socket: &mut WebSocket,
+    request: &PreviewRequest,
+    mut rx: mpsc::Receiver<Piece>,
+) -> Result<(), ErrorCode> {
+    let Piece::Audio(first) = next(socket, &mut rx).await? else {
+        return Err(ErrorCode::Malformed);
+    };
+    if first.len() != 1920 {
+        return Err(ErrorCode::Malformed);
+    }
+    send(
+        socket,
+        request,
+        PreviewMessage::StreamingReady {
+            sample_rate: 24000,
+            frame_samples: preview::FRAME_SAMPLES,
+            max_samples: preview::MAX_SAMPLES,
+        },
+    )
+    .await?;
+    let control: PreviewControl =
+        serde_json::from_str(&read(socket, Duration::from_secs(3)).await?)
+            .map_err(|_| ErrorCode::Malformed)?;
+    if !matches!(control, PreviewControl::Play { request_id } if request_id == request.request_id) {
+        return Err(ErrorCode::Stale);
+    }
+    let origin = tokio::time::Instant::now();
+    let output = async {
+        let mut incoming = Some(first);
+        let mut held = None;
+        let mut received = 0usize;
+        let mut chunks = 0u64;
+        let mut last_sent = None;
+        loop {
+            if let Some(samples) = incoming.take() {
+                if samples.len() != 1920 || received + samples.len() > preview::MAX_SAMPLES as usize
+                {
+                    return Err(ErrorCode::TooLarge);
+                }
+                received += samples.len();
+                for frame in samples.chunks_exact(preview::FRAME_SAMPLES as usize) {
+                    if let Some(previous) = held.replace(frame.to_vec()) {
+                        chunks += 1;
+                        packet(socket, request, origin, chunks, previous, &mut last_sent).await?;
+                    }
+                }
+            }
+            match next(socket, &mut rx).await? {
+                Piece::Audio(samples) => incoming = Some(samples),
+                Piece::Complete { samples } => {
+                    if samples != received {
+                        return Err(ErrorCode::Malformed);
+                    }
+                    let last = held.take().ok_or(ErrorCode::Malformed)?;
+                    chunks += 1;
+                    packet(socket, request, origin, chunks, last, &mut last_sent).await?;
+                    send(
+                        socket,
+                        request,
+                        PreviewMessage::End {
+                            chunks,
+                            samples: samples as u64,
+                        },
+                    )
+                    .await?;
+                    let control: PreviewControl =
+                        serde_json::from_str(&read(socket, Duration::from_secs(2)).await?)
+                            .map_err(|_| ErrorCode::Malformed)?;
+                    if !matches!(control, PreviewControl::Submitted { request_id, samples: count }
+                        if request_id == request.request_id && count == samples as u64)
+                    {
+                        return Err(ErrorCode::Stale);
+                    }
+                    return Ok(());
+                }
+            }
+        }
+    };
+    tokio::time::timeout_at(origin + Duration::from_secs(32), output)
+        .await
+        .map_err(|_| ErrorCode::Expired)?
 }

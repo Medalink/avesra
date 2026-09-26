@@ -124,6 +124,11 @@ pub struct PlannerRequest {
     cancellation: PlannerCancellation,
 }
 impl PlannerRequest {
+    /// Shares the original native caller's withdrawal; it cannot create a turn.
+    pub fn with_withdrawal(mut self, signal: Arc<AtomicBool>) -> Self {
+        self.cancellation = PlannerCancellation(signal);
+        self
+    }
     pub fn action_epoch(&self) -> u64 {
         self.session.action_epoch
     }
@@ -174,7 +179,13 @@ struct Plan {
 }
 impl Plan {
     fn validate(&self) -> Result<(), ErrorCode> {
-        self.request.validate()?;
+        // Historical v1 has exactly the same strict request shape. This local
+        // read validation does not relax the wire or construct a live claim.
+        let mut request = self.request.clone();
+        if request.version == 1 {
+            request.version = planner::VERSION;
+        }
+        request.validate()?;
         self.binding.validate()?;
         if self.binding.revoked
             || self.binding.device != self.request.context.device
@@ -278,6 +289,8 @@ pub struct StoredReply {
     publication: PlannerCancellation,
     revision: Uuid,
     reply: planner::Reply,
+    task: Option<super::tasks::LinkedTask>,
+    started: Instant,
 }
 impl Drop for StoredReply {
     fn drop(&mut self) {
@@ -285,6 +298,13 @@ impl Drop for StoredReply {
     }
 }
 impl StoredReply {
+    pub fn proposed_task(&self) -> Option<&super::tasks::LinkedTask> {
+        self.task.as_ref()
+    }
+    pub fn remaining_ms(&self) -> Result<u64, ErrorCode> {
+        self.publication.check()?;
+        remaining(self.started)
+    }
     pub fn cancellation(&self) -> PlannerCancellation {
         self.publication.clone()
     }
@@ -372,7 +392,17 @@ fn read_reply(db: &Connection, plan: &Plan) -> Result<Option<ReplyRecord>, Error
         return Err(ErrorCode::Malformed);
     }
     let value: ReplyRecord = serde_json::from_slice(&body).map_err(|_| ErrorCode::Malformed)?;
-    value.reply.validate(&plan.request.context)?;
+    if value.reply.version != plan.request.version {
+        return Err(ErrorCode::Version);
+    }
+    let mut checked = value.reply.clone();
+    if checked.version == 1 {
+        if matches!(checked.response, planner::Response::Proposal { .. }) {
+            return Err(ErrorCode::Malformed);
+        }
+        checked.version = planner::VERSION;
+    }
+    checked.validate(&plan.request.context)?;
     if value.revision.is_nil()
         || value.revision.to_string() != revision
         || request != plan.request.context.request.to_string()
@@ -523,9 +553,10 @@ impl Store {
         &mut self,
         mut claim: PlannerClaim,
         reply: planner::Reply,
+        apps: &crate::apps::AppCatalog,
         authorize: &mut dyn FnMut(&PlannerAuthority<'_>) -> Result<(), ErrorCode>,
     ) -> Result<StoredReply, ErrorCode> {
-        let result = self.finish_planner_inner(&claim, reply, authorize);
+        let result = self.finish_planner_inner(&claim, reply, apps, authorize);
         if result.is_err() {
             self.retire_planner(claim.retirement())?;
         } else {
@@ -537,11 +568,17 @@ impl Store {
         &mut self,
         claim: &PlannerClaim,
         reply: planner::Reply,
+        apps: &crate::apps::AppCatalog,
         authorize: &mut dyn FnMut(&PlannerAuthority<'_>) -> Result<(), ErrorCode>,
     ) -> Result<StoredReply, ErrorCode> {
         claim.cancellation.check()?;
         remaining(claim.started)?;
         reply.validate(&claim.plan.request.context)?;
+        let permissions = if matches!(reply.response, planner::Response::Proposal { .. }) {
+            self.action_permissions(Some(reply.context.actor))?
+        } else {
+            Vec::new()
+        };
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -579,9 +616,22 @@ impl Store {
             [record.id.to_string()],
         )
         .map_err(|_| ErrorCode::Storage)?;
+        let task = match &result.reply.response {
+            planner::Response::Proposal { action } => super::tasks::link_proposal(
+                &tx,
+                &record,
+                action,
+                &permissions,
+                apps,
+                claim.started + Duration::from_millis(planner::MAX_BUDGET_MS),
+            )?,
+            _ => None,
+        };
         let next = match &result.reply.response {
-            planner::Response::Answer(_) => "answered",
-            planner::Response::NeedsInput(_) => "waiting_input",
+            planner::Response::Answer { .. } => "answered",
+            planner::Response::NeedsInput { .. } => "waiting_input",
+            planner::Response::Proposal { .. } if task.is_some() => "planning",
+            planner::Response::Proposal { .. } => "waiting_input",
         };
         tx.execute(
             "UPDATE accepted_conversations SET state=?1 WHERE id=?2 AND state='planning'",
@@ -604,6 +654,8 @@ impl Store {
             publication: claim.cancellation.clone(),
             revision: result.revision,
             reply: result.reply,
+            task,
+            started: claim.started,
         })
     }
 }

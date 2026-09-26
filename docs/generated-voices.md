@@ -1,6 +1,73 @@
 # Generated voice candidates and explicit preview
 
+## Editable voice test
+
+Audio & Voice provides an explicit **Test selected voice** action with an editable
+text area, initially containing the default sentence: `Hello I am Avesra, A Very
+Effective Smart Reasoning Assistant. I am designed to help you manage your thoughts
+and ideas.` **Use default** restores it. Editing, resetting, mounting or refreshing
+never plays audio; **Play text** speaks a snapshot of the entered text using the
+currently selected and active voice, with the existing native effects/atmosphere.
+The draft lives only in the mounted panel; it is not saved as voice metadata,
+history or a generated candidate. Existing candidate reference previews and repeat
+preview retain their saved-take behavior, including after Generate.
+
+The explicit native `preview_voice` command accepts optional `text`, carried as
+optional `test_text` in `PreviewRequest` on `/voice-preview`. Missing text means
+reference playback; supplied text must be nonblank, at most 512 UTF-8 bytes, and
+contain no control characters except newline/tab. Empty or invalid supplied text
+is rejected, never replaced by the default or reference. Native and server validate
+independently. The UI shows the byte limit and disables playback for invalid text,
+unavailable selected/active voice, current busy work or unavailable output.
+Every response echoes the complete original request, including exact test text.
+Preview wire version 2 is required on both ends; no retry or reference fallback
+to an older protocol is allowed.
+
+Test text and startup greeting are mutually exclusive. `/startup-greeting` remains
+fixed-shape and rejects test text; normal accepted replies retain their separate
+authority. Test synthesis verifies exact selected and active voice identities,
+never temporarily selects a candidate, and uses the same private synthesis path
+and shared voice-operation exclusion as the greeting. It retains the existing
+30-second private synthesis deadline, 30-second PCM cap and complete-terminal
+requirement. Test text and greetings now emit `StreamingReady` only after the
+first validated private codec chunk, without waiting for the complete waveform.
+Its maximum sample count is a ceiling, never a promised duration. A bounded
+64-codec-chunk queue connects the original private job to paced 20-ms public
+frames; queue pressure never renews the synthesis deadline. The original private
+job remains owned through its terminal or retained cancellation cleanup even if
+the public consumer disappears. The visible Settings panel, paired
+session, request identity, original playback epoch, cancellation, local output
+ownership and Ready/Play/Audio/End/Submitted checks remain mandatory. No microphone,
+owner qualification, action admission, voice regeneration or new playback renderer
+is introduced. Raw test text is not logged or persisted.
+
+The renderer retains the final 20-ms frame until a validated Complete terminal
+establishes the actual total; only exact sequence/offset/terminal correlation can
+mark final submission or drain. Failed/truncated synthesis stops the stream and
+does not finalize it; an already-played prefix cannot be retracted. Public pacing
+has a fixed origin, at most 100-ms lateness and at least 10-ms packet spacing.
+Native ingress checks its fixed 32-second playback deadline, cumulative sample
+ceiling and bounded queue. Cancellation or lost permissions stop both sides.
+Reference previews still use exact-length `Ready` and their saved PCM. A
+`StreamingReady` on that route or an exact-length `Ready` on synthesis rejects.
+Performance remote-ready measures connection, admission and first validated
+codec availability; first submitted speech is the separate native device-submission
+observation. Neither boundary proves acoustic playback or completed speech.
+
+Entry points: VoiceDesigner Play text and native `preview_voice` are affected;
+`PreviewRequest`, server `/voice-preview` and echoed native response validation
+cover the wire. Existing candidate Generate/autoplay/Preview/Repeat omit text and
+remain reference-only. Native `startup_greeting::run` and `/startup-greeting` remain
+fixed greeting only; `speech::speak` and `/normal-speech` are unaffected. Validation
+uses Windows/frontend and ARM server static/release checks under the owner's
+no-automated-tests override; live playback is reported separately.
+
 ## Startup greeting
+
+An explicit native `--capture-output` diagnostic process suppresses this automatic
+greeting before preparation/synthesis so the first recording belongs to the
+operator's selected preview. Ordinary launches retain the behavior below. See
+[background evidence](background-evidence.md) and [silent output recording](playback.md#explicit-silent-output-recording).
 
 Once per desktop process launch, after the saved Spark connection is acknowledged,
 Avesra may synthesize `Hello.` or `Hello, <remembered owner name>.` using the exact
@@ -17,9 +84,10 @@ It never accepts arbitrary reply text or invokes the planner. The name must come
 from owner-scoped local memory; absent, invalid or unavailable memory falls back
 to `Hello.`. Never infer a name from the Windows account or a voice reference.
 The server constructs the sentence, verifies the voice is selected and active,
-and holds the same voice-operation exclusion as preview. Complete synthesis is
-bounded to 31 seconds and 30 seconds of PCM; truncated synthesis is discarded.
-Existing Ready/Play/Audio/End/Submitted transport, output gain, final-frame
+and holds the same voice-operation exclusion as preview. Synthesis is bounded to
+30 seconds and 30 seconds of PCM, with the incremental `StreamingReady` behavior
+above. Truncation cannot finalize the already-started greeting.
+StreamingReady/Play/Audio/End/Submitted transport, output gain, final-frame
 holdback, draining and cancellation rules apply. `/voice-preview` rejects greeting
 requests and `/startup-greeting` rejects reference-preview requests.
 
@@ -40,7 +108,8 @@ owner recognition or microphone capture; the controller still owns admission.
 
 Entry points: native `startup_greeting::run` is the sole automatic producer;
 `preview::greet` owns native output; `/startup-greeting` owns fixed synthesis.
-Explicit `preview_voice` and `/voice-preview` retain reference-only behavior.
+Explicit `preview_voice` and `/voice-preview` retain reference behavior when text
+is absent, and support the separately explicit editable test described above.
 Normal `speech::speak` and `/normal-speech` retain accepted-reply requirements.
 Validation follows Plan 001's no-automated-tests override: compile both Windows
 desktop and Unix server, format checks, and report live playback separately.

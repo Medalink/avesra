@@ -18,6 +18,10 @@ struct Event {
     system_fingerprint: Option<String>,
     #[serde(default)]
     service_tier: Option<String>,
+    #[serde(default)]
+    prompt_token_ids: Option<serde_json::Value>,
+    #[serde(default)]
+    prompt_text: Option<serde_json::Value>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -38,6 +42,10 @@ struct Choice {
     finish_reason: Option<String>,
     #[serde(default)]
     logprobs: Option<serde_json::Value>,
+    #[serde(default)]
+    token_ids: Option<serde_json::Value>,
+    #[serde(default)]
+    stop_reason: Option<u64>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -46,7 +54,7 @@ struct Delta {
     role: Option<String>,
     #[serde(default)]
     content: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "reasoning")]
     reasoning_content: Option<String>,
     #[serde(default)]
     tool_calls: Option<serde_json::Value>,
@@ -58,7 +66,7 @@ struct Delta {
 pub struct CompletedStream {
     request: Uuid,
     model: String,
-    response: Result<planner::Response, ErrorCode>,
+    response: Result<String, ErrorCode>,
 }
 impl CompletedStream {
     pub fn request(&self) -> Uuid {
@@ -68,7 +76,15 @@ impl CompletedStream {
         &self.model
     }
     pub fn response(self) -> Result<planner::Response, ErrorCode> {
-        self.response
+        let value: planner::Response =
+            serde_json::from_str(&self.response?).map_err(|_| ErrorCode::Malformed)?;
+        value.validate()?;
+        Ok(value)
+    }
+    pub fn classification(self) -> Result<avesra_contracts::directedness::Category, ErrorCode> {
+        let value: avesra_contracts::directedness::Classification =
+            serde_json::from_str(&self.response?).map_err(|_| ErrorCode::Malformed)?;
+        Ok(value.category)
     }
 }
 pub struct Parser {
@@ -188,6 +204,8 @@ impl Parser {
         }
         let event: Event = serde_json::from_str(&data).map_err(|_| ErrorCode::Malformed)?;
         if event.object != "chat.completion.chunk"
+            || event.prompt_token_ids.is_some()
+            || event.prompt_text.is_some()
             || event.model != self.model
             || event.id.is_empty()
             || event.id.len() > 128
@@ -256,6 +274,10 @@ impl Parser {
             .ok_or(ErrorCode::Malformed)?;
         if choice.index != 0
             || choice.logprobs.is_some()
+            || choice.token_ids.is_some()
+            || choice.stop_reason.is_some_and(|token| {
+                !matches!(token, 248046 | 248044) || choice.finish_reason.as_deref() != Some("stop")
+            })
             || choice.delta.role.as_ref().is_some_and(|v| v != "assistant")
             || choice.delta.tool_calls.is_some()
             || choice.delta.function_call.is_some()
@@ -298,15 +320,7 @@ impl Parser {
         let response = if self.finish.as_deref() != Some("stop") {
             Err(ErrorCode::Unavailable)
         } else {
-            serde_json::from_str::<planner::Response>(&self.answer)
-                .map_err(|_| ErrorCode::Malformed)
-                .and_then(|v| {
-                    if planner::valid_text(v.text()) {
-                        Ok(v)
-                    } else {
-                        Err(ErrorCode::Malformed)
-                    }
-                })
+            Ok(self.answer)
         };
         Ok(CompletedStream {
             request: self.request,

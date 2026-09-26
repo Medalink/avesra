@@ -1,5 +1,134 @@
 # Bounded Local Studio reasoning adapter
 
+## Exact-container qualification adapter
+
+Two reviewed profiles are supported: `legacy_35b` retains the original35B image,
+arguments and16,384-token capacity; `owned_27b` is the separate text-only27B image
+and4,096-token capacity in the adapter setup. The profile is private fixed
+configuration, never chosen by a prompt. Each pins repository/revision, immutable
+image, exact entrypoint/arguments, loopback port, model label and capacity. No
+arbitrary image/model/argument combination is supported. The owned profile also
+requires its unchanged bounded-start script and Docker memory/swap/CPU limits on
+every observation; the pre-load resource gate is independent of loaded-artifact
+qualification. A text-only instance must not be presented as vision capability.
+
+The current owned recipe reserves768MiB of KV cache. Retained actual engine
+initialization output measured0.57GiB required for its4096-token context; the
+earlier256MiB recipe failed after loading weights. The new immutable guard/image
+changes that allocation only, retains the same memory/CPU/headroom limits, and
+requires a fresh image-bound capture before a new controlled load. A successful
+image build does not prove the engine initialized or served a request.
+
+The owned profile may select the separately owned loopback controller at
+`http://127.0.0.1:18080/` (or its IPv6 equivalent). This is an explicit fixed
+configuration alternative, never discovery or fallback. Its copied source fixes
+only the inspected NVIDIA telemetry omission of `memory_shared`; existing Local
+Studio source, controller, data, credentials and engine remain unchanged. Fresh
+private keys and a dedicated data/SQLite directory isolate its instance roster.
+The setup producer copies and hashes source/dependencies and records that one
+delta; it never imports an existing controller database or adopts another engine.
+
+This section supersedes the historical dormant-source checkpoints below. The
+installed engine emits nullable `prompt_token_ids`, `prompt_text` and choice
+`token_ids`, an optional numeric EOS `stop_reason`, and `reasoning` deltas. The
+strict parser accepts only null for the token/prompt trace fields, only the two
+pinned EOS IDs at a stop terminal, and bounded discarded reasoning. Unexpected
+fields, strings/custom stops and non-null trace data still reject. No field is
+used as a readiness flag or substitute for the complete stream terminal.
+
+Startup opens a private configured driver only when `reasoning.json` exists;
+missing configuration leaves reasoning unavailable and invalid configuration
+fails startup. Version2 pins the inspected engine image, immutable model revision,
+absolute model directory and credential-file reference. The instance name remains
+explicit configuration so a separately owned Local Studio instance can qualify
+without replacing unrelated work; its exact current container ID is always
+resolved from that owner's fresh record. No unconfigured instance is selected.
+The file schema and controlled capture procedure are in
+[the adapter setup](../services/reasoning/README.md).
+
+Each accepted planner request performs fresh metadata and an owned exact-container
+inspection/tokenization, then persists its existing actual Jobs lease before the
+only possible generation POST. Before that POST the same helper rechecks the
+exact engine process identity, artifact observations and prompt budget. A failed
+or missing capture never sends inference. No configured driver, status result or
+artifact file independently creates a native accepted turn. The existing private
+job uncertainty row still blocks replacement; this adapter adds no clear/reset.
+
+Helper failures are finite typed metadata: `capture_missing`, `capture_invalid`,
+`artifact_changed`, `controlled_load_required`, `engine_identity`,
+`context_capacity`, `stream_drain`, or `helper_unavailable`. The server records
+only the corresponding enum label; HTTP failure remains unavailable. Exceptions,
+paths, tokens, prompts, responses and credentials are excluded from diagnostics.
+
+The fixed loopback request helper uses a distinct name from Python's
+`http.client` module. Engine inspection must reach the actual authenticated
+`/v1/models` response before tokenization; successful pre-HTTP file/process checks
+alone do not establish adapter readiness. The corrected helper retains every
+identity, capacity, deadline and terminal check.
+
+Helper filesystem reads are explicitly bounded: each reviewed serving source is
+at most1MiB, generation defaults64KiB, proc command/stat metadata16KiB, proc comm
+256bytes, boot identity128bytes, private capture128KiB and configuration8KiB.
+Read actual bytes through limit-plus-one, not only an earlier file-size check;
+refuse symlinks and non-regular inputs. Process discovery visits at most4096 proc
+entries and opens at most two matching pidfds. Artifact directory enumeration is
+bounded to258 entries, including the two ignored metadata names. Operator hashing
+reads each model file only through its original measured size and rejects growth.
+
+Entry-point review: `/planner` is covered by fresh qualification plus its existing
+paired accepted-source authority; `/planner/cancel` withdraws publication while
+the retained actual job drains; normal TTS still requires the resulting stored
+reply and separate selected-voice/output authority. Generated-voice preview,
+startup greeting and exact browser commands are unaffected. Artifact capture is
+an explicit operator preparation command with no lifecycle calls. There is no
+automatic retry, proxy fallback, imported-row reply producer or readiness switch.
+The user's no-test requirement overrides synthetic test/fixture work: source
+review, formatting and compilation are the checks; controlled-load observations
+and accepted-response proof remain separate required runtime evidence.
+
+The configured version2 adapter uses Local Studio for discovery and lifecycle but
+does not send inference through its dynamically routed proxy. A fixed bundled
+helper executes in the exact full Docker container ID returned by current owner
+metadata. It addresses only that container's loopback vLLM API. An already-open
+container namespace cannot become a replacement container's endpoint. API-server
+and EngineCore process IDs/start identities are observed and retained with Linux
+pidfds across tokenization and generation; exit, replacement or missing evidence
+denies publication. Commands, code, URLs and credentials are never model-selected.
+
+Loaded-artifact evidence requires a controlled observed load. The operator first
+stops the selected engine through Local Studio, then runs the Avesra artifact
+capture producer against its pinned Hugging Face repository/revision. The producer
+verifies package bytes against immutable upstream file metadata and records exact
+device/inode/size/ctime and SHA-256 observations in a private record. It refuses a
+running selected container. Local Studio must then start a fresh container with
+the pinned image and that exact read-only model mount. Runtime qualification
+requires its creation/start after capture, the unchanged exact package records,
+the actual API-server model arguments and matching live model/tokenizer metadata.
+An existing process, old timestamps or an operator-written qualified boolean
+cannot establish this path. No automatic model stop, restart, swap or recovery is
+part of normal planner admission; the controlled load is an explicit setup step.
+
+The initial deployment is narrowly pinned to the inspected vLLM image and serving
+source hashes. Every request uses one choice, no tools, no custom stop strings,
+fixed output limits and the same explicit chat-template options for `/tokenize`
+and generation. The actual loaded tokenizer must report the exact prompt count
+and current capacity; reserve512 output tokens before any inference POST. Runtime
+checks cannot infer token capacity merely from input bytes or a recipe label.
+The reviewed no-custom-stop path reports completion only after EngineCore output
+finishes; a valid finish, DONE and EOF are all required by the existing parser.
+Unexpected serving code, model arguments, generation defaults or terminal shape
+remain unavailable. This compatibility boundary must be re-reviewed on upgrade.
+
+One actual Rust coordinator retains the helper process, original request budget,
+durable Jobs lease and bounded output through completion/cancellation. Caller
+loss withdraws publication but does not abandon the drain. A helper failure,
+timeout, process change, unknown EOF or invalid terminal keeps the durable job
+uncertain; it never authorizes a retry. Native accepted-source authorization
+remains separately mandatory before transmission and publication. Fresh
+qualification is obtained per request; no startup token silently expires into a
+permanent or bypassable readiness state. Source/build success is not the required
+controlled-load or end-to-end spoken-answer evidence.
+
 This source slice implements the private answer adapter behind durable native planner claims. It does not call Local Studio, load or swap a model, activate voice, or turn arbitrary received text into acceptance during implementation. The public paired route remains separate and must bind active actor registration and durable replay ownership before invoking this adapter.
 
 ## Configuration and deployment identity

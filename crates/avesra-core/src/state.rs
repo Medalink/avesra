@@ -37,6 +37,10 @@ pub struct Settings {
     pub learning_chime: bool,
     pub action_chime: bool,
     pub chime_volume: u8,
+    #[serde(default)]
+    pub learning_chime_volume: Option<u8>,
+    #[serde(default)]
+    pub action_chime_volume: Option<u8>,
     pub speech_volume: u8,
     pub speech_rate: u16,
     pub explicit_mute: bool,
@@ -58,6 +62,8 @@ impl Default for Settings {
             learning_chime: false,
             action_chime: false,
             chime_volume: 15,
+            learning_chime_volume: None,
+            action_chime_volume: None,
             speech_volume: 80,
             speech_rate: 100,
             explicit_mute: true,
@@ -77,6 +83,8 @@ impl Settings {
         self.shortcuts.validate()?;
         if self.audio_device_schema != 1
             || self.chime_volume > 100
+            || self.learning_chime_volume.is_some_and(|v| v > 100)
+            || self.action_chime_volume.is_some_and(|v| v > 100)
             || self.speech_volume > 100
             || !(50..=200).contains(&self.speech_rate)
             || !INTERFACE_SCALES.contains(&self.interface_scale)

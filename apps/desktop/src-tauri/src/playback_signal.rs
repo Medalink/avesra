@@ -1,8 +1,9 @@
-//! Display-only submission telemetry. Never called from an audio callback.
+//! Submission telemetry and native rejection-only interval observations.
+//! Display events remain non-authoritative. Never called from an audio callback.
 use avesra_windows::audio::PlaybackReference;
 use serde::Serialize;
 use std::{
-    sync::Mutex,
+    sync::{Arc, Mutex, Weak},
     time::{Duration, Instant},
 };
 use tauri::{Emitter, Manager};
@@ -15,6 +16,7 @@ pub enum Purpose {
     Preview,
     Greeting,
     Reply,
+    Notification,
 }
 #[derive(Clone, Serialize)]
 #[serde(
@@ -52,6 +54,26 @@ pub struct Telemetry {
     app: tauri::AppHandle,
     origin: Instant,
     state: Mutex<State>,
+    observation: Mutex<Weak<Mutex<ObservedOutput>>>,
+}
+struct ObservedOutput {
+    output: Uuid,
+    opened: Instant,
+    epoch: Option<u64>,
+    intervals: Vec<(Instant, Instant)>,
+    failed: bool,
+}
+/// Native-owned rejection evidence only. No PCM or display event can construct it.
+pub struct OutputObservation(Arc<Mutex<ObservedOutput>>);
+impl OutputObservation {
+    pub fn overlaps(&self, start: Instant, end: Instant) -> bool {
+        self.0.lock().is_ok_and(|value| {
+            !value.failed
+                && start >= value.opened
+                && start < end
+                && value.intervals.iter().any(|(a, b)| *a < end && *b > start)
+        })
+    }
 }
 impl Telemetry {
     pub fn new(app: tauri::AppHandle) -> Self {
@@ -59,7 +81,65 @@ impl Telemetry {
             app,
             origin: Instant::now(),
             state: Mutex::new(State::default()),
+            observation: Mutex::new(Weak::new()),
         }
+    }
+    pub fn observe_output(&self, output: Uuid) -> Result<OutputObservation, String> {
+        let mut slot = self
+            .observation
+            .lock()
+            .map_err(|_| "Output observations unavailable")?;
+        if output.is_nil() || slot.upgrade().is_some() {
+            return Err("An output observation is already owned".into());
+        }
+        let value = Arc::new(Mutex::new(ObservedOutput {
+            output,
+            opened: Instant::now(),
+            epoch: None,
+            intervals: Vec::new(),
+            failed: false,
+        }));
+        *slot = Arc::downgrade(&value);
+        Ok(OutputObservation(value))
+    }
+    fn observe_reference(&self, reference: &PlaybackReference, raw: &[[f32; 2]]) {
+        let Some(owner) = self.observation.lock().ok().and_then(|v| v.upgrade()) else {
+            return;
+        };
+        let Ok(mut value) = owner.lock() else {
+            return;
+        };
+        if value.output != reference.utterance || value.failed {
+            return;
+        }
+        if reference.submitted < value.opened
+            || reference.submitted.duration_since(value.opened) > Duration::from_secs(12)
+            || !(8000..=192000).contains(&reference.sample_rate)
+            || value.epoch.is_some_and(|epoch| epoch != reference.epoch)
+        {
+            value.failed = true;
+            return;
+        }
+        value.epoch = Some(reference.epoch);
+        if !reference.speech
+            || !reference.component_peaks[0].is_finite()
+            || reference.component_peaks[0] <= 0.0
+            || !raw.iter().flatten().any(|v| *v != 0.0)
+        {
+            return;
+        }
+        if value.intervals.len() >= 2048 {
+            value.failed = true;
+            return;
+        }
+        let duration = Duration::from_secs_f64(
+            reference.valid_samples as f64 / f64::from(reference.sample_rate),
+        );
+        let Some(end) = reference.submitted.checked_add(duration) else {
+            value.failed = true;
+            return;
+        };
+        value.intervals.push((reference.submitted, end));
     }
     pub fn clock(&self) -> f64 {
         self.origin.elapsed().as_secs_f64() * 1000.0
@@ -129,10 +209,16 @@ impl Telemetry {
             if epoch != reference.epoch
                 || output != reference.utterance
                 || state.sequence >= MAX_SEQUENCE
-                || (state.last_speech == reference.speech
-                    && state
-                        .last_sample
-                        .is_some_and(|last| now.duration_since(last) < Duration::from_millis(50)))
+            {
+                return;
+            }
+            // The media worker has verified the exact live output lease. Keep
+            // actual submission intervals before display-only throttling.
+            self.observe_reference(reference, raw);
+            if state.last_speech == reference.speech
+                && state
+                    .last_sample
+                    .is_some_and(|last| now.duration_since(last) < Duration::from_millis(50))
             {
                 return;
             }
@@ -154,7 +240,9 @@ impl Telemetry {
             state.last_sample = Some(now);
             state.last_speech = reference.speech;
             let submitted_at = submitted.as_secs_f64() * 1000.0;
-            let reveal_overlay = reference.speech && !state.overlay_revealed;
+            let reveal_overlay = reference.speech
+                && !matches!(purpose, Purpose::Notification)
+                && !state.overlay_revealed;
             state.overlay_revealed |= reveal_overlay;
             (
                 Event::Sample {
@@ -170,6 +258,12 @@ impl Telemetry {
                 reveal_overlay,
             )
         };
+        if reference.speech {
+            self.app
+                .state::<crate::Runtime>()
+                .performance
+                .submitted(reference.utterance, reference.submitted);
+        }
         // Actual admitted speech drives both visibility and the ribbon, for
         // previews and replies alike. Never activate/focus another window.
         if reveal_overlay && let Some(window) = self.app.get_webview_window("overlay") {

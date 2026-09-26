@@ -13,11 +13,21 @@ pub async fn collect(
     current: impl Fn() -> Result<(), String>,
     progress: impl Fn(u32),
 ) -> Result<Phrase, String> {
+    collect_observed(app, epoch, current, progress, |_, _, _| Ok(())).await
+}
+pub async fn collect_observed(
+    app: &tauri::AppHandle,
+    epoch: u64,
+    current: impl Fn() -> Result<(), String>,
+    progress: impl Fn(u32),
+    mut observe: impl FnMut(&[u8], Instant, bool) -> Result<(), String>,
+) -> Result<Phrase, String> {
     let started = Instant::now();
     let state = app.state::<Runtime>();
     let mut sequence = 0;
     let mut pcm = Vec::with_capacity(256_000);
     let mut clipped_samples = 0;
+    let mut chunk_captured = started;
     while pcm.len() < 256_000 {
         current()?;
         if started.elapsed() >= Duration::from_secs(12) {
@@ -37,6 +47,9 @@ pub async fn collect(
                 return Err("Microphone audio lost frames. Retry this phrase.".into());
             }
             sequence = frame.sequence;
+            if sequence % 10 == 1 {
+                chunk_captured = frame.captured;
+            }
             for sample in frame.samples {
                 if sample.unsigned_abs() >= 32760 {
                     clipped_samples += 1;
@@ -45,6 +58,13 @@ pub async fn collect(
             }
             if sequence % 50 == 0 {
                 progress((sequence / 50) as u32);
+            }
+            if sequence % 10 == 0 {
+                observe(
+                    &pcm[pcm.len() - 6400..],
+                    chunk_captured,
+                    pcm.len() == 256_000,
+                )?;
             }
         } else {
             tokio::time::sleep(Duration::from_millis(10)).await;

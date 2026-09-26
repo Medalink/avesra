@@ -12,6 +12,28 @@ On 2026-09-24, during execution, the owner instructed: "no tests here either, ju
 
 The owner subsequently instructed: "I am about to game, do not use computer use until I am done and tell you." Until explicitly lifted, do not use Computer Use, automate browsers/native windows, launch or focus desktop applications, or perform interactive setup/visual checks. Continue background specs/code work and bounded build/static checks. The later "continue" does not lift this restriction.
 
+Later on 2026-09-25, the owner explicitly requested actual screenshots and audio/video proof and clarified: "get them but do so without interrupting me. Figure it out." This authorizes isolated background inspection and purposeful evidence recording. It does not authorize switching the input desktop, moving the owner's pointer, stealing foreground focus, recording unrelated screen/audio or interrupting their work. Use a separate non-input desktop and silent, explicitly bounded application-output recording where available. Preserve native permission gates and label the precise evidence boundary; a silent post-mixer recording does not prove acoustic speaker output, live-owner recognition or OW1-OW3.
+
+### Later owner override: ship development features for owner testing
+
+The owner then rejected waiting for the large recording corpus before trying the
+features: "I want to get features working and tested by me asap" and "I don't want
+to wait hours waiting on recordings." The immediate priority is a working,
+matched development desktop/controller that the owner can exercise.
+
+The100/200/200 corpus and numerical recognition requirements below remain release
+validation, not a mandatory per-owner activation ritual. Provide an explicitly
+enabled development admission based on the existing saved enrollment and a short,
+genuine live owner check against current services/devices. Retain native ownership,
+explicit listening consent, current session/model binding, action/site grants,
+protected confirmations, cancellation and uncertainty handling. Do not manufacture
+measurements, call the development operating point release-qualified, or silently
+enable the microphone through status inspection. Preserve the larger evaluation
+as an advanced release-validation path. This is not a push-to-talk substitute or
+a conversation-only replacement for the requested features. Unsupported features
+and unverified quality remain visible, and shipping a development build does not
+mark this whole plan or OW1–OW3 complete.
+
 - Priority: P1.
 - Category: product/architecture implementation.
 - Effort: L; multiple separately verifiable milestones, not a one-session scaffold.
@@ -23,6 +45,7 @@ The owner subsequently instructed: "I am about to game, do not use computer use 
 - Initial deployment: `ssh spark2` with Local Studio and one Windows desktop client; optional client GPU acceleration is in scope.
 - Planning status: completion sequence specified against the existing source; implementation remains **IN PROGRESS**. Historical provisioning and verification records are evidence for their recorded revisions only. This planning revision ran no builds, tests, model requests or live workflows.
 - Execution checkpoint, 2026-09-25: the owner-requested baseline commit is `de2e8c8`; isolated source commits `3347a48`, `4aa1fa1` and review correction `e986d76` implement bounded C2 segmentation, C1 contract reconciliation and C4 lifecycle integration. See [the execution review](001-execution-2026-09-25.md) for verification and exact remaining qualification dependencies. This checkpoint does not complete C1/C2 activation, C5 owner workflows or release acceptance.
+- Background proof checkpoint, 2026-09-25 evening: the prior source was published through `1704d2b`. Subsequent frozen dirty-source builds actually completed default/custom text previews through the native Settings controls and mixer. See [exact screenshots/audio/video evidence](../docs/evidence/background-preview-2026-09-25.md) and the [repeatable noninterrupting procedure](../docs/background-evidence.md). Physical output was intentionally silent. Automatic recognition, accepted reasoning/actions and owner workflows remain unproven; later source changes are not covered by these media.
 
 Avesra is **A Very Effective Smart Reasoning Assistant**. It continuously listens for an enrolled owner, recognizes clearly assistant-directed requests, acts through the owner's PC, speaks in a customizable voice, and learns useful context and routines. It must remain available while the user games without requiring model inference on the RTX 5090. Swapping a model or moving a lane must not require changing the task engine, UI, or permissions.
 
@@ -44,9 +67,9 @@ These excerpts were read directly during this revision. Line numbers are navigat
 | --- | --- |
 | Qualified owner | `crates/avesra-core/src/voice.rs:68` defines `QualifiedProfile` with private fields and no constructor. A saved six-segment candidate is not a qualified identity. |
 | Voice producer | `apps/desktop/src-tauri/src/voice.rs:269` calls `analyze(&context,None,observation,None)`, then discards the observation. `spawn` allows one fixed capture attempt per epoch, not continuous qualified endpointing. |
-| Reasoning activation | `crates/avesra-server/src/transport.rs:175` initializes `reasoning: None`. The existing HTTP adapter's deployment token still requires loaded-artifact, exact-routing, terminal and context-capacity proof. |
+| Reasoning activation | `crates/avesra-server/src/transport.rs` now opens the reasoning driver only when the private deployment configuration exists. The new controlled engine adapter requires exact loaded-artifact, process/route and context-capacity evidence. No qualified reasoning configuration has been deployed; the already-running unrelated engine cannot supply missing launch provenance retroactively. |
 | Effects | `crates/avesra-windows/src/effects.rs:223` implements `EffectAdapter::execute` for `LaunchApp` and `SetVolume`; other payloads return `Outcome::Unsupported`. Existing catalog and permission code must be reused. |
-| Browser read | `crates/avesra-windows/src/browser_read_channel.rs` has the private `WorkerOwner` / `Offer` / `WorkerPreparation` handshake. `apps/desktop/src-tauri/src/browser/reading.rs` consumes preparation only. `apps/browser-extension/src/background.ts` has no active excerpt-owner integration; `manifest.json` has no scripting permission. |
+| Browser read | `crates/avesra-windows/src/browser_read_channel.rs` retains the private owned handshake. C4 integrated native/extension excerpt publication, content, cleanup and settlement, including the extension's scripting permission. A qualified accepted task and concrete C5 consumer are still absent, so this source integration has no live browser-task proof. |
 | Storage/UI | `crates/avesra-core/src/store.rs` owns transactional state; `apps/desktop/src-tauri/src/main.rs` owns runtime projection and typed IPC; `apps/desktop/src/SettingsView.svelte` and `Overlay.svelte` consume it. Existing startup/voice-store fixes are concurrent work, not a new scaffold task. |
 
 Match the existing capability pattern instead of introducing a second action path:
@@ -570,7 +593,7 @@ For Python audio changes inspect `services/audio/pyproject.toml` and its existin
 4. Replace `analyze(..., None, ..., None)` only after current native qualification exists. Derive actor/grant/session/epochs from authoritative native state; keep setup recording, speaker checks, greeting and generated preview separate. Opening Settings or reading saved enrollment must not start recording or activate listening.
 5. Persist only accepted conversations through existing `conversations.rs` / `conversation_tasks.rs` boundaries (extend those files only for required admission integration). Unaccepted transcripts must not reach UI, history, planner or learning. Expose native readiness/abstention reasons without optimistic completion.
 
-**Verify:** W-static/W-build and S-static/S-build. During authorized direct qualification record A02-A07 outcomes, including owner requests without a wake word, owner speech to teammates, non-owner/recorded speech, overlap, assistant playback, device removal, revocation and local mute with Spark unavailable. Until the required positive/negative evidence exists, keep automatic voice unavailable and mark C1 live qualification pending. Do not create an automated evaluation runner or request another six-segment enrollment solely to repair UI state.
+**Verify:** W-static/W-build and S-static/S-build. During authorized direct qualification record A02-A07 outcomes, including owner requests without a wake word, owner speech to teammates, non-owner/recorded speech, overlap, assistant playback, device removal, revocation and local mute with Spark unavailable. Under the later development-shipping override, short measured owner setup may enable explicitly consented development listening; keep full C1 release qualification pending until its required positive/negative evidence exists. Do not create an automated evaluation runner or request another six-segment enrollment solely to repair UI state.
 
 ### C2 — Activate reasoning and connect one accepted spoken response (M0/M2/M3)
 

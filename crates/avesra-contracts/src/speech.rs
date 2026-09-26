@@ -65,7 +65,10 @@ pub struct Source {
 impl Source {
     pub fn validate(&self) -> Result<(), ErrorCode> {
         self.planner.validate()?;
-        if self.reply_revision.is_nil() || !planner::valid_text(self.response.text()) {
+        if self.reply_revision.is_nil()
+            || matches!(self.response, planner::Response::Proposal { .. })
+            || !planner::valid_text(self.response.text())
+        {
             return Err(ErrorCode::Malformed);
         }
         text_segments(self.response.text())?;
