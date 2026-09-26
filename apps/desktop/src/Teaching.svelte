@@ -1,4 +1,5 @@
 <script lang="ts">
+  import SelectFrame from "./SelectFrame.svelte";
   import { onMount } from "svelte";
   import { command, native, type Runtime } from "./runtime";
   type Alias = {id:string;revision:string;phrase:string};
@@ -24,10 +25,10 @@
 <section class="section">
  <div class="flex items-center justify-between"><span class="av-kicker">Teach an app-opening routine</span><button class="av-btn av-btn-ghost av-btn-sm" disabled={!enabled||busy} onclick={()=>run(refresh)}>Refresh teaching</button></div>
  <p class="av-hint">Choose one saved app and allow observation with the Windows verification above. This watches only whether that exact app opens and comes forward. It records no titles, screen images or typed text.</p>
- <label class="av-label" for="teach-alias">Observation scope</label><select id="teach-alias" class="av-select" bind:value={alias} disabled={!enabled||busy}><option value="">Choose a saved app</option>{#each aliases as app}<option value={app.id}>{app.phrase}</option>{/each}</select>
+ <label class="av-label" for="teach-alias">Observation scope</label><SelectFrame><select id="teach-alias" class="av-input av-select" bind:value={alias} disabled={!enabled||busy}><option value="">Choose a saved app</option>{#each aliases as app}<option value={app.id}>{app.phrase}</option>{/each}</select></SelectFrame>
  <div class="flex gap-2"><button class="av-btn av-btn-secondary" disabled={!enabled||busy||!alias} onclick={()=>roster(false)}>Allow selected app</button><button class="av-btn av-btn-ghost" disabled={!enabled||busy||!alias} onclick={()=>roster(true)}>Exclude selected app</button></div>
  {#each view?.snapshot.scopes??[] as item}<p class="av-hint">{item.name}: {item.excluded?"excluded":"allowed for explicit teaching"} {#if !item.excluded}<button class="av-btn av-btn-ghost av-btn-sm" disabled={!enabled||busy} onclick={()=>exclude(item)}>Exclude</button>{/if}</p>{/each}
- <label class="av-label" for="teach-scope">App to demonstrate</label><select id="teach-scope" class="av-select" bind:value={scope} disabled={!enabled||busy||!!progress?.active}><option value="">Choose an allowed app</option>{#each view?.snapshot.scopes.filter(s=>!s.excluded)??[] as item}<option value={item.id}>{item.name}</option>{/each}</select>
+ <label class="av-label" for="teach-scope">App to demonstrate</label><SelectFrame><select id="teach-scope" class="av-input av-select" bind:value={scope} disabled={!enabled||busy||!!progress?.active}><option value="">Choose an allowed app</option>{#each view?.snapshot.scopes.filter(s=>!s.excluded)??[] as item}<option value={item.id}>{item.name}</option>{/each}</select></SelectFrame>
  <p class="av-hint">Optional passive learning can save one app-opening candidate automatically in a five-minute session. It records only the selected app transition, not screen contents. A later fresh session may try again only while enabled and no saved or deleted candidate already owns that scope.</p>
  <div class="flex gap-2"><button class="av-btn av-btn-secondary" disabled={!enabled||busy||!scope} onclick={()=>passive(true)}>Enable passive learning for selected app</button><button class="av-btn av-btn-ghost" disabled={!enabled||busy||!view?.snapshot.passive?.enabled} onclick={()=>passive(false)}>Disable passive learning</button></div>
  <p class="av-hint">{view?.snapshot.passive?.enabled?"Passive learning is enabled for the saved scope revision; excluded or changed scopes are not observed. Global Pause always stops it.":"Passive learning is off."}</p>

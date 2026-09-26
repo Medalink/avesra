@@ -2,12 +2,14 @@
 // Use only with the explicit isolated process started by inspect-background.ps1.
 import { writeFile } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
-if (!process.argv[2] || (process.argv[3] && !isAbsolute(process.argv[3]))) {
-  throw new Error('Usage: node scripts/inspect-webview.mjs <observed-DOM-expression> [absolute-new-screenshot.png]');
+const window = process.argv[4] ?? 'settings';
+const urls = { settings: 'http://tauri.localhost/index.html?window=settings', overlay: 'http://tauri.localhost/' };
+if (!process.argv[2] || (process.argv[3] && !isAbsolute(process.argv[3])) || !Object.hasOwn(urls, window) || process.argv.length > 5) {
+  throw new Error('Usage: node scripts/inspect-webview.mjs <observed-DOM-expression> [absolute-new-screenshot.png] [settings|overlay]');
 }
 const pages = await (await fetch('http://127.0.0.1:9475/json/list')).json();
-const candidates = pages.filter(p => p.url === 'http://tauri.localhost/index.html?window=settings');
-if (candidates.length !== 1) throw new Error('Expected exactly one production Avesra Settings WebView');
+const candidates = pages.filter(p => p.type === 'page' && p.url === urls[window]);
+if (candidates.length !== 1) throw new Error(`Expected exactly one production Avesra ${window} WebView`);
 const page = candidates[0];
 const socketUrl = new URL(page.webSocketDebuggerUrl);
 if (socketUrl.protocol !== 'ws:' || !['127.0.0.1', 'localhost'].includes(socketUrl.hostname) || socketUrl.port !== '9475') throw new Error('Inspection socket is not the expected local endpoint');
