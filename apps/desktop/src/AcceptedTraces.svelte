@@ -17,7 +17,13 @@
   const summaries=$derived.by(()=>{
     const groups=new Map<string,Span[]>();
     for(const span of selected?rows:spans){const key=`${span.host} / ${span.stage}`;const group=groups.get(key)??[];group.push(span);groups.set(key,group);}
-    return [...groups].map(([name,values])=>{const durations=values.map(v=>v.duration_us/1000).sort((a,b)=>a-b);const percentile=(p:number)=>durations[Math.ceil(durations.length*p)-1];return {name,count:values.length,errors:values.filter(v=>v.outcome==="failed"||v.outcome==="truncated").length,withdrawn:values.filter(v=>v.outcome==="withdrawn").length,abandoned:values.filter(v=>v.outcome==="abandoned").length,p50:percentile(.5),p95:percentile(.95),p99:percentile(.99),max:durations[durations.length-1]};});
+    return [...groups].map(([name,values])=>{
+      const response=values[0].stage==="endpoint_response_submission";
+      const measured=response?values.filter(v=>v.outcome==="complete"):values;
+      const durations=measured.map(v=>v.duration_us/1000).sort((a,b)=>a-b);
+      const percentile=(p:number)=>durations.length?durations[Math.ceil(durations.length*p)-1].toFixed(1):"unavailable";
+      return {name,response,count:values.length,measured:measured.length,complete:values.filter(v=>v.outcome==="complete").length,missing:values.filter(v=>v.outcome==="missing").length,errors:values.filter(v=>v.outcome==="failed"||v.outcome==="truncated").length,withdrawn:values.filter(v=>v.outcome==="withdrawn").length,abandoned:values.filter(v=>v.outcome==="abandoned").length,p50:percentile(.5),p95:percentile(.95),p99:percentile(.99),max:durations.length?durations[durations.length-1].toFixed(1):"unavailable"};
+    });
   });
   async function inspect(retention=false){
     if(busy||!native||!runtime||runtime.locked)return;
@@ -47,11 +53,11 @@
     {#if view.local.truncated||view.controller?.truncated}<p class="av-hint">Inspection/export is limited to the newest 2,048 spans per host. Select a turn to export its exact retained records.</p>{/if}
     <label class="av-hint">Accepted turn <select bind:value={selected}><option value="">Select a turn ({turns.length} retained)</option>{#each turns as turn}<option value={turn}>{turn}</option>{/each}</select></label>
     {#each summaries as summary}
-      <p class="av-hint">{summary.name}: {summary.count} observations · p50 {summary.p50.toFixed(1)} / p95 {summary.p95.toFixed(1)} / p99 {summary.p99.toFixed(1)} / max {summary.max.toFixed(1)} ms · {summary.errors} failed · {summary.withdrawn} withdrawn · {summary.abandoned} abandoned{summary.count<30?" · provisional":""}.</p>
+      <p class="av-hint">{summary.name}: {summary.count} observations · {summary.complete} completed · {summary.errors} failed · {summary.missing} missing · {summary.withdrawn} withdrawn · {summary.abandoned} abandoned. {summary.response?"Successful submission latency only":"All-outcome elapsed durations"}: p50 {summary.p50} / p95 {summary.p95} / p99 {summary.p99} / max {summary.max} ms ({summary.measured} measured){summary.measured<30?" · provisional":""}.</p>
     {/each}
     {#each rows as row}
       <div class="av-card p-3"><strong>{row.stage}</strong> · {row.host} · {row.outcome}{row.error?` (${row.error})`:""}
-        <p class="av-hint">{(row.duration_us/1000).toFixed(2)} ms host-local duration · queue {row.queue_us===null?"unavailable":`${(row.queue_us/1000).toFixed(2)} ms`} · {row.retries} retries</p>
+        <p class="av-hint">{(row.duration_us/1000).toFixed(2)} ms host-local {row.stage==="endpoint_response_submission"&&row.outcome!=="complete"?"elapsed until failure/missing/abandonment (not submission latency)":"duration"} · queue {row.queue_us===null?"unavailable":`${(row.queue_us/1000).toFixed(2)} ms`} · {row.retries} retries</p>
         <p class="av-hint break-all">Operation {row.link.operation} · parent {row.link.parent??"none"} · process {row.process}</p>
         <p class="av-hint break-all">Model {row.deployment.model??"unavailable"} · image {row.deployment.image??"unavailable"} · config {row.deployment.config??"unavailable"}</p>
         {#if row.analysis}{#each row.analysis.receipts as receipt}<p class="av-hint break-all">{receipt.host} {receipt.lane} driver round trip: {(receipt.duration_us/1000).toFixed(2)} ms · worker {receipt.worker} · process {receipt.process} · model {receipt.model_revision}. Includes IPC and validation; not GPU kernel time.</p>{/each}{:else if row.stage==="voice_analysis"}<p class="av-hint">Controller stage receipts unavailable.</p>{/if}
@@ -59,5 +65,5 @@
     {/each}
   {/if}
   {#if message}<p class="av-hint break-all" role="status">{message}</p>{/if}
-  <p class="av-hint">Different hosts have unsynchronized clocks; durations are never subtracted across hosts. Submission proves native output delivery to the callback, not audible speech. Successful controller ASR/speaker receipts are separate from native failure totals. Hardware headroom and complete release benchmarks remain separate evidence.</p>
+  <p class="av-hint">Different hosts have unsynchronized clocks; durations are never subtracted across hosts. Endpoint response submission starts after the required quiet tail and minimum capture span, not at the user's last speech. It ends at the start of the first reference block containing nonzero accepted speech, with up to 20 ms block granularity. It excludes the quiet tail from user-speech-end latency and does not prove audibility or human-rated usefulness; A06 latency targets remain unmeasured here. Failed/missing/abandoned observations remain in totals and drilldown. Successful controller ASR/speaker receipts are separate from native failure totals. Hardware headroom and complete release benchmarks remain separate evidence.</p>
 </section>

@@ -1,7 +1,7 @@
 <script lang="ts">
   import Performance from "./Performance.svelte";
   import Notifications from "./Notifications.svelte";
-  import { tick } from "svelte";
+  import { onMount, tick } from "svelte";
   import Icon from "./Icon.svelte";
   import SetupOverview from "./SetupOverview.svelte";
   import { personalVoiceView } from "./owner-setup";
@@ -90,37 +90,67 @@
     return value.health.state === "loaded_unqualified" ? "Loaded · unqualified" : value.health.state === "loading" ? "Loading" : value.health.state === "termination_pending" ? "Stopping" : "Unavailable";
   }
   const speakerStatus = $derived(laneStatus(audioHealth?.speaker));
+  const healthContext = $derived(JSON.stringify({
+    active: healthActive,
+    connected: runtime?.connected ?? false,
+    locked: runtime?.locked ?? true,
+    epoch: runtime?.capture_epoch ?? 0,
+    action: runtime?.action_epoch ?? 0,
+    microphone: runtime?.settings.microphone ?? null,
+  }));
+  // Actual command ownership survives reactive context replacement. Native
+  // commands may still be finishing after their publication context changes.
+  let healthMounted = false;
+  let healthPending = false;
+  let healthQueued = false;
+  let healthGeneration = 0;
+  let healthEligible = false;
+  function clearHealth() {
+    audioHealth = null; reasoningHealth = null;
+    healthError = ""; reasoningError = "";
+  }
+  async function probeHealth() {
+    if (!healthMounted || !healthEligible || !native || document.visibilityState !== "visible") return;
+    if (healthPending) { healthQueued = true; return; }
+    healthPending = true; healthQueued = false; probing = true;
+    clearHealth();
+    const generation = healthGeneration;
+    try {
+      const [audio, reasoning] = await Promise.allSettled([command<AudioLaneHealth>("audio_lane_health"), command<ReasoningHealth>("reasoning_health")]);
+      if (healthMounted && generation === healthGeneration && healthEligible && document.visibilityState === "visible") {
+        if (audio.status === "fulfilled") audioHealth = audio.value; else healthError = String(audio.reason);
+        if (reasoning.status === "fulfilled") reasoningHealth = reasoning.value; else reasoningError = String(reasoning.reason);
+      }
+    } finally {
+      healthPending = false;
+      if (healthMounted) probing = false;
+      const queued = healthQueued;
+      healthQueued = false;
+      if (queued) void probeHealth();
+    }
+  }
   $effect(() => {
-    const active = healthActive;
-    const connected = runtime?.connected;
-    const epoch = runtime?.capture_epoch;
-    const locked = runtime?.locked;
-    let disposed = false;
-    let pending = false;
-    let visibilityGeneration = 0;
-    audioHealth = null;
-    reasoningHealth = null; reasoningError = "";
-    healthError = "";
-    probing = false;
-    const probe = async () => {
-      if (disposed || pending || !active || !connected || locked || !epoch || !native || document.visibilityState !== "visible") return;
-      pending = true; probing = true; audioHealth = null; healthError = ""; reasoningHealth = null; reasoningError = "";
-      const generation = visibilityGeneration;
-      try {
-        const [audio, reasoning] = await Promise.allSettled([command<AudioLaneHealth>("audio_lane_health"), command<ReasoningHealth>("reasoning_health")]);
-        if (!disposed && generation === visibilityGeneration) {
-          if (audio.status === "fulfilled") audioHealth = audio.value; else healthError = String(audio.reason);
-          if (reasoning.status === "fulfilled") reasoningHealth = reasoning.value; else reasoningError = String(reasoning.reason);
-        }
-      } catch (error) { if (!disposed && generation === visibilityGeneration) healthError = String(error); }
-      finally { pending = false; if (!disposed) probing = false; }
+    const context = JSON.parse(healthContext) as {active:boolean;connected:boolean;locked:boolean;epoch:number};
+    healthGeneration += 1;
+    healthEligible = context.active && context.connected && !context.locked && context.epoch > 0;
+    healthQueued = false;
+    clearHealth();
+    void probeHealth();
+  });
+  onMount(() => {
+    healthMounted = true;
+    refreshHealth = () => { void probeHealth(); };
+    void probeHealth();
+    const interval = setInterval(() => { void probeHealth(); }, 15000);
+    const visibility = () => {
+      healthGeneration += 1; healthQueued = false; clearHealth();
+      void probeHealth();
     };
-    refreshHealth = () => { void probe(); };
-    void probe();
-    const interval = setInterval(() => { void probe(); }, 15000);
-    const visibility = () => { visibilityGeneration += 1; audioHealth = null; reasoningHealth = null; reasoningError = ""; if (!disposed) void probe(); };
     document.addEventListener("visibilitychange", visibility);
-    return () => { disposed = true; clearInterval(interval); document.removeEventListener("visibilitychange", visibility); };
+    return () => {
+      healthMounted = false; healthGeneration += 1; healthQueued = false;
+      clearInterval(interval); document.removeEventListener("visibilitychange", visibility);
+    };
   });
   const sections = [
     [

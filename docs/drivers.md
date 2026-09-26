@@ -27,13 +27,25 @@ and absence of permission authority. UI replies are discarded after navigation,
 hide, lock or connection/epoch change. Probe/Refresh status read metadata only;
 they never grant readiness or start capture/playback.
 
+The Settings health view owns one actual in-flight audio/reasoning probe pair for
+the component lifetime. A stable primitive context key includes panel eligibility,
+connection/lock state, capture/action epochs and selected microphone; unrelated
+runtime snapshots do not restart probing. Context or visibility changes discard
+stale results immediately, but do not release the busy owner before both native
+commands settle. At most one deferred refresh follows that settlement for the
+current visible eligible context. The existing fifteen-second poll remains;
+Refresh is disabled while actual requests are outstanding. Component disposal
+discards publication and removes polling without pretending native work stopped.
+
 Loaded models display **Loaded · unqualified**, their actual artifact revision,
 streaming capability and busy state. Before a successful probe, display **Not
-probed**, never infer **Not connected** or **Not configured**. Reasoning, vision,
-decision and memory have no connected metadata probe in this slice. Reasoning
-shows **Not inspected** / **Status not integrated**, reflecting its implemented
-native driver without claiming a configured or ready engine. Vision, decision
-and memory remain explicitly **Not integrated**.
+probed**, never infer **Not connected** or **Not configured**. The current
+`reasoning_health` command also inspects the paired controlled reasoning
+deployment without inference. It reports the actual observed loaded/unqualified
+or unavailable state and binding; loaded metadata does not grant voice or action
+permission. Earlier checkpoints displayed **Not inspected** / **Status not
+integrated** for reasoning. Vision, decision and memory still have no equivalent
+connected metadata probe and remain explicitly **Not integrated**.
 This projection fixes hard-coded ASR/TTS placeholders; it does not complete voice
 qualification, reasoning activation or any owner workflow. Verification is
 source/static/build and separately recorded live metadata/UI evidence; no
@@ -43,7 +55,15 @@ Logical lanes: activity/transcription, speaker identity, planning, vision, speec
 
 Health states are configured, starting, loading, ready, degraded, unavailable and incompatible. Only a real capability probe can promote a deployment to ready. Pinning a model revision or seeing a catalog entry cannot do so. No automatic cloud fallback or inference outside the selected profile is permitted.
 
-Local Studio remains owner of reasoning/vision engines and downloads. Dedicated ASR/speaker/TTS runtimes use the same bounded, cancellable lane contracts, without changing Local Studio internals. The speaker/ASR/TTS dependency deltas and final ARM64 images are pinned in services/audio/README.md. Speaker, ASR and TTS final supervisors have actual load-only evidence. None has streaming, live-input quality or owner-acceptance evidence, and no lane may report ready solely from a successful artifact load.
+Dedicated ASR/speaker/TTS runtimes use bounded, cancellable lane contracts without
+changing unrelated Local Studio instances. The speaker/ASR/TTS dependency deltas
+and ARM64 images are pinned in services/audio/README.md. The original supervisor
+checkpoint had load-only evidence. Later retained generated-input streaming and
+native preview recordings are separate evidence, not owner live-input quality or
+accepted-conversation proof; consult the current Plan001 acceptance ledger for
+the exact artifact/run boundaries. No lane may report ready solely from a
+successful artifact load. Controlled reasoning ownership and its observed
+identity are governed by planner-driver.md.
 
 Model/license/provenance facts are in `evidence/m0-preflight.md` and the original setup record. Schema-valid model proposals still pass task/actor/target/approval checks and outcome verification.
 

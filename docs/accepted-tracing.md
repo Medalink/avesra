@@ -3,6 +3,45 @@
 Preacceptance voice measurements are promoted only by genuine durable acceptance;
 see [voice-timing.md](voice-timing.md) for receipts, aggregate abstentions and limits.
 
+## Original endpoint to response submission
+
+After genuine durable voice acceptance, a native-only timing owner retains the
+original `Completed` endpoint Instant. It stays with that accepted caller through
+planning and transfers to the actual normal speech coordinator; neither a saved
+reply nor frontend input can reconstruct it. Cancellation drops that owner, and
+no retry or output admission renews its start time. It has no authority role.
+`Completed.completed` is the end of the accepted endpoint span after the required
+quiet tail and minimum real capture span, not the last detected speech frame or
+human utterance end. This measurement therefore excludes endpointing's required
+quiet tail from user-speech-end latency. A separate original last-speech-end
+observation is still needed to measure that full latency; A06 targets remain
+unmeasured by this stage.
+
+The `endpoint_response_submission` stage ends at the original submission timestamp
+of the first postmix reference block with a finite nonzero speech-component peak
+and nonzero mixed samples, correlated to that accepted response's exact output
+UUID and live output epoch. Each block spans at most twenty milliseconds; its
+timestamp marks the block's first sample, so a later nonzero speech sample within
+the block can be reported up to twenty milliseconds early. This is block-level
+submission timing, not an exact first-nonzero-sample timestamp. Observation
+runs before display throttling. Background music, effects, chimes, previews and
+startup greetings cannot satisfy this measurement. The output correlation roster
+is bounded to eight entries and retained by the actual speech coordinator.
+
+Each observed accepted turn ends with a completed, failed, missing, or abandoned
+timing record. Missing means the normal path ended without a qualifying speech
+submission; it is not a zero-latency success. Only completed records contribute to
+this stage's latency percentiles. Failures before output and caller withdrawal
+remain in the counts. Collector loss/crash gaps are separately unavailable.
+
+This is endpoint-to-first-nonzero-response-block **submission**, not acoustic delivery or
+human-rated usefulness. A generated generic acknowledgment can still fail A06;
+the trace alone never proves its useful-response criterion or its latency gates.
+Actual captured endpoint and callback clocks remain in the same native process.
+Telemetry schema3 adds this stage and missing outcome, reading existing schema1/2
+records without rewriting them. Older collectors refuse schema3 nonfatally; the
+action database and speech wire are unchanged.
+
 Plan001 section16 governs this observer. Only genuine accepted turn IDs start
 retained traces. Existing turn, request, private job, task and output IDs are
 correlation, never admission. Native and controller independently retain host-

@@ -722,6 +722,9 @@ async fn process(
             "Conversation was not durably accepted"
         })?;
     observer.promote(&turn);
+    let mut response_timing = Some(avesra_core::trace::ResponseTiming::accepted(
+        &turn, endpoint,
+    ));
     let dispatch = avesra_core::ledger::DispatchSession {
         actor_id: context.actor.ok_or("Actor missing")?,
         device_id: context.device,
@@ -783,9 +786,9 @@ async fn process(
                     && let Some(voice) = status.selected
                 {
                     if admission.kind == voice::AdmissionKind::Personal {
-                        playback.start(app.clone(), *reply, voice);
+                        playback.start(app.clone(), *reply, voice, response_timing.take());
                     } else {
-                        crate::speech::speak(app.clone(), *reply, voice)
+                        crate::speech::speak(app.clone(), *reply, voice, response_timing.take())
                             .await
                             .map_err(|error| (ReplyStage::Playback, error))?;
                     }
@@ -801,6 +804,13 @@ async fn process(
         Ok::<_, (ReplyStage, String)>(())
     }
     .await;
+    if let Some(timing) = response_timing.take() {
+        timing.finish(if reply_result.is_err() {
+            avesra_core::trace::Outcome::Failed
+        } else {
+            avesra_core::trace::Outcome::Missing
+        });
+    }
     if let Err((stage, error)) = reply_result {
         let _ = app.emit(
             "runtime-error",

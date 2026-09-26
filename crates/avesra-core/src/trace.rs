@@ -40,6 +40,7 @@ pub enum Stage {
     PrivateTts,
     FirstAudio,
     Submitted,
+    EndpointResponseSubmission,
     ToolDispatch,
     ToolResult,
 }
@@ -53,6 +54,7 @@ pub enum Outcome {
     Truncated,
     NeedsInput,
     Uncertain,
+    Missing,
 }
 #[derive(Clone, Copy, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -210,6 +212,7 @@ struct Sink {
     origin: Instant,
     loss: Arc<AtomicU64>,
     outputs: Mutex<Vec<(Uuid, Span)>>,
+    responses: Mutex<Vec<(Uuid, Span)>>,
 }
 fn now() -> u64 {
     SystemTime::now()
@@ -242,11 +245,11 @@ pub fn initialize(directory: &Path, host: Host) -> Result<(), ErrorCode> {
         if occupied {
             return Err(ErrorCode::Malformed);
         }
-    } else if !matches!(version, 1 | 2) {
+    } else if !matches!(version, 1..=3) {
         return Err(ErrorCode::Unsupported);
     }
 
-    sql(db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=1000; PRAGMA user_version=2; CREATE TABLE IF NOT EXISTS spans(id TEXT PRIMARY KEY,actor TEXT NOT NULL,device TEXT NOT NULL,turn TEXT NOT NULL,at_ms INTEGER NOT NULL,body TEXT NOT NULL CHECK(length(body)<=4096)); CREATE INDEX IF NOT EXISTS span_owner ON spans(actor,device,at_ms); CREATE TABLE IF NOT EXISTS rollups(actor TEXT NOT NULL,device TEXT NOT NULL,day INTEGER NOT NULL,stage TEXT NOT NULL,outcome TEXT NOT NULL,count INTEGER NOT NULL,total INTEGER NOT NULL,maximum INTEGER NOT NULL,PRIMARY KEY(actor,device,day,stage,outcome)); CREATE TABLE IF NOT EXISTS retention(id INTEGER PRIMARY KEY CHECK(id=1),days INTEGER NOT NULL CHECK(days BETWEEN 1 AND 7),evicted INTEGER NOT NULL); INSERT OR IGNORE INTO retention VALUES(1,7,0); CREATE TABLE IF NOT EXISTS observer(id INTEGER PRIMARY KEY CHECK(id=1),lost INTEGER NOT NULL,starts INTEGER NOT NULL); INSERT OR IGNORE INTO observer VALUES(1,0,0); UPDATE observer SET starts=starts+1 WHERE id=1;"))?;
+    sql(db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=1000; PRAGMA user_version=3; CREATE TABLE IF NOT EXISTS spans(id TEXT PRIMARY KEY,actor TEXT NOT NULL,device TEXT NOT NULL,turn TEXT NOT NULL,at_ms INTEGER NOT NULL,body TEXT NOT NULL CHECK(length(body)<=4096)); CREATE INDEX IF NOT EXISTS span_owner ON spans(actor,device,at_ms); CREATE TABLE IF NOT EXISTS rollups(actor TEXT NOT NULL,device TEXT NOT NULL,day INTEGER NOT NULL,stage TEXT NOT NULL,outcome TEXT NOT NULL,count INTEGER NOT NULL,total INTEGER NOT NULL,maximum INTEGER NOT NULL,PRIMARY KEY(actor,device,day,stage,outcome)); CREATE TABLE IF NOT EXISTS retention(id INTEGER PRIMARY KEY CHECK(id=1),days INTEGER NOT NULL CHECK(days BETWEEN 1 AND 7),evicted INTEGER NOT NULL); INSERT OR IGNORE INTO retention VALUES(1,7,0); CREATE TABLE IF NOT EXISTS observer(id INTEGER PRIMARY KEY CHECK(id=1),lost INTEGER NOT NULL,starts INTEGER NOT NULL); INSERT OR IGNORE INTO observer VALUES(1,0,0); UPDATE observer SET starts=starts+1 WHERE id=1;"))?;
     let (tx, rx) = mpsc::sync_channel(256);
     let loss = Arc::new(AtomicU64::new(0));
     let process = Uuid::new_v4();
@@ -307,6 +310,7 @@ pub fn initialize(directory: &Path, host: Host) -> Result<(), ErrorCode> {
         origin: Instant::now(),
         loss,
         outputs: Mutex::new(Vec::new()),
+        responses: Mutex::new(Vec::new()),
     })
     .map_err(|_| ErrorCode::Unavailable)
 }
@@ -663,6 +667,112 @@ pub fn otlp(snapshots: &[&Snapshot]) -> serde_json::Value {
         }
     }
     serde_json::json!({"resourceSpans":resources})
+}
+
+/// Nonserialized observer owned by one genuinely accepted native voice caller.
+/// Moving it to the actual output coordinator never renews the endpoint clock.
+pub struct ResponseTiming {
+    pending: Option<Span>,
+    output: Option<Uuid>,
+}
+impl ResponseTiming {
+    pub fn accepted(turn: &crate::conversations::DurableTurn, endpoint: Instant) -> Self {
+        let source = turn.source();
+        let link = Link {
+            turn: turn.id(),
+            actor: turn.actor(),
+            device: source.device,
+            operation: source.utterance,
+            parent: Some(turn.id()),
+        };
+        let mut span = begin(link, Stage::EndpointResponseSubmission);
+        if let Some(s) = SINK.get()
+            && let Some(record) = &mut span.record
+        {
+            if let (Some(start), Some(age)) = (
+                endpoint.checked_duration_since(s.origin),
+                Instant::now().checked_duration_since(endpoint),
+            ) {
+                span.started = endpoint;
+                record.start_us = micros(start);
+                record.at_ms =
+                    now().saturating_sub(u64::try_from(age.as_millis()).unwrap_or(u64::MAX));
+            } else {
+                span.record = None;
+                s.loss.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        Self {
+            pending: Some(span),
+            output: None,
+        }
+    }
+    /// The caller supplies the actual PublishedReply context and output UUID.
+    /// A mismatched turn cannot consume this observation.
+    pub fn bind_output(&mut self, link: Link) {
+        let Some(s) = SINK.get() else {
+            return;
+        };
+        let Some(record) = self.pending.as_ref().and_then(|span| span.record.as_ref()) else {
+            return;
+        };
+        if !link.valid()
+            || record.link.turn != link.turn
+            || record.link.actor != link.actor
+            || record.link.device != link.device
+        {
+            return;
+        }
+        let Ok(mut pending) = s.responses.lock() else {
+            return;
+        };
+        if pending.len() >= 8 || pending.iter().any(|(id, _)| *id == link.operation) {
+            s.loss.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+        if let Some(mut span) = self.pending.take() {
+            if let Some(record) = &mut span.record {
+                record.link = link;
+            }
+            pending.push((link.operation, span));
+            self.output = Some(link.operation);
+        }
+    }
+    fn take(&mut self) -> Option<Span> {
+        if let Some(id) = self.output.take()
+            && let Some(s) = SINK.get()
+            && let Ok(mut pending) = s.responses.lock()
+            && let Some(index) = pending.iter().position(|(key, _)| *key == id)
+        {
+            return Some(pending.swap_remove(index).1);
+        }
+        self.pending.take()
+    }
+    pub fn finish(mut self, outcome: Outcome) {
+        if let Some(span) = self.take() {
+            span.finish(outcome, None);
+        }
+    }
+}
+impl Drop for ResponseTiming {
+    fn drop(&mut self) {
+        drop(self.take());
+    }
+}
+/// Only an observed nonzero speech component may call this; the exact live
+/// output epoch and finite postmix samples are checked by the native media owner.
+pub fn response_submitted(id: Uuid, at: Instant) {
+    if let Some(s) = SINK.get()
+        && let Ok(mut pending) = s.responses.lock()
+        && let Some(index) = pending.iter().position(|(key, _)| *key == id)
+        && at >= pending[index].1.started
+    {
+        let (_, mut span) = pending.swap_remove(index);
+        if let Some(record) = &mut span.record {
+            record.outcome = Outcome::Complete;
+        }
+        span.emit_at(at);
+    }
 }
 
 /// Off-callback first-submission correlation, held by the actual output owner.

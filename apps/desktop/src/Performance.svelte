@@ -29,7 +29,7 @@
   <p class="av-hint">Actual voice, preview, greeting and activity measurements from this companion process. Opening this view starts no recording, playback or model request.</p>
   {#if snapshot}
     <p class="av-hint">{snapshot.retained} / {snapshot.capacity} retained stage observations · {snapshot.evicted} evicted · {snapshot.observer_loss} observer capacity losses · {snapshot.active_outputs} active output sessions. Process age: {Math.floor(snapshot.uptime_seconds / 60)} minutes.</p>
-    {#if snapshot.silent_diagnostic}<p class="av-hint text-amber-200">Silent diagnostic mode: submitted samples were observed before hardware silencing.</p>{/if}
+    {#if snapshot.silent_diagnostic}<p class="av-hint text-amber-200">Silent diagnostic mode: output is silenced at the hardware buffer; any submission measurements are taken before silencing.</p>{/if}
     <div class="av-card p-4"><span class="av-kicker">Voice gate totals · this process</span><p class="av-hint">Enum-only outcomes; no rejected utterance identifiers or content are retained. These counts are not labeled accuracy measurements.</p>{#each Object.entries(snapshot.gates) as [reason,count]}<p class="av-hint">{reason.replaceAll("_"," ")}: {count}</p>{/each}</div>
     {#if snapshot.summaries.length === 0}<div class="empty"><h2>No timed observations yet</h2><p class="av-hint">Voice gate totals above include observed preacceptance outcomes; batch checks are outside these local timing summaries.</p></div>{/if}
     {#each snapshot.summaries as row}

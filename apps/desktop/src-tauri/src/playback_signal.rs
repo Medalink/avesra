@@ -225,6 +225,13 @@ impl Telemetry {
             // actual submission intervals before display-only throttling.
             self.personal.push(reference);
             self.observe_reference(reference, raw);
+            if reference.speech
+                && reference.component_peaks[0].is_finite()
+                && reference.component_peaks[0] > 0.0
+                && raw.iter().flatten().any(|value| *value != 0.0)
+            {
+                avesra_core::trace::response_submitted(reference.utterance, reference.submitted);
+            }
             if state.last_speech == reference.speech
                 && state
                     .last_sample

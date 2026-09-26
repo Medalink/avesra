@@ -52,11 +52,13 @@ impl Playback {
         app: tauri::AppHandle,
         reply: avesra_windows::effects::PublishedReply,
         voice: avesra_contracts::voice::VoiceIdentity,
+        response_timing: Option<avesra_core::trace::ResponseTiming>,
     ) {
         let interrupted = std::sync::Arc::new(AtomicBool::new(false));
         let cancelled = interrupted.clone();
         let task = tauri::async_runtime::spawn(async move {
-            if let Err(error) = crate::speech::speak(app.clone(), reply, voice).await
+            if let Err(error) =
+                crate::speech::speak(app.clone(), reply, voice, response_timing).await
                 && !cancelled.load(Ordering::SeqCst)
             {
                 let _ = app.emit(

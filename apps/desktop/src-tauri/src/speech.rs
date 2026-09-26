@@ -152,6 +152,7 @@ async fn run(
     voice: VoiceIdentity,
     withdrawn: Arc<AtomicBool>,
     started: Instant,
+    response_timing: &mut Option<avesra_core::trace::ResponseTiming>,
 ) -> Result<Submitted, String> {
     let mut owner = crate::output::Owner::reserve(app)?;
     let prep_deadline = started + Duration::from_secs(8);
@@ -197,6 +198,11 @@ async fn run(
     let _submission = avesra_core::trace::output(
         avesra_core::trace::Link::planner(admission.reply.context()).child(admission.id),
     );
+    if let Some(timing) = response_timing {
+        timing.bind_output(
+            avesra_core::trace::Link::planner(admission.reply.context()).child(admission.id),
+        );
+    }
     admission.check(app, true)?;
     let directory = app
         .path()
@@ -491,6 +497,7 @@ pub async fn speak(
     app: tauri::AppHandle,
     reply: PublishedReply,
     voice: VoiceIdentity,
+    mut response_timing: Option<avesra_core::trace::ResponseTiming>,
 ) -> Result<Submitted, String> {
     let link = avesra_core::trace::Link::planner(reply.context());
     let started = Instant::now();
@@ -499,7 +506,14 @@ pub async fn speak(
     tauri::async_runtime::spawn(async move {
         let mut span = avesra_core::trace::begin(link, avesra_core::trace::Stage::NativeOutput);
         span.queued(started);
-        let result = run(&app, reply, voice, withdrawn, started).await;
+        let result = run(&app, reply, voice, withdrawn, started, &mut response_timing).await;
+        if let Some(timing) = response_timing {
+            timing.finish(if result.is_err() {
+                avesra_core::trace::Outcome::Failed
+            } else {
+                avesra_core::trace::Outcome::Missing
+            });
+        }
         span.finish(
             if result.is_ok() {
                 avesra_core::trace::Outcome::Complete
