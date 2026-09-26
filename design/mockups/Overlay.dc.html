@@ -20,40 +20,14 @@
     <!-- Compact: transparent voice strip -->
     <button type="button" class="flex h-24 w-full cursor-pointer items-center px-2 focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-av-400" onClick="{{toggleExpand}}" aria-expanded="{{expanded}}" aria-label="{{statusAria}}" title="{{expandTitle}}">
       <span class="relative flex h-[88px] w-full items-center justify-center">
-        <sc-if value="{{useGl}}" hint-placeholder-val="{{ false }}">
-          <canvas ref="{{glRef}}" aria-hidden="true" class="absolute inset-0 block h-full w-full"></canvas>
-        </sc-if>
-        <sc-if value="{{ind.listenCss}}" hint-placeholder-val="{{ false }}">
-          <span class="av-glow-p flex h-[84px] items-center gap-[3px]" aria-hidden="true">
-            <sc-for list="{{listenBars}}" as="b" hint-placeholder-count="52">
-              <span class="av-listen block w-1 bg-[#3a5dd8]" style="height: {{b.h}}px; opacity: {{b.o}}; animation-duration: {{b.d}}ms; animation-delay: {{b.del}}ms;"></span>
-            </sc-for>
-          </span>
-        </sc-if>
-        <sc-if value="{{ind.speakCss}}" hint-placeholder-val="{{ false }}">
-          <span class="av-glow-r flex h-[84px] items-center gap-[3px]" aria-hidden="true">
-            <sc-for list="{{speakBars}}" as="b" hint-placeholder-count="52">
-              <span class="av-speak block w-1 bg-red-500" style="height: {{b.h}}px; opacity: {{b.o}}; animation-delay: {{b.del}}ms;"></span>
-            </sc-for>
-          </span>
-        </sc-if>
-        <sc-if value="{{ind.idleCss}}" hint-placeholder-val="{{ false }}">
-          <span class="relative flex h-[3px] w-full items-center" aria-hidden="true">
-            <span class="absolute inset-x-0 top-px h-px bg-white/15"></span>
-            <span class="av-breathe av-glow-m absolute left-1/2 h-[3px] w-12 -translate-x-1/2 bg-av-500"></span>
-          </span>
+        <sc-if value="{{ind.voice}}" hint-placeholder-val="{{ true }}">
+          <dc-import name="VoiceBars" tone="{{voiceTone}}" count="44" height="84" still="{{reduceBars}}" hint-size="261px,84px"></dc-import>
         </sc-if>
         <sc-if value="{{ind.silent}}" hint-placeholder-val="{{ false }}">
           <span class="flex w-full items-center gap-3 text-red-400/80" aria-hidden="true">
             <span class="h-px flex-1 border-t border-dashed border-red-500/50"></span>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H3v6h3l5 4z"></path><path d="m22 9-6 6M16 9l6 6"></path></svg>
             <span class="h-px flex-1 border-t border-dashed border-red-500/50"></span>
-          </span>
-        </sc-if>
-        <sc-if value="{{ind.thinkCss}}" hint-placeholder-val="{{ false }}">
-          <span class="relative flex h-[3px] w-full" aria-hidden="true">
-            <span class="absolute inset-x-0 top-px h-px bg-white/15"></span>
-            <span class="av-scan av-glow-m absolute top-0 h-[3px] w-24 bg-av-500"></span>
           </span>
         </sc-if>
         <sc-if value="{{ind.work}}" hint-placeholder-val="{{ false }}">
@@ -317,7 +291,7 @@
   </div>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"preset":{"editor":"enum","options":["idle","recognizing","accepted","thinking","speaking","working","muted","paused","disconnected"],"default":"recognizing"},"hidden":{"editor":null},"startExpanded":{"editor":"boolean","default":false},"frozen":{"editor":"boolean","default":false},"embedded":{"editor":null},"command":{"editor":null},"onEvent":{"editor":null},"reducedMotion":{"editor":null},"$preview":{"width":480,"height":760}}'>
+<script type="text/x-dc" data-dc-script data-props='{"ambient":{"editor":"enum","options":["auto","owner","other","noise"],"default":"auto"},"preset":{"editor":"enum","options":["idle","recognizing","accepted","thinking","speaking","working","muted","paused","disconnected"],"default":"recognizing"},"hidden":{"editor":null},"startExpanded":{"editor":"boolean","default":false},"frozen":{"editor":"boolean","default":false},"embedded":{"editor":null},"command":{"editor":null},"onEvent":{"editor":null},"reducedMotion":{"editor":null},"$preview":{"width":480,"height":760}}'>
 class Component extends DCLogic {
   constructor(props) {
     super(props);
@@ -325,23 +299,12 @@ class Component extends DCLogic {
     this.suppress = false;
     this.lastKey = '';
     this.ticks = 0;
-    this.glMode = 'idle';
-    this.glFailed = false;
-    this.level = 0;
-    this.glRef = (el) => this.attachGl(el);
     this.state = this.presetState(props.preset || 'recognizing', !!props.startExpanded, null, !!props.frozen);
   }
 
-  // ---------- Voice spectrum (WebGL) ----------
-  // Source colors (triadic, from Ruby): blue = owner's voice, green = other people, grey = background.
-  // Ruby/red is reserved for Avesra itself.
-  palette() {
-    return {
-      owner: { low: [0.36, 0.48, 0.92], high: [0.23, 0.36, 0.85] },
-      other: { low: [0.56, 0.87, 0.29], high: [0.37, 0.68, 0.18] },
-      noise: { low: [0.6, 0.6, 0.64], high: [0.35, 0.35, 0.39] }
-    };
-  }
+  // ---------- Voice bars ----------
+  // Colours: blue = you, green = other people, grey = background, Ruby = Avesra speaking,
+  // light Ruby = Avesra thinking. The same bars carry every state; CSS transitions hand one off to the next.
 
   // Simulated speaker classification for ambient (always-on) listening.
   // In the app this comes from the transcription lane: voice-activity detection plus a
@@ -366,312 +329,6 @@ class Component extends DCLogic {
     if (mode === 'listen' || mode === 'recognize') return Math.min(1, 0.12 + speech());
     if (src === 'noise') return 0.1 + 0.06 * Math.random();
     return Math.min(1, 0.08 + speech() * (src === 'owner' ? 0.7 : 0.55));
-  }
-
-  // Simulated spectrum: one value per bar, 0–1. In the app these are FFT magnitude bins
-  // from the same audio stream, grouped into bars.
-  updateBars(t, mode, level, n, src) {
-    if (!this.bars || this.bars.length !== n) { this.bars = new Float32Array(n); this.targets = new Float32Array(n); this.nextRetarget = 0; }
-    const smooth = mode === 'speak';
-    const noise = mode === 'ambient' && src === 'noise';
-    if (t >= this.nextRetarget) {
-      for (let i = 0; i < n; i++) {
-        const x = (i + 0.5) / n;
-        const env = noise ? 0.45 + 0.35 * Math.sin(Math.PI * x) : 0.04 + 0.96 * Math.pow(Math.sin(Math.PI * x), 2.4);
-        const texture = smooth
-          ? 0.55 + 0.45 * Math.abs(Math.sin(i * 0.55 + t * 3.2) * Math.cos(i * 0.21 - t * 1.7))
-          : 0.35 + 0.65 * Math.random();
-        this.targets[i] = Math.min(1, env * texture * (0.25 + 0.95 * level));
-      }
-      this.nextRetarget = t + (smooth ? 0.11 : 0.07);
-    }
-    const up = smooth ? 0.3 : 0.55;
-    const down = smooth ? 0.1 : 0.16;
-    for (let i = 0; i < n; i++) {
-      const d = this.targets[i] - this.bars[i];
-      this.bars[i] += d * (d > 0 ? up : down);
-    }
-    return this.bars;
-  }
-
-  attachGl(el) {
-    if (el === this.canvas) return;
-    this.stopGl();
-    this.canvas = el;
-    if (!el) return;
-    let gl = null;
-    try { gl = el.getContext('webgl', { alpha: true, premultipliedAlpha: true, antialias: false }); } catch (err) { gl = null; }
-    if (!gl) { this.glFailed = true; this.forceUpdate(); return; }
-    const vsrc = 'attribute vec2 p;void main(){gl_Position=vec4(p,0.0,1.0);}';
-    const fsrc = [
-      'precision mediump float;',
-      'uniform sampler2D uBars;uniform float uN;uniform vec2 uRes;uniform float uDpr;uniform float uGlow;uniform float uMode;uniform float uTime;',
-      'uniform vec3 uCore;uniform vec3 uLow;uniform vec3 uHigh;',
-      'void main(){',
-      '  vec2 size=uRes/uDpr;',
-      '  vec2 fc=gl_FragCoord.xy/uDpr;',
-      '  float cy=size.y*0.5;',
-      '  float up=step(cy,fc.y);',
-      '  float dy=abs(fc.y-cy);',
-      '  if(uMode>0.5&&uMode<1.5){',
-      '    float x=fc.x/size.x;',
-      '    float i0=floor(fc.x);',
-      '    float s0=texture2D(uBars,vec2((i0+0.5)/uN,0.5)).r-0.5;',
-      '    float s1=texture2D(uBars,vec2((i0+1.5)/uN,0.5)).r-0.5;',
-      '    float tp=smoothstep(0.0,0.2,x)*smoothstep(1.0,0.8,x);',
-      '    float amp=(cy-4.0)*2.0*tp;',
-      '    float y0=cy+s0*amp;float y1=cy+s1*amp;',
-      '    float d=max(0.0,max(min(y0,y1)-0.7-fc.y,fc.y-max(y0,y1)-0.7));',
-      '    float tcore=smoothstep(1.2,0.0,d);',
-      '    float tglow=exp(-d*0.4)*0.75;',
-      '    float tcx=(fc.x-size.x*0.5)/(size.x*0.3);',
-      '    float tbloom=exp(-tcx*tcx)*exp(-dy/(cy*0.6))*0.18;',
-      '    float sx=floor(fc.x/6.0)*6.0;',
-      '    float qa=texture2D(uBars,vec2((sx+0.5)/uN,0.5)).r-0.5;',
-      '    float qb=texture2D(uBars,vec2((sx-5.5)/uN,0.5)).r-0.5;',
-      '    float tq=smoothstep(0.0,0.2,sx/size.x)*smoothstep(1.0,0.8,sx/size.x);',
-      '    float yq=cy+floor(qa*10.0+0.5)/10.0*(cy-4.0)*2.0*tq;',
-      '    float yp=cy+floor(qb*10.0+0.5)/10.0*(cy-4.0)*2.0*tq;',
-      '    float dq=abs(fc.y-yq);',
-      '    if(fc.x-sx<1.0){dq=min(dq,max(0.0,max(min(yq,yp)-fc.y,fc.y-max(yq,yp))));}',
-      '    float step1=smoothstep(1.0,0.0,dq)*0.55*tp;',
-      '    vec2 cell=floor(fc/vec2(4.0,4.0));',
-      '    float hsh=fract(sin(dot(cell,vec2(12.9898,78.233))+floor(uTime*9.0)*0.371)*43758.5453);',
-      '    float band=step(dy,(cy-4.0)*0.8*tp);',
-      '    vec2 inC=fract(fc/vec2(4.0,4.0));',
-      '    float bit=step(0.94,hsh)*band*step(inC.x,0.5)*step(inC.y,0.5)*0.7;',
-      '    vec3 tcol=uCore*tcore+uLow*(tglow+tbloom)+uHigh*step1+uCore*bit*0.8;',
-      '    float ta=clamp(tcore+tglow+tbloom+step1+bit*0.8,0.0,1.0);',
-      '    gl_FragColor=vec4(min(tcol,vec3(ta)),ta);',
-      '    return;',
-      '  }',
-      '  if(uMode>2.5){',
-      '    float x=fc.x/size.x;',
-      '    float pp=size.x/uN;',
-      '    float pos=fc.x/pp-0.5;',
-      '    float j0=floor(pos);',
-      '    float fr=pos-j0;',
-      '    float va=texture2D(uBars,vec2((j0+0.5)/uN,0.5)).r;',
-      '    float vb=texture2D(uBars,vec2((j0+1.5)/uN,0.5)).r;',
-      '    float env=mix(va,vb,fr*fr*(3.0-2.0*fr))*smoothstep(0.0,0.12,x)*smoothstep(1.0,0.88,x);',
-      '    float A=env*(cy-4.0);',
-      '    vec3 rc=vec3(0.0);float ra=0.0;',
-      '    for(int k=0;k<7;k++){',
-      '      float fk=float(k)/6.0;',
-      '      float tw=cos(fk*3.14159+uTime*0.9);',
-      '      float ph=x*18.0-uTime*3.2+fk*1.2;',
-      '      float y=cy+A*tw*sin(ph);',
-      '      float sl=A*tw*cos(ph)*18.0/size.x;',
-      '      float d=abs(fc.y-y)/sqrt(1.0+sl*sl);',
-      '      float ln=smoothstep(1.0,0.0,d)*(0.4+0.6*abs(tw));',
-      '      float g2=exp(-d*0.7)*0.16;',
-      '      rc+=mix(uLow,uHigh,fk)*(ln+g2);ra+=ln+g2;',
-      '    }',
-      '    float rcore=smoothstep(1.2,0.0,dy)*0.45;',
-      '    float rcx=(fc.x-size.x*0.5)/(size.x*0.3);',
-      '    float rbloom=exp(-rcx*rcx)*exp(-dy/(cy*0.6))*0.2;',
-      '    rc+=uCore*rcore+uLow*rbloom;ra+=rcore+rbloom;',
-      '    ra=clamp(ra,0.0,1.0);',
-      '    gl_FragColor=vec4(min(rc,vec3(ra)),ra);',
-      '    return;',
-      '  }',
-      '  if(uMode>1.5){',
-      '    float pp=size.x/uN;',
-      '    float pos=fc.x/pp-0.5;',
-      '    float j0=floor(pos);',
-      '    float fr=pos-j0;',
-      '    float va=texture2D(uBars,vec2((j0+0.5)/uN,0.5)).r;',
-      '    float vb=texture2D(uBars,vec2((j0+1.5)/uN,0.5)).r;',
-      '    float v=mix(va,vb,fr*fr*(3.0-2.0*fr));',
-      '    float ex=fc.x/size.x;',
-      '    float et=smoothstep(0.0,0.08,ex)*smoothstep(1.0,0.92,ex);',
-      '    float eh=max(0.6,v*(cy-3.0)*et);',
-      '    float inE=step(dy,eh);',
-      '    float rr=clamp(dy/eh,0.0,1.0);',
-      '    float stripe=0.55+0.45*step(1.0,mod(fc.x,3.0));',
-      '    float fill=inE*(0.12+0.38*rr*rr)*stripe*mix(0.8,1.0,up);',
-      '    float edge=smoothstep(1.2,0.0,abs(dy-eh))*0.95;',
-      '    float ecore=smoothstep(1.3,0.0,dy)*uGlow;',
-      '    float eglow=exp(-dy*0.5)*0.35*uGlow;',
-      '    float ecx=(fc.x-size.x*0.5)/(size.x*0.3);',
-      '    float ebloom=exp(-ecx*ecx)*exp(-dy/(cy*0.6))*0.16;',
-      '    vec3 ecol=mix(uLow,uHigh,rr)*fill+uLow*edge+uCore*ecore+uLow*(eglow+ebloom);',
-      '    float ea=clamp(fill+edge+ecore+eglow+ebloom,0.0,1.0);',
-      '    gl_FragColor=vec4(min(ecol,vec3(ea)),ea);',
-      '    return;',
-      '  }',
-      '  float pitch=size.x/uN;',
-      '  float idx=floor(fc.x/pitch);',
-      '  float lx=fc.x-idx*pitch;',
-      '  float barW=max(2.0,pitch*0.52);',
-      '  float inBar=step(abs(lx-pitch*0.5),barW*0.5);',
-      '  float amp=texture2D(uBars,vec2((idx+0.5)/uN,0.5)).r;',
-      '  float hh=amp*(cy-2.0)*mix(0.86,1.0,up);',
-      '  float inside=step(dy,hh)*step(1.5,dy);',
-      '  float r=clamp(dy/max(hh,0.001),0.0,1.0);',
-      '  float fade=(1.0-r*0.55)*mix(0.75,1.0,up);',
-      '  float bar=inBar*inside*fade;',
-      '  vec3 bc=mix(uLow,uHigh,r);',
-      '  float core=smoothstep(1.3,0.0,dy)*uGlow;',
-      '  float glow=exp(-dy*0.55)*0.6*uGlow;',
-      '  float cx=(fc.x-size.x*0.5)/(size.x*0.28);',
-      '  float bloom=exp(-cx*cx)*exp(-dy/(cy*0.55))*0.22*uGlow;',
-      '  vec3 col=bc*bar+uCore*core+uLow*(glow*0.8+bloom);',
-      '  float a=clamp(bar+core+glow*0.8+bloom,0.0,1.0);',
-      '  gl_FragColor=vec4(min(col,vec3(a)),a);',
-      '}'
-    ].join('\n');
-    const mk = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); return s; };
-    const prog = gl.createProgram();
-    gl.attachShader(prog, mk(gl.VERTEX_SHADER, vsrc));
-    gl.attachShader(prog, mk(gl.FRAGMENT_SHADER, fsrc));
-    gl.linkProgram(prog);
-    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) { this.glFailed = true; this.forceUpdate(); return; }
-    gl.useProgram(prog);
-    const buf = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]), gl.STATIC_DRAW);
-    const loc = gl.getAttribLocation(prog, 'p');
-    gl.enableVertexAttribArray(loc);
-    gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
-    const tex = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, tex);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-    const u = {};
-    ['uBars', 'uN', 'uRes', 'uDpr', 'uGlow', 'uMode', 'uTime', 'uCore', 'uLow', 'uHigh'].forEach((n) => { u[n] = gl.getUniformLocation(prog, n); });
-    gl.uniform1i(u.uBars, 0);
-    this.gl = { gl: gl, u: u, tex: tex, bytes: null };
-    this.t0 = performance.now();
-    const frame = (now) => { this.drawGl(now); this.raf = requestAnimationFrame(frame); };
-    this.raf = requestAnimationFrame(frame);
-  }
-
-  stopGl() {
-    if (this.raf) cancelAnimationFrame(this.raf);
-    this.raf = null;
-    if (this.gl) {
-      const ext = this.gl.gl.getExtension('WEBGL_lose_context');
-      if (ext) ext.loseContext();
-    }
-    this.gl = null;
-  }
-
-  // Simulated thinking trace, EEG-style: dense high-frequency activity in bursts.
-  // In the app this can follow real planner activity (token rate from the conversation lane on Spark2).
-  eegSample() {
-    const t = ++this.tp;
-    const burst = 0.3 + 0.7 * Math.pow(Math.abs(Math.sin(t * 0.011) * Math.sin(t * 0.0047 + 1.1)), 0.6);
-    const v = Math.sin(t * 0.95) * 0.4 + Math.sin(t * 1.83 + 1.3) * 0.28 + Math.sin(t * 0.41) * 0.2 + (Math.random() - 0.5) * 0.55;
-    return Math.max(-0.5, Math.min(0.5, v * burst * 0.42));
-  }
-
-  drawTrace(g, gl, w, h, dpr, cw, now, reduce) {
-    const n = Math.max(16, Math.floor(cw));
-    if (!this.trace || this.trace.length !== n) {
-      this.trace = new Float32Array(n);
-      this.tp = 0;
-      for (let i = 0; i < n; i++) this.trace[i] = this.eegSample();
-      this.lastTrace = now;
-    }
-    if (!reduce) {
-      const step = Math.min(n, Math.max(0, Math.round((now - (this.lastTrace || now)) * 0.14)));
-      if (step > 0) {
-        this.trace.copyWithin(0, step);
-        for (let i = n - step; i < n; i++) this.trace[i] = this.eegSample();
-        this.lastTrace = now;
-      }
-    }
-    if (!g.bytes || g.bytes.length !== n) g.bytes = new Uint8Array(n);
-    for (let i = 0; i < n; i++) g.bytes[i] = Math.round((this.trace[i] + 0.5) * 255);
-    gl.bindTexture(gl.TEXTURE_2D, g.tex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, n, 1, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, g.bytes);
-    gl.viewport(0, 0, w, h);
-    gl.clearColor(0, 0, 0, 0);
-    gl.clear(gl.COLOR_BUFFER_BIT);
-    gl.uniform1f(g.u.uMode, 1);
-    gl.uniform1f(g.u.uTime, reduce ? 1.3 : (now - this.t0) / 1000);
-    gl.uniform1f(g.u.uN, n);
-    gl.uniform2f(g.u.uRes, w, h);
-    gl.uniform1f(g.u.uDpr, dpr);
-    gl.uniform1f(g.u.uGlow, 1);
-    gl.uniform3f(g.u.uCore, 1.0, 0.8, 0.88);
-    gl.uniform3f(g.u.uLow, 0.88, 0.07, 0.37);
-    gl.uniform3f(g.u.uHigh, 0.88, 0.07, 0.37);
-    gl.drawArrays(gl.TRIANGLES, 0, 6);
-  }
-
-  drawGl(now) {
-    const g = this.gl;
-    const el = this.canvas;
-    if (!g || !el || this.props.hidden) return;
-    const gl = g.gl;
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const cw = el.clientWidth;
-    const w = Math.max(1, Math.round(cw * dpr));
-    const h = Math.max(1, Math.round(el.clientHeight * dpr));
-    if (el.width !== w || el.height !== h) { el.width = w; el.height = h; }
-    const n = Math.max(8, Math.floor(cw / (this.glMode === 'speak' ? 7 : 5)));
-    const reduce = this.props.reducedMotion || (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
-    if (this.glMode === 'think') { this.drawTrace(g, gl, w, h, dpr, cw, now, reduce); return; }
-    const mode = this.glMode === 'speak' ? 'speak' : this.glMode === 'listen' ? 'listen' : this.glMode === 'recognize' ? 'recognize' : 'ambient';
-    const t = reduce ? 5.3 : (now - this.t0) / 1000;
-    const src = (mode === 'listen' || mode === 'recognize') ? 'owner' : mode === 'ambient' ? this.ambientSource(t) : null;
-
-    // Report who is being heard so the expanded panel can say it in words.
-    if (src && src !== this.state.hearing) this.setState({ hearing: src });
-
-    const target = reduce ? (mode === 'ambient' ? 0.4 : 0.6) : this.signalLevel(t, mode, src);
-    this.level += (target - this.level) * (target > this.level ? 0.35 : 0.08);
-    if (!reduce || !this.bars || this.bars.length !== n || this.barsMode !== mode + src) {
-      this.updateBars(t, mode, this.level, n, src);
-      if (reduce) this.bars.set(this.targets);
-      this.barsMode = mode + src;
-    }
-    const bars = this.bars;
-    if (!g.bytes || g.bytes.length !== n) g.bytes = new Uint8Array(n);
-    for (let i = 0; i < n; i++) g.bytes[i] = Math.round(Math.min(1, bars[i]) * 255);
-    gl.bindTexture(gl.TEXTURE_2D, g.tex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, n, 1, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, g.bytes);
-
-    // Colors: crossfade between sources so a change of speaker blends rather than flickers.
-    let low;
-    let high;
-    let core;
-    let glowK;
-    if (mode === 'speak') {
-      low = [0.94, 0.27, 0.27]; high = [0.88, 0.07, 0.37]; core = [1.0, 0.86, 0.84]; glowK = 1;
-    } else {
-      const pal = this.palette();
-      if (!this.mix || reduce) this.mix = { owner: 0, other: 0, noise: 1 };
-      ['owner', 'other', 'noise'].forEach((k) => {
-        const goal = k === src ? 1 : 0;
-        this.mix[k] = reduce ? goal : this.mix[k] + (goal - this.mix[k]) * 0.06;
-      });
-      const m = this.mix;
-      const sum = m.owner + m.other + m.noise || 1;
-      const blend = (key) => [0, 1, 2].map((c) => (pal.owner[key][c] * m.owner + pal.other[key][c] * m.other + pal.noise[key][c] * m.noise) / sum);
-      low = blend('low'); high = blend('high');
-      if (mode === 'listen') { core = [1.0, 0.72, 0.82]; glowK = 1; }             // accepted: Ruby centre line
-      else if (mode === 'recognize') { core = [0.62, 0.7, 0.95]; glowK = 0.65; }  // recognizing: owner voice, not yet accepted
-      else { core = [0.7, 0.7, 0.74]; glowK = 0.45; }                               // passive: dim neutral line
-    }
-    gl.viewport(0, 0, w, h);
-    gl.clearColor(0, 0, 0, 0);
-    gl.clear(gl.COLOR_BUFFER_BIT);
-    gl.uniform1f(g.u.uN, n);
-    gl.uniform2f(g.u.uRes, w, h);
-    gl.uniform1f(g.u.uDpr, dpr);
-    gl.uniform1f(g.u.uGlow, glowK);
-    gl.uniform1f(g.u.uMode, mode === 'speak' ? 3 : 2);
-    gl.uniform1f(g.u.uTime, reduce ? 1.3 : (now - this.t0) / 1000);
-    gl.uniform3f(g.u.uCore, core[0], core[1], core[2]);
-    gl.uniform3f(g.u.uLow, low[0], low[1], low[2]);
-    gl.uniform3f(g.u.uHigh, high[0], high[1], high[2]);
-    gl.drawArrays(gl.TRIANGLES, 0, 6);
   }
 
   texts() {
@@ -750,7 +407,7 @@ class Component extends DCLogic {
     if (!this.props.frozen) this.timer = setInterval(() => this.tick(), 50);
     this.emit();
   }
-  componentWillUnmount() { clearInterval(this.timer); clearTimeout(this.retryTimer); this.stopGl(); }
+  componentWillUnmount() { clearInterval(this.timer); clearTimeout(this.retryTimer); }
   componentDidUpdate(prev) {
     const c = this.props.command;
     if (c && c.n && (!prev.command || prev.command.n !== c.n)) this.apply(c);
@@ -828,6 +485,7 @@ class Component extends DCLogic {
       p.afterSpeak = s.afterSpeak + 1; ch = true;
       if (p.afterSpeak > 50) p.activity = 'idle';
     }
+    if (live && !s.muted && !s.deafened && (s.activity === 'idle' || s.activity === 'recognizing' || s.activity === 'speaking') && this.ticks % 6 === 0) { p.beat = (s.beat || 0) + 1; ch = true; }
     if (ch) this.setState(p);
   }
 
@@ -926,12 +584,7 @@ class Component extends DCLogic {
     else if (s.activity === 'accepted') ind = 'listen';
     const indMap = {};
     ['idle', 'recognize', 'listen', 'speak', 'silent', 'think', 'work', 'muted', 'deaf', 'paused', 'offline'].forEach((k) => { indMap[k] = k === ind; });
-    this.glMode = ind;
-    const useGl = !this.glFailed && (ind === 'listen' || ind === 'recognize' || ind === 'speak' || ind === 'idle' || ind === 'think');
-    indMap.thinkCss = ind === 'think' && !useGl;
-    indMap.idleCss = ind === 'idle' && !useGl;
-    indMap.listenCss = (ind === 'listen' || ind === 'recognize') && !useGl;
-    indMap.speakCss = ind === 'speak' && !useGl;
+    indMap.voice = ind === 'idle' || ind === 'recognize' || ind === 'listen' || ind === 'speak' || ind === 'think';
 
     const indBg = {
       idle: 'bg-white/[0.04]', listen: 'bg-av-500/10', speak: 'bg-red-500/[0.07]', silent: 'bg-red-500/[0.05]',
@@ -986,17 +639,14 @@ class Component extends DCLogic {
     const rootCls = embedded ? 'font-sans antialiased' + rm : 'av-grid-bg flex justify-center pt-7 font-sans antialiased' + rm;
     const rootStyle = embedded ? '' : 'width: 480px; height: 760px; box-sizing: border-box;';
 
-    // Voice-bar fallback (no WebGL, or reduced motion without canvas support)
-    const N = 42;
-    const env = (i) => Math.pow(Math.sin(Math.PI * (i + 0.5) / N), 0.9);
-    const listenBars = [];
-    const speakBars = [];
-    for (let i = 0; i < N; i++) {
-      const e = env(i);
-      const r = 0.45 + 0.55 * (((i * 37) % 11) / 10);
-      listenBars.push({ h: Math.round(4 + 76 * e * r), o: (0.45 + 0.55 * e).toFixed(2), d: 600 + ((i * 53) % 500), del: -((i * 97) % 900) });
-      speakBars.push({ h: Math.round(4 + 76 * Math.pow(e, 1.2)), o: (0.4 + 0.6 * e).toFixed(2), del: -(i * 55) });
-    }
+    // Voice bars: one VoiceBars component carries every voice state
+    const now = Date.now() / 1000;
+    let tone = 'rest';
+    if (ind === 'speak') tone = 'assistant';
+    else if (ind === 'think') tone = 'thinking';
+    else if (ind === 'recognize') tone = 'owner';
+    else if (ind === 'listen') tone = 'settle';
+    else if (ind === 'idle') tone = { owner: 'owner', other: 'other', noise: 'background' }[this.props.ambient && this.props.ambient !== 'auto' ? this.props.ambient : this.ambientSource(now)];
 
     // Task view
     let stepsView = [];
@@ -1087,7 +737,7 @@ class Component extends DCLogic {
       plainBtnCls: 'av-iconbtn size-6 text-zinc-400' + reveal,
       showText: showText, hideText: !showText,
       dotCls: 'size-1.5 shrink-0 ' + dotTone,
-      ind: indMap, useGl: useGl, glRef: this.glRef, listenBars: listenBars, speakBars: speakBars,
+      ind: indMap, voiceTone: tone, reduceBars: !!this.props.reducedMotion,
       ringDash: t ? ((Math.min(t.index + (t.status === 'running' ? t.progress : 0), 5) / 5) * 56.5).toFixed(1) + ' 56.5' : '0 56.5',
       stepFrac: stepN + '/5',
       label: label, sub: sub,

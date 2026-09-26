@@ -14,18 +14,19 @@
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
 <style>body{margin:0;background:#121214}</style>
 </helmet>
-<div class="flex flex-col gap-12 bg-[#121214] font-sans text-zinc-100 antialiased" style="width: 1520px; height: 2300px; box-sizing: border-box; padding: 48px;">
+<div class="flex flex-col gap-12 bg-[#121214] font-sans text-zinc-100 antialiased" style="width: 1520px; height: 2780px; box-sizing: border-box; padding: 48px;">
   <div class="flex items-end justify-between gap-8">
     <div class="flex flex-col gap-2">
       <span class="font-mono text-[11px] tracking-[0.12em] text-av-400 uppercase">Avesra · compact overlay</span>
       <h1 class="m-0 text-[30px] font-semibold tracking-[-0.02em] uppercase font-mono text-zinc-50">Overlay states</h1>
-      <p class="m-0 max-w-[760px] text-[14px] leading-[21px] text-zinc-400">A transparent overlay built around one live signal. Three WebGL styles tell sources apart at a glance: human audio is a smooth filled waveform (blue for you, green for other people, grey for background), thinking fuses gamma-wave bursts with stepped digital compute, and Avesra’s speech is a twisting ribbon of synthetic strands, red to Ruby. Passive, recognizing, accepted, thinking and speaking show no text; small icon controls appear on hover, when switched on, or (Stop) while a task runs.</p>
+      <p class="m-0 max-w-[760px] text-[14px] leading-[21px] text-zinc-400">A transparent overlay built around one set of voice bars. Colour says who: blue for you, green for other people, grey for background, Ruby while Avesra speaks and light Ruby while she thinks. Passive, recognizing, accepted, thinking and speaking show no text; small icon controls appear on hover, when switched on, or (Stop) while a task runs. Between states the bars reshape and recolour in a ripple from the centre.</p>
     </div>
     <div class="flex items-center gap-4 text-[12px] text-zinc-400">
       <span class="flex items-center gap-2"><span class="size-2 bg-[#3a5dd8]"></span>You</span>
       <span class="flex items-center gap-2"><span class="size-2 bg-[#8ede4a]"></span>Other people</span>
       <span class="flex items-center gap-2"><span class="size-2 bg-zinc-500"></span>Background</span>
-      <span class="flex items-center gap-2"><span class="size-2 bg-av-500"></span>Avesra</span>
+      <span class="flex items-center gap-2"><span class="size-2 bg-av-500"></span>Avesra speaking</span>
+      <span class="flex items-center gap-2"><span class="size-2 bg-av-300"></span>Avesra thinking</span>
       <span class="flex items-center gap-2"><span class="size-2 bg-amber-300"></span>Input off</span>
             <span class="flex items-center gap-2"><span class="size-2 ring-1 ring-red-500"></span>Disconnected</span>
     </div>
@@ -44,6 +45,35 @@
         </div>
       </div>
     </sc-for>
+  </div>
+
+  <div class="flex flex-col gap-6">
+    <div class="flex items-baseline gap-4">
+      <h2 class="m-0 text-[20px] font-semibold tracking-[-0.01em] text-zinc-50">Transitions</h2>
+      <span class="text-[13px] text-zinc-400">One set of bars carries the whole exchange. Each change ripples out from the centre over about 400 ms: new colour and shape start in the middle and reach the edges last.</span>
+    </div>
+    <div class="grid grid-cols-2 gap-x-10">
+      <sc-for list="{{sequences}}" as="q" hint-placeholder-count="2">
+        <div class="flex flex-col gap-3">
+          <div class="flex items-baseline gap-3">
+            <span class="text-[14px] font-semibold text-zinc-50">{{q.title}}</span>
+            <span class="text-[12.5px] text-zinc-400">Live, on a loop.</span>
+          </div>
+          <div class="av-grid-bg flex h-[160px] items-center justify-center ring-1 ring-white/[0.06]">
+            <dc-import name="Overlay" preset="{{q.first}}" frozen="{{yes}}" embedded="{{yes}}" command="{{q.command}}" ambient="{{q.ambient}}" hint-size="440px,124px"></dc-import>
+          </div>
+          <ol class="m-0 flex list-none flex-col gap-0.5 p-0">
+            <sc-for list="{{q.stages}}" as="st" hint-placeholder-count="6">
+              <li class="{{st.cls}}">
+                <span class="{{st.dotCls}}"></span>
+                <span class="w-[104px] shrink-0 font-medium">{{st.name}}</span>
+                <span class="min-w-0 flex-1 text-zinc-400">{{st.desc}}</span>
+              </li>
+            </sc-for>
+          </ol>
+        </div>
+      </sc-for>
+    </div>
   </div>
 
   <div class="flex flex-col gap-5">
@@ -67,23 +97,69 @@
   </div>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1520,"height":2300}}'>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1520,"height":2780}}'>
+const SEQS = [
+  { title: 'You ask, she answers', stages: [
+    { preset: 'recognizing', ms: 3200, name: 'You talk', desc: 'Blue bars move with your voice.', dot: 'bg-[#3a5dd8]' },
+    { preset: 'accepted', ms: 1600, name: 'You stop', desc: 'They settle to a low blue breath.', dot: 'bg-[#3a5dd8]' },
+    { preset: 'thinking', ms: 3000, name: 'Thinking', desc: 'Light Ruby ripples out from the centre.', dot: 'bg-av-300' },
+    { preset: 'speaking', ms: 4000, name: 'She speaks', desc: 'Tall Ruby bars rise from the centre.', dot: 'bg-av-500' },
+    { preset: 'idle', ambient: 'noise', ms: 2600, name: 'Listening', desc: 'She finishes; grey returns.', dot: 'bg-zinc-500' },
+  ] },
+  { title: 'Interruptions and other voices', stages: [
+    { preset: 'speaking', ms: 3000, name: 'She speaks', desc: 'Mid-answer.', dot: 'bg-av-500' },
+    { preset: 'recognizing', ms: 3000, name: 'You interrupt', desc: 'Blue takes over; she stops and listens.', dot: 'bg-[#3a5dd8]' },
+    { preset: 'accepted', ms: 1600, name: 'You stop', desc: 'Your new request is accepted.', dot: 'bg-[#3a5dd8]' },
+    { preset: 'idle', ambient: 'other', ms: 3200, name: 'Someone else', desc: 'Green; she won’t take instructions from them.', dot: 'bg-[#8ede4a]' },
+    { preset: 'recognizing', ms: 2600, name: 'You join in', desc: 'Blue replaces green from the centre.', dot: 'bg-[#3a5dd8]' },
+    { preset: 'idle', ambient: 'noise', ms: 2400, name: 'Quiet room', desc: 'Back to grey background.', dot: 'bg-zinc-500' },
+  ] },
+];
+
 class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { pos: SEQS.map(() => 0), n: SEQS.map(() => 0) };
+    this.timers = [];
+  }
+  componentDidMount() { SEQS.forEach((q, qi) => this.schedule(qi)); }
+  componentWillUnmount() { this.timers.forEach((t) => clearTimeout(t)); }
+  schedule(qi) {
+    const q = SEQS[qi];
+    this.timers[qi] = setTimeout(() => {
+      const pos = this.state.pos.slice(), n = this.state.n.slice();
+      pos[qi] = (pos[qi] + 1) % q.stages.length;
+      n[qi] += 1;
+      this.setState({ pos, n }, () => this.schedule(qi));
+    }, q.stages[this.state.pos[qi]].ms);
+  }
   renderVals() {
     const tile = 'av-grid-bg flex h-[160px] items-center justify-center ring-1 ring-white/[0.06]';
     const defs = [
       ['idle', 'Passive listening', 'Always on after enrollment, no wake word. Colors whoever it hears: you, other people or background. Nothing is kept.'],
       ['recognizing', 'Recognizing', 'Your voice, not yet accepted: identity and intent are still being checked. Partial text can’t trigger actions.'],
-      ['accepted', 'Accepted', 'Clearly directed at Avesra by an enrolled voice. The Ruby centre line lights; the request is now a task.'],
-      ['thinking', 'Thinking', 'Planning. Gamma-wave bursts fused with a stepped digital signal and compute bits, in Ruby.'],
-      ['speaking', 'Speaking', 'Avesra’s synthetic voice: a twisting ribbon, red to Ruby. Voice atmosphere, set in Settings → Audio & Voice, adds Digital effects and the Galaxy background.'],
+      ['accepted', 'Accepted', 'You stopped talking and the request was accepted: your blue bars settle to a low breath while it becomes a task.'],
+      ['thinking', 'Thinking', 'Planning. Low, slow light-Ruby bars breathing, so thinking never reads as talking.'],
+      ['speaking', 'Speaking', 'Avesra’s voice: tall Ruby bars pulsing with her speech. Voice atmosphere, set in Settings → Audio & Voice, adds Digital effects and the Galaxy background.'],
       ['working', 'Working', 'Running an authorized task. The bar splits into its five steps; a small Stop stays visible.'],
       ['muted', 'Muted', 'Capture stopped and unaccepted speech discarded. Accepted tasks continue; type a request instead.'],
       ['paused', 'Paused', 'Listening, observation and new actions on hold; the task waits at a safe boundary.'],
       ['disconnected', 'Disconnected', 'Spark2 is unreachable. Local mute and Stop still work; nothing queued runs late.']
     ];
+    const sequences = SEQS.map((q, qi) => {
+      const at = this.state.pos[qi], stage = q.stages[at];
+      return {
+        title: q.title, first: q.stages[0].preset, ambient: stage.ambient || 'auto',
+        command: { n: this.state.n[qi], type: 'preset', value: stage.preset },
+        stages: q.stages.map((st, i) => ({
+          name: st.name, desc: st.desc,
+          cls: 'flex items-center gap-2.5 px-2 py-1.5 text-[12.5px] transition-colors ' + (i === at ? 'bg-white/[0.06] text-zinc-50' : 'text-zinc-300'),
+          dotCls: 'size-2 shrink-0 ' + (i === at ? st.dot : 'bg-white/15'),
+        })),
+      };
+    });
     return {
-      yes: true,
+      yes: true, sequences,
       cells: defs.map((d, i) => ({ n: '0' + (i + 1), preset: d[0], name: d[1], desc: d[2], tile: tile })),
       expanded: [
         { preset: 'working', name: 'Working', desc: 'Reading message 6 of 10. Progress is per step.' },

@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Avesra onboarding prototype</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./avesra.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>body{margin:0;background:#121214}</style>
+</helmet>
+<div class="flex flex-col gap-4 bg-[#121214] font-sans text-zinc-100" style="width: 1440px; height: 940px; box-sizing: border-box; padding: 20px 24px 24px;">
+
+  <!-- Header -->
+  <div class="flex h-10 shrink-0 items-center gap-3">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" class="text-av-400" aria-hidden="true"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.6"></circle><path d="M8.5 10v4M12 7.5v9M15.5 10v4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path></svg>
+    <span class="text-[15px] font-semibold tracking-[-0.01em] text-zinc-50">Avesra</span>
+    <span class="h-4 w-px bg-white/15"></span>
+    <span class="text-[13px] text-zinc-400">Onboarding prototype · install to first conversation · all data simulated</span>
+  </div>
+
+  <div class="flex min-h-0 flex-1 gap-5">
+    <!-- Desktop -->
+    <div class="av-grid-bg relative min-w-0 flex-1 overflow-hidden ring-1 ring-white/[0.08]">
+      <!-- The real compact overlay, once Avesra is running -->
+      <sc-if value="{{showOverlay}}" hint-placeholder-val="{{ false }}">
+        <div class="absolute top-4 left-1/2 -translate-x-1/2">
+          <dc-import name="Overlay" embedded="{{yes}}" frozen="{{yes}}" preset="idle" command="{{ovCmd}}" hint-size="440px,96px"></dc-import>
+        </div>
+      </sc-if>
+
+      <!-- Setup window -->
+      <sc-if value="{{showWindow}}" hint-placeholder-val="{{ true }}">
+        <div class="absolute top-[124px] left-1/2 -translate-x-1/2 shadow-[0_28px_70px_rgba(0,0,0,0.55)]">
+          <dc-import name="Onboarding" jump="{{jump}}" sim="{{sim}}" on-state="{{onState}}" hint-size="880px,640px"></dc-import>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{showDone}}" hint-placeholder-val="{{ false }}">
+        <div class="av-rise absolute top-[150px] left-1/2 flex w-[420px] -translate-x-1/2 flex-col items-center gap-2 text-center">
+          <span class="text-[15px] font-medium text-zinc-100">Setup closed</span>
+          <span class="text-[13px] leading-5 text-zinc-400">{{doneText}}</span>
+        </div>
+      </sc-if>
+
+      <!-- Taskbar -->
+      <div class="absolute inset-x-0 bottom-0 flex h-10 items-center gap-2 border-t border-white/[0.06] bg-[#0d0d0f]/90 px-3">
+        <span class="size-4 bg-white/10"></span>
+        <span class="flex-1"></span>
+        <sc-if value="{{showOverlay}}" hint-placeholder-val="{{ false }}">
+          <span class="grid size-7 place-items-center text-av-400" title="Avesra is running">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.8"></circle><path d="M8.5 10v4M12 7.5v9M15.5 10v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path></svg>
+          </span>
+        </sc-if>
+        <span class="font-mono text-[11px] text-zinc-500">9:41</span>
+      </div>
+    </div>
+
+    <!-- Prototype controls -->
+    <aside class="flex w-[300px] shrink-0 flex-col gap-4 bg-[#18181b] p-4 ring-1 ring-white/[0.08]" aria-label="Prototype controls">
+      <div class="flex flex-col gap-1">
+        <span class="av-kicker">Prototype controls</span>
+        <span class="av-hint">Not part of the product. They stand in for your voice and jump between steps.</span>
+      </div>
+
+      <div class="av-card flex flex-col gap-2 p-3">
+        <div class="flex items-center justify-between">
+          <span class="text-[12px] text-zinc-400">Now</span>
+          <span class="font-mono text-[11.5px] text-zinc-200">{{nowLabel}}</span>
+        </div>
+        <div class="flex items-center justify-between">
+          <span class="text-[12px] text-zinc-400">Signal</span>
+          <span class="{{sigCls}}">{{sigLabel}}</span>
+        </div>
+        <button type="button" class="av-btn av-btn-primary mt-1 w-full" onClick="{{simulate}}" disabled="{{noWindow}}">Simulate my reply</button>
+        <span class="av-hint">{{simHint}}</span>
+      </div>
+
+      <div class="flex min-h-0 flex-1 flex-col gap-1.5">
+        <span class="av-kicker">Jump to</span>
+        <div class="av-scroll flex min-h-0 flex-1 flex-col gap-0.5 overflow-auto">
+          <sc-for list="{{jumps}}" as="j" hint-placeholder-count="12">
+            <button type="button" class="av-nav-btn h-8 text-[12.5px]" aria-current="{{j.current}}" onClick="{{j.go}}">
+              <span class="w-7 font-mono text-[11px] text-zinc-500">{{j.n}}</span>{{j.label}}
+            </button>
+          </sc-for>
+        </div>
+      </div>
+
+      <div class="flex flex-col gap-2">
+        <span class="av-kicker">Tour question</span>
+        <div class="grid gap-2" style="grid-template-columns: repeat(2, minmax(0, 1fr));">
+          <button type="button" class="av-demo-btn" onClick="{{goYes}}">Yes path</button>
+          <button type="button" class="av-demo-btn" onClick="{{goNo}}">No path</button>
+        </div>
+        <button type="button" class="av-btn av-btn-ghost w-full" onClick="{{restart}}">Restart from install</button>
+      </div>
+    </aside>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":940}}'>
+const JUMPS = [
+  { n: '1', label: 'Install', step: 'install', phase: 'ready' },
+  { n: '2', label: 'Starter model says hello', step: 'wake', phase: 'booting' },
+  { n: '3', label: 'Your name', step: 'name', phase: 'listening' },
+  { n: '4', label: 'Choose an AI provider', step: 'provider', phase: 'choose' },
+  { n: '4b', label: 'Provider key', step: 'provider', phase: 'key' },
+  { n: '5', label: 'Find your Spark', step: 'spark', phase: 'find' },
+  { n: '5b', label: 'Pair securely', step: 'spark', phase: 'pair' },
+  { n: '5c', label: 'Verify end to end', step: 'spark', phase: 'verify' },
+  { n: '6', label: 'Want a tour?', step: 'ask', phase: 'asking' },
+  { n: 'Y1', label: 'Yes · her own settings', step: 'tour', phase: 'settings' },
+  { n: 'Y2', label: 'Yes · tasks to try', step: 'tour', phase: 'tasks' },
+  { n: 'N', label: 'No · listens and waits', step: 'rest', phase: 'rest' },
+];
+const SIG = {
+  avesra: ['Avesra speaking', 'text-av-300'], owner: ['Your voice', 'text-[#8fa6ff]'], idle: ['Listening', 'text-zinc-300'],
+  thinking: ['Working', 'text-av-300'], muted: ['Muted', 'text-amber-200'], boot: ['Not running yet', 'text-zinc-500'],
+};
+
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { ovCmd: { n: 0 }, jump: { n: 0 }, sim: 0, cur: { step: 'install', phase: 'ready', signal: 'boot', simHint: 'Clicks Install', closed: false }, closed: false, lastStep: 'install' };
+  }
+  jumpTo(step, phase) {
+    if (this.state.closed) this.setState({ closed: false, jump: { n: this.state.jump.n + 1, step, phase }, cur: Object.assign({}, this.state.cur, { step, phase }) });
+    else this.setState({ jump: { n: this.state.jump.n + 1, step, phase } });
+  }
+  renderVals() {
+    const s = this.state, cur = s.cur;
+    const running = !(cur.step === 'install') && !(cur.step === 'wake' && cur.phase === 'booting');
+    const sig = s.closed ? 'idle' : cur.signal;
+    const jumps = JUMPS.map((j) => ({
+      n: j.n, label: j.label,
+      current: !s.closed && j.step === cur.step && (j.phase === cur.phase || (j.step === 'tour' && j.phase === 'settings' && cur.phase === 'applied') || (j.step === 'wake' && cur.phase === 'greeting') || (j.step === 'name' && cur.phase === 'confirm') || (j.phase === 'key' && cur.phase === 'testing') || (j.phase === 'verify' && cur.phase === 'ready')) ? 'page' : 'false',
+      go: () => this.jumpTo(j.step, j.phase),
+    }));
+    return {
+      showOverlay: running || s.closed,
+      yes: true, ovCmd: this.state.ovCmd,
+      showWindow: !s.closed, noWindow: s.closed, showDone: s.closed,
+      doneText: s.lastStep === 'rest'
+        ? 'Only the overlay is left, listening quietly. Speak to it whenever you need Avesra.'
+        : 'Only the overlay is left. Avesra is listening; try one of the tasks from the tour.',
+      jump: s.jump, sim: s.sim,
+      onState: (st) => {
+        if (st.closed) this.setState({ closed: true, cur: Object.assign({}, this.state.cur, { signal: 'idle' }), ovCmd: { n: this.state.ovCmd.n + 1, type: 'preset', value: 'idle' } });
+        else {
+          const preset = { avesra: 'speaking', owner: 'recognizing', thinking: 'thinking', muted: 'muted' }[st.signal] || 'idle';
+          const ov = this.state.ovCmd;
+          this.setState({ cur: st, lastStep: st.step === 'rest' || st.step === 'tour' ? st.step : this.state.lastStep,
+            ovCmd: ov.value === preset ? ov : { n: ov.n + 1, type: 'preset', value: preset } });
+        }
+      },
+      nowLabel: s.closed ? 'closed' : cur.step + ' · ' + cur.phase,
+      sigLabel: (SIG[sig] || SIG.idle)[0], sigCls: 'font-mono text-[11.5px] ' + (SIG[sig] || SIG.idle)[1],
+      simulate: () => this.setState({ sim: this.state.sim + 1 }),
+      simHint: s.closed ? 'Setup is closed. Restart or jump to a step.' : 'Next: ' + cur.simHint,
+      jumps,
+      goYes: () => this.jumpTo('tour', 'settings'),
+      goNo: () => this.jumpTo('rest', 'rest'),
+      restart: () => this.jumpTo('install', 'ready'),
+    };
+  }
+}
+</script>
+</body>
+</html>

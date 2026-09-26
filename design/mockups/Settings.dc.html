@@ -78,9 +78,8 @@
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" class="pointer-events-none absolute top-1/2 right-2.5 -translate-y-1/2 text-zinc-400" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
                   </div>
                   <div class="flex items-center gap-2">
-                    <div class="relative flex h-2 flex-1 gap-[2px] overflow-hidden" role="meter" aria-label="Input level (simulated)" aria-valuemin="0" aria-valuemax="100" aria-valuenow="55">
-                      <sc-for list="{{meterSegs}}" as="m" hint-placeholder-count="24"><span class="{{m}}"></span></sc-for>
-                      <span class="av-level absolute inset-y-0 right-0 bg-[#1f1f23]" style="width: 45%;"></span>
+                    <div class="flex h-6 flex-1 items-center" role="meter" aria-label="Input level (simulated)" aria-valuemin="0" aria-valuemax="100" aria-valuenow="55">
+                      <dc-import name="VoiceBars" tone="owner" count="40" height="24" hint-size="237px,24px"></dc-import>
                     </div>
                     <span class="font-mono text-[10.5px] text-zinc-400">simulated</span>
                   </div>
@@ -194,8 +193,8 @@
               </div>
               <div class="{{previewCls}}">
                 <sc-if value="{{previewing}}" hint-placeholder-val="{{ false }}">
-                  <span class="av-glow-r flex h-5 items-center gap-[2px]" aria-hidden="true">
-                    <sc-for list="{{previewBars}}" as="b" hint-placeholder-count="13"><span class="av-speak block w-[2px] bg-red-500" style="height: {{b.h}}px; animation-delay: {{b.del}}ms;"></span></sc-for>
+                  <span class="flex h-5 items-center" aria-hidden="true">
+                    <dc-import name="VoiceBars" tone="assistant" count="16" height="20" hint-size="93px,20px"></dc-import>
                   </span>
                 </sc-if>
                 <span class="min-w-0 flex-1 truncate text-[12px] leading-[17px] text-zinc-300" title="{{referenceText}}">“{{referenceText}}”</span>
@@ -670,21 +669,67 @@
             </div>
 
             <section class="flex flex-col gap-2.5">
-              <span class="av-kicker">Owner</span>
-              <div class="av-card flex flex-col gap-3 p-3.5">
-                <div class="flex items-center gap-3">
-                  <span class="grid size-9 shrink-0 place-items-center bg-[#3a5dd8]/25 font-mono text-[12px] font-medium text-[#b9c7f5]">YOU</span>
-                  <div class="flex min-w-0 flex-1 flex-col">
-                    <span class="text-[13px] font-medium text-zinc-50">You · owner</span>
-                    <span class="av-hint">Enrolled Sep 24, 2026 · ECAPA-TDNN rev 0f99f2d · enrollment quality good · held-out check 5 / 5 (simulated)</span>
+              <span class="av-kicker">Your voice</span>
+              <div class="av-card flex flex-col">
+                <div class="flex gap-4 p-3.5">
+                  <div class="relative grid size-[148px] shrink-0 place-items-center">
+                    <svg width="148" height="148" viewBox="0 0 240 240" fill="none" role="img" aria-label="Your voiceprint, drawn from 192 voice features">
+                      <circle cx="120" cy="120" r="44" stroke="rgba(255,255,255,0.08)"></circle>
+                      <circle cx="120" cy="120" r="108" stroke="rgba(255,255,255,0.06)" stroke-dasharray="2 4"></circle>
+                      <path d="{{vp.fill}}" fill="rgba(58,93,216,0.16)" stroke="#3a5dd8" stroke-width="1.4" stroke-linejoin="round"></path>
+                      <path d="{{vp.spokes}}" stroke="#6f88ea" stroke-width="1.2" opacity="0.75"></path>
+                      <sc-for list="{{vpDots}}" as="d" hint-placeholder-count="6">
+                        <circle cx="{{d.x}}" cy="{{d.y}}" r="5" fill="{{d.fill}}" stroke="#3a5dd8" stroke-width="2"></circle>
+                      </sc-for>
+                      <sc-if value="{{vpHasLive}}" hint-placeholder-val="{{ false }}">
+                        <path d="{{vpLive}}" stroke="{{vpLiveStroke}}" stroke-width="2.2" stroke-linejoin="round" fill="none"></path>
+                      </sc-if>
+                    </svg>
+                    <div class="pointer-events-none absolute flex flex-col items-center">
+                      <span class="text-[12.5px] font-semibold text-zinc-50">You</span>
+                      <span class="font-mono text-[10px] text-zinc-400">{{vpSub}}</span>
+                    </div>
                   </div>
-                  <span class="av-chip bg-av-500/10 text-av-300 ring-av-500/40">Active</span>
+                  <div class="flex min-w-0 flex-1 flex-col gap-2">
+                    <div class="flex items-center gap-2">
+                      <span class="text-[13px] font-medium text-zinc-50">You · owner</span>
+                      <span class="av-chip bg-av-500/10 text-av-300 ring-av-500/40">Active</span>
+                      <span class="flex-1"></span>
+                      <span class="{{liveChipCls}}" aria-live="polite"><span class="{{liveDotCls}}"></span>{{liveChip}}</span>
+                    </div>
+                    <span class="av-hint">Enrolled Sep 24, 2026 · ECAPA-TDNN rev 0f99f2d · 192 voice features · held-out check 2 / 2 (simulated)</span>
+                    <div class="flex h-[60px] items-center justify-center bg-black/25 ring-1 ring-white/[0.06] ring-inset" aria-hidden="true">
+                      <dc-import name="VoiceBars" tone="{{vTone}}" count="40" height="56" hint-size="237px,56px"></dc-import>
+                    </div>
+                    <div class="flex items-center gap-3">
+                      <span class="av-kicker w-11">Match</span>
+                      <div class="relative h-1.5 flex-1 bg-white/[0.08]">
+                        <div class="{{vMatchCls}}" style="width: {{vMatchW}};"></div>
+                        <span class="absolute -top-1 h-3.5 w-px bg-zinc-200" style="left: 62%;" title="Your match level, 0.62"></span>
+                      </div>
+                      <span class="{{vMatchLabelCls}}">{{vMatchLabel}}</span>
+                    </div>
+                  </div>
                 </div>
-                <div class="flex items-center gap-2">
+                <div class="flex items-center gap-2 border-t border-white/[0.06] px-3.5 py-2.5">
                   <button type="button" class="av-btn av-btn-secondary av-btn-sm" onClick="{{testVoice}}" disabled="{{voiceTesting}}">{{testVoiceBtn}}</button>
                   <button type="button" class="av-btn av-btn-ghost av-btn-sm" onClick="{{reenroll}}" disabled="{{locked}}">Re-enroll</button>
                   <span class="{{voiceTestCls}}" role="status">{{voiceTestMsg}}</span>
+                  <button type="button" class="av-btn av-btn-ghost av-btn-sm" aria-expanded="{{phrasesOpen}}" onClick="{{togglePhrases}}">{{phrasesBtn}}</button>
                 </div>
+                <sc-if value="{{phrasesOpen}}" hint-placeholder-val="{{ false }}">
+                  <div class="av-rise flex flex-col border-t border-white/[0.06]">
+                    <p class="av-hint m-0 px-3.5 pt-2.5 pb-1">Four phrases built your voiceprint; two held-out phrases set your match level (the lower score). The audio was never kept, only these features.</p>
+                    <sc-for list="{{vPhrases}}" as="ph" hint-placeholder-count="6">
+                      <div class="flex h-9 items-center gap-3 px-3.5">
+                        <span class="w-3 font-mono text-[11px] text-zinc-500">{{ph.n}}</span>
+                        <span class="min-w-0 flex-1 truncate text-[12px] text-zinc-300" title="{{ph.text}}">{{ph.text}}</span>
+                        <span class="{{ph.kindCls}}">{{ph.kind}}</span>
+                        <span class="w-10 text-right font-mono text-[11px] text-zinc-400">{{ph.meta}}</span>
+                      </div>
+                    </sc-for>
+                  </div>
+                </sc-if>
               </div>
             </section>
 
@@ -1094,7 +1139,21 @@
   </div>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"section":{"editor":"enum","options":["audio","models","profiles","people","awareness","memory"],"default":"audio"},"secN":{"editor":null},"onClose":{"editor":null},"embedded":{"editor":null},"reducedMotion":{"editor":null},"$preview":{"width":880,"height":640}}'>
+<script type="text/x-dc" data-dc-script data-props='{"section":{"editor":"enum","options":["audio","models","profiles","people","awareness","memory"],"default":"audio"},"voiceDemo":{"editor":"enum","options":["none","you","other","noise"],"default":"none"},"secN":{"editor":null},"onClose":{"editor":null},"embedded":{"editor":null},"reducedMotion":{"editor":null},"$preview":{"width":880,"height":640}}'>
+const VP_DIMS = 192;
+const vpMake = (a, b, c) => Array.from({ length: VP_DIMS }, (_, i) => Math.max(0.08, Math.min(1, 0.52 + 0.24 * Math.sin(i * a + 1.1) + 0.14 * Math.sin(i * b + 0.4) + 0.08 * Math.sin(i * c))));
+const VP_BASE = vpMake(0.37, 1.13, 2.9);
+const VP_OTHER = vpMake(0.21, 1.71, 3.7);
+const vpRnd = (x) => { const v = Math.sin(x * 12.9898) * 43758.5453; return v - Math.floor(v); };
+const VP_PHRASES = [
+  ['Avesra helps me keep track of my work and the things I want to do today.', 'Profile', '4.1 s'],
+  ['I can pause the assistant whenever I need a quiet moment to think.', 'Profile', '3.6 s'],
+  ['The next project will take several careful steps, and I want to review each result.', 'Profile', '4.8 s'],
+  ['Natural speech: a typical part of my day', 'Profile', '8.0 s'],
+  ['A clear voice carries across the room while the afternoon light changes.', 'Held out', '0.71'],
+  ['Tomorrow I may choose a different task, but today I will finish this one.', 'Held out', '0.62'],
+];
+
 class Component extends DCLogic {
   constructor(props) {
     super(props);
@@ -1109,7 +1168,7 @@ class Component extends DCLogic {
       selProfile: 'single', editAssign: false, assignDraft: null, profileMsg: '', profileMsgTone: 'err',
       pairOpen: false, pairHost: '', pairCode: '', pairStage: 'host', pairTried: false,
       confirmRevoke: false, revoked: false,
-      unlocked: false, unlocking: false, voiceTest: 'idle', enrolling: false, newName: '', enrollState: 'idle', enrollTried: false,
+      unlocked: false, unlocking: false, voiceTest: props.voiceDemo && props.voiceDemo !== 'none' ? 'demo' : 'idle', vt: 0, phrasesOpen: false, enrolling: false, newName: '', enrollState: 'idle', enrollTried: false,
       watching: false,
       memTab: 'memory', q: '', memFilter: 'all', editMem: null, memDraft: '', deleted: null,
       exported: false, health: 'idle', bundle: false, comparing: false, compared: false
@@ -1225,11 +1284,63 @@ class Component extends DCLogic {
   }
 
   componentDidMount() { this.loader = setInterval(() => this.loadTick(), 400); }
-  componentWillUnmount() { clearInterval(this.loader); this.timers.forEach((t) => clearTimeout(t)); }
+  componentWillUnmount() { clearInterval(this.loader); clearInterval(this.vtTimer); this.timers.forEach((t) => clearTimeout(t)); }
   componentDidUpdate(prev) {
     if (this.props.secN !== prev.secN && this.props.section) this.setState({ section: this.props.section });
   }
   later(fn, ms) { this.timers.push(setTimeout(fn, ms)); }
+
+  // Voiceprint: 192 ECAPA features drawn as a closed radial shape (simulated values).
+  vpRing(values, dev, seed) {
+    let d = '';
+    for (let i = 0; i < VP_DIMS; i++) {
+      const a = (i / VP_DIMS) * Math.PI * 2 - Math.PI / 2;
+      const v = Math.max(0.04, Math.min(1.05, values[i] + (dev ? dev * (vpRnd(i + seed) - 0.5) : 0)));
+      const r = 44 + v * 60;
+      d += (i ? 'L' : 'M') + (120 + r * Math.cos(a)).toFixed(1) + ' ' + (120 + r * Math.sin(a)).toFixed(1);
+    }
+    return d + 'Z';
+  }
+  voiceView(s) {
+    const demo = this.props.voiceDemo && this.props.voiceDemo !== 'none' ? this.props.voiceDemo : null;
+    const vt = s.vt;
+    const talking = s.voiceTest === 'listening' && vt >= 15 && vt < 96;
+    const tone = demo ? { you: 'owner', other: 'other', noise: 'background' }[demo] : talking ? 'owner' : 'rest';
+    let sim = null;
+    if (demo === 'you') sim = 0.86;
+    else if (demo === 'other') sim = 0.29;
+    else if (s.voiceTest === 'listening' && vt >= 22) sim = 0.5 + 0.36 * Math.min(1, (vt - 22) / 30);
+    else if (s.voiceTest === 'done') sim = 0.86;
+    const chip = tone === 'owner' ? ['Hearing you', 'text-[#c3cdff] ring-[#3a5dd8]/60', 'bg-[#3a5dd8]']
+      : tone === 'other' ? ['Someone else', 'text-[#d7f5b8] ring-[#8ede4a]/50', 'bg-[#8ede4a]']
+      : tone === 'background' ? ['Background noise', 'text-zinc-300 ring-white/15', 'bg-zinc-500']
+      : s.voiceTest === 'done' ? ['Matched you', 'text-[#c3cdff] ring-[#3a5dd8]/60', 'bg-[#3a5dd8]']
+      : s.voiceTest === 'listening' ? ['Listening', 'text-zinc-300 ring-white/15', 'bg-zinc-400'] : ['Not listening', 'text-zinc-400 ring-white/12', 'bg-zinc-600'];
+    const live = tone === 'owner' || tone === 'other';
+    return {
+      vp: { fill: this.vpRing(VP_BASE, 0, 0), spokes: this.vpSpokes() },
+      vpDots: VP_PHRASES.map((p, i) => { const a = (i / 6) * Math.PI * 2 - Math.PI / 2 + 0.26; return { x: (120 + 112 * Math.cos(a)).toFixed(1), y: (120 + 112 * Math.sin(a)).toFixed(1), fill: p[1] === 'Profile' ? '#3a5dd8' : '#1f1f23' }; }),
+      vpHasLive: live, vpLive: live ? this.vpRing(tone === 'other' ? VP_OTHER : VP_BASE, tone === 'other' ? 0.34 : 0.16, Math.floor(vt / 3)) : '',
+      vpLiveStroke: tone === 'other' ? '#8ede4a' : '#c3cdff',
+      vpSub: sim == null ? 'owner' : sim >= 0.62 ? 'match ' + sim.toFixed(2) : 'not you',
+      liveChip: chip[0], liveChipCls: 'av-chip gap-1.5 ' + chip[1], liveDotCls: 'size-1.5 ' + chip[2], vTone: tone,
+      vMatchW: sim == null ? '0%' : Math.round(sim * 100) + '%',
+      vMatchCls: 'h-full ' + (sim == null ? '' : sim >= 0.62 ? 'bg-[#3a5dd8]' : 'bg-[#8ede4a]'),
+      vMatchLabel: sim == null ? 'needs speech' : sim.toFixed(2) + (sim >= 0.62 ? ' · you' : ' · not you'),
+      vMatchLabelCls: 'w-[88px] text-right font-mono text-[11px] ' + (sim == null ? 'text-zinc-500' : sim >= 0.62 ? 'text-[#c3cdff]' : 'text-[#d7f5b8]'),
+      phrasesOpen: s.phrasesOpen, phrasesBtn: s.phrasesOpen ? 'Hide phrases' : 'What it’s built from',
+      togglePhrases: () => this.setState({ phrasesOpen: !this.state.phrasesOpen }),
+      vPhrases: VP_PHRASES.map((p, i) => ({ n: i + 1, text: p[0], kind: p[1], meta: p[2], kindCls: 'av-chip ' + (p[1] === 'Profile' ? 'text-[#c3cdff] ring-[#3a5dd8]/50' : 'text-zinc-300 ring-white/15') })),
+    };
+  }
+  vpSpokes() {
+    let d = '';
+    for (let i = 0; i < VP_DIMS; i += 2) {
+      const a = (i / VP_DIMS) * Math.PI * 2 - Math.PI / 2, r = 44 + VP_BASE[i] * 60;
+      d += 'M' + (120 + 46 * Math.cos(a)).toFixed(1) + ' ' + (120 + 46 * Math.sin(a)).toFixed(1) + 'L' + (120 + r * Math.cos(a)).toFixed(1) + ' ' + (120 + r * Math.sin(a)).toFixed(1);
+    }
+    return d;
+  }
 
   loadTick() {
     const load = Object.assign({}, this.state.load);
@@ -1484,8 +1595,6 @@ class Component extends DCLogic {
     });
 
     // ----- audio -----
-    const meterSegs = [];
-    for (let i = 0; i < 24; i++) meterSegs.push('block h-2 flex-1 ' + (i < 16 ? 'bg-av-500' : i < 21 ? 'bg-amber-400' : 'bg-red-500'));
     const modeDefs = [
       ['continuous', 'Continuous', 'Default. No wake word needed after enrollment'],
       ['wake', 'Wake phrase', 'Optional. Say “Avesra” first'],
@@ -1843,7 +1952,6 @@ class Component extends DCLogic {
       // audio
       inDev: s.inDev, outDev: s.outDev,
       setInDev: (e) => this.edit({ inDev: e.target.value }), setOutDev: (e) => this.edit({ outDev: e.target.value, tone: 'idle' }),
-      meterSegs: meterSegs,
       tonePlaying: s.tone === 'playing', toneBtn: s.tone === 'playing' ? 'Playing…' : 'Play test sound',
       toneNote: s.tone === 'done' ? 'Played on ' + { scarlett: 'Scarlett 2i2', arctis: 'Arctis Nova Pro', hdmi: 'Display 1' }[s.outDev] + ' · simulated' : s.tone === 'playing' ? 'Simulated · no audio plays' : '',
       playTone: () => { this.setState({ tone: 'playing' }); this.later(() => this.setState({ tone: 'done' }), 1600); },
@@ -1855,7 +1963,6 @@ class Component extends DCLogic {
       voiceName: s.voiceName,
       voiceMeta: 'Designed ' + s.voiceDate + ' with Qwen3-TTS VoiceDesign · spoken by Qwen3-TTS 0.6B on Spark2',
       previewing: s.previewing,
-      previewBars: [5, 8, 12, 15, 18, 20, 21, 20, 18, 15, 12, 8, 5].map((h, i) => ({ h: h, del: -(i * 95) })),
       previewCls: 'flex h-11 items-center gap-3 px-3 ring-1 ring-inset transition-colors ' + (s.previewing ? 'bg-red-500/[0.06] ring-red-500/30' : 'bg-black/20 ring-white/[0.06]'),
       previewNote: s.previewing ? (s.repeating ? 'repeating · simulated' : 'reference preview · simulated') : 'generated reference',
       referenceText: 'Hello I am Avesra, A Very Effective Smart Reasoning Assistant. I am designed to help you manage your thoughts and ideas.',
@@ -1979,11 +2086,19 @@ class Component extends DCLogic {
       unlockBtn: s.unlocking ? 'Waiting for Windows Hello…' : 'Unlock with Windows Hello',
       unlock: () => { this.setState({ unlocking: true }); this.later(() => this.setState({ unlocking: false, unlocked: true }), 1300); },
       lock: () => this.setState({ unlocked: false }),
-      voiceTesting: s.voiceTest === 'listening',
+      voiceTesting: s.voiceTest === 'listening' || s.voiceTest === 'demo',
       testVoiceBtn: s.voiceTest === 'listening' ? 'Listening…' : 'Test my voice',
       voiceTestMsg: s.voiceTest === 'listening' ? 'Say anything for a few seconds (simulated; no microphone is used).' : s.voiceTest === 'done' ? 'Matched: you (owner). Evidence quality good. This is a match, not a permission.' : '',
-      voiceTestCls: 'flex-1 text-[11.5px] ' + (s.voiceTest === 'done' ? 'text-av-300' : 'text-zinc-400'),
-      testVoice: () => { this.setState({ voiceTest: 'listening' }); this.later(() => this.setState({ voiceTest: 'done' }), 2000); },
+      voiceTestCls: 'min-w-0 flex-1 truncate text-[11.5px] ' + (s.voiceTest === 'done' ? 'text-[#c3cdff]' : 'text-zinc-400'),
+      testVoice: () => {
+        clearInterval(this.vtTimer);
+        this.setState({ voiceTest: 'listening', vt: 0 });
+        this.vtTimer = setInterval(() => {
+          const n = this.state.vt + 1;
+          if (n > 100) { clearInterval(this.vtTimer); this.setState({ voiceTest: 'done', vt: n }); } else this.setState({ vt: n });
+        }, 60);
+      },
+      ...this.voiceView(s),
       reenroll: () => this.setState({ voiceTest: 'idle', enrolling: true, newName: 'You (owner)', enrollState: 'idle' }),
       users: users,
       addPerson: () => this.setState({ enrolling: true, newName: '', enrollState: 'idle', enrollTried: false }),
