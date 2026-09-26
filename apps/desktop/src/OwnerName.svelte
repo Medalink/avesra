@@ -1,13 +1,13 @@
 <script lang="ts">
   import { command, native, type Runtime } from "./runtime";
 
-  let { runtime }: { runtime: Runtime | null } = $props();
+  let { runtime, ownerReady, blocked }: { runtime: Runtime | null; ownerReady: boolean; blocked: boolean } = $props();
   let name = $state("");
   let busy = $state(false);
   let error = $state("");
   let notice = $state("");
   const savedName = $derived(runtime?.settings.owner_name?.name ?? "");
-  const available = $derived(native && runtime?.connected && !runtime.locked);
+  const available = $derived(native && ownerReady && !blocked && runtime?.connected && !runtime.locked);
   $effect(() => {
     name = savedName;
   });
@@ -56,9 +56,7 @@
       disabled={!available || busy}>{busy ? "Saving…" : "Remember"}</button
     >
   </form>
-  <p class="av-hint mt-2">
-    Save your owner account above before remembering your name.
-  </p>
+  {#if !ownerReady}<p class="av-hint mt-2">Check your owner account in owner setup before remembering your name.</p>{/if}
   {#if error}<p class="av-hint mt-2 text-red-300" role="alert">{error}</p>{/if}
   {#if notice}<p class="av-hint mt-2" role="status">{notice}</p>{/if}
 </section>
