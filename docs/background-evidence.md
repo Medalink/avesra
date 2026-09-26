@@ -228,9 +228,46 @@ enough to reproduce the procedure.
 - Close only the recorded inspection PID after output/sidecar finalization.
   Confirm its debugging listener is gone. Leave the user's ordinary apps alone.
 
-## Controller update caveat
+## Controller installation and update
 
-The existing `avesra-controller-enrollment-preflight.service` is a transient user
+The current persistent method is `scripts/install-spark.py`: stage the controller
+with its binary and source hashes, then explicitly activate the owned
+`avesra-controller.service` against the existing private configuration directory.
+The installer preserves configuration and state, verifies pinned-TLS health, and
+retains the previous verified executable for explicit rollback. See
+[deployment lifecycle](deployment-lifecycle.md) for commands and ownership limits.
+An earlier transient listener must be retired separately by its owner; the
+installer does not find or stop unrelated processes.
+
+Source `3958812` contains the warm activity/TTS cancellation changes; `8613e48`
+adds the activity capture-age correction with identical audio Python source.
+On 2026-09-26, the actual Windows `8613e48` diagnostic application demonstrated
+preview cancellation followed by a successful fresh preview without reloading
+TTS. Evidence is retained under
+`E:/Dev/Avesra/artifacts/simple-conversation-20260926`:
+
+- `cancel.wav` is the **completed default preview**, 9.52 seconds, despite its
+  earlier chosen filename. It is not cancellation evidence.
+- In a fresh diagnostic process, the 367-byte preview started at
+  `06:47:22.825Z`; navigating to Models at `06:47:30.701Z` unmounted VoiceDesigner.
+  `interrupted.wav` finalized at 7.58 seconds with `stream_disposed` and hardware
+  silence. `tts-after-interrupt.json` reports loaded, idle TTS with the successful
+  inference count unchanged at two; cancellation was not counted as completion.
+- A fresh process started the resumed preview at `06:48:43.909Z`.
+  `resumed.wav` finalized at 9.60 seconds with hardware silence; the actual UI
+  returned idle without alerts. `tts-after-resumed.json` reports loaded, idle TTS,
+  three successful inferences and a last inference duration of 6221.746 ms.
+  No model reload occurred between the interrupted and resumed previews.
+
+The WAV sidecars identify actual native postmix/postformat output before hardware
+silencing. This establishes the observed TTS preview cancel/resume path, not
+audible-device playback, activity mute/resume, live Personal conversation,
+microphone acceptance or acoustic interruption. A subsequent frontend merge
+requires its own fresh preview observation; these artifacts describe `8613e48`.
+
+### Historical transient-unit caveat (2026-09-25)
+
+The earlier `avesra-controller-enrollment-preflight.service` was a transient user
 unit. A separate `systemctl stop` can unload it, making a later `start` fail with
 "Unit not found." Preserve its full unit properties before an update. Install a
 verified binary by an atomic same-directory rename and use `systemctl --user

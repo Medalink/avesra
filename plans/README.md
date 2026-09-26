@@ -8,6 +8,15 @@ Original planning baseline: `eb0189ff64b276b4f1e2d850ab3cff6979189ad9` on `main`
 
 Model provisioning evidence and remaining serving gaps: [Spark2 setup record](spark2-model-setup.md). Approved UI direction and interactive mockups: [design](../design/README.md) (simulated prototype, not application code). The main plan includes the owner's later requests for optional client GPU acceleration and instrumentation throughout the pipeline.
 
+Latest development checkpoint, 2026-09-26: `3958812`/`8613e48` implement simple
+Personal conversation and continuous selected-device input. Matching Windows and
+ARM static/release builds passed. Real isolated native previews completed before
+and after cancellation; the cancelled TTS request retired while the model stayed
+loaded. See [background evidence](../docs/background-evidence.md). These observations
+do not prove live owner conversation, acoustic interruption, actions, or full-plan
+acceptance. Plan 001 remains in progress. The canonical development executable is
+`E:\Dev\Avesra\target\release\avesra-desktop.exe`; preserve the dirty primary source.
+
 ## Owner-defined completion tests
 
 The owner must be able to speak these requests and see Avesra complete them on the actual PC using the single Spark:
