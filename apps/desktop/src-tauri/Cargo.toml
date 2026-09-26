@@ -8,7 +8,7 @@ custom-protocol = ["tauri/custom-protocol"]
 [build-dependencies]
 tauri-build = { version = "2.6.3", features = [] }
 [dependencies]
-tauri = { version = "2.11.6", features = ["tray-icon"] }
+tauri = { version = "2.11.5", features = ["tray-icon"] }
 avesra-contracts.workspace = true
 avesra-core.workspace = true
 avesra-windows.workspace = true
@@ -24,7 +24,7 @@ hex = "0.4.3"
 base64 = "0.22.1"
 tokio-tungstenite = { version = "0.29.0", features = ["rustls-tls-webpki-roots"] }
 futures-util = { version = "0.3.34", features = ["sink"] }
-tauri-plugin-single-instance = "=2.4.5"
+tauri-plugin-single-instance = "=2.4.4"
 tauri-plugin-window-state = "=2.4.1"
 [lints]
 workspace = true
