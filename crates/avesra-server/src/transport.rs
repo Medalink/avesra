@@ -57,6 +57,8 @@ struct ServerState {
     #[cfg(unix)]
     planner_cancellations: Arc<Semaphore>,
     #[cfg(unix)]
+    planner_inspections: Arc<Semaphore>,
+    #[cfg(unix)]
     reasoning: Option<Arc<crate::reasoning::http::Driver>>,
     auth: Mutex<AuthStore>,
     admission: Arc<Semaphore>,
@@ -183,6 +185,12 @@ pub fn router(
             )),
         )
         .route("/planner/cancel", post(cancel_planner))
+        .route(
+            "/planner/retirement",
+            post(inspect_planner_retirement).layer(DefaultBodyLimit::max(
+                avesra_contracts::planner::retirement::MAX_BYTES,
+            )),
+        )
         .route("/speaker", get(speaker_health).post(speaker_infer))
         .route("/audio-lanes", get(audio_lane_health))
         .route("/voice-activity", get(voice_activity_health))
@@ -211,6 +219,8 @@ pub fn router(
             planner_admission: Arc::new(Semaphore::new(2)),
             #[cfg(unix)]
             planner_cancellations: Arc::new(Semaphore::new(2)),
+            #[cfg(unix)]
+            planner_inspections: Arc::new(Semaphore::new(2)),
             // Configuration is not qualification: each accepted request must
             // observe the exact controlled load before durable model admission.
             #[cfg(unix)]
@@ -270,6 +280,23 @@ async fn cancel_planner(
     {
         planner_ingress::cancel(auth, headers, body)?;
         Ok(StatusCode::NO_CONTENT)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (auth, headers, body);
+        Err(StatusCode::SERVICE_UNAVAILABLE)
+    }
+}
+async fn inspect_planner_retirement(
+    State(auth): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<avesra_contracts::planner::retirement::Request>,
+) -> Result<Json<avesra_contracts::planner::retirement::Reply>, StatusCode> {
+    #[cfg(unix)]
+    {
+        planner_ingress::inspect_retirement(auth, headers, body)
+            .await
+            .map(Json)
     }
     #[cfg(not(unix))]
     {

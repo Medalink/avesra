@@ -48,6 +48,48 @@ POST /planner/cancel carries the planner version and exact context, without text
 
 Cancellation and control/registration invalidation are independent of actual backend completion. Once the private driver might have sent inference, its spawned coordinator retains the model slot and durable job record while draining terminal output or reaching the original deadline. A dropped public waiter must not free that actual slot or prove that GPU work stopped. Unknown termination retains the durable uncertainty row and closes subsequent inference; no timer, changed recipe or process restart clears it automatically.
 
+## Read-only current-session retirement inspection
+
+POST `/planner/retirement` uses its own strict version1 contract, query UUID and
+at most128 unique complete planner contexts in at most128KiB JSON. A separate
+two-owner metadata admission bounds actual authentication and inspection, including
+after caller loss. The original supplied remaining budget is at most five seconds;
+queue/authentication time consumes it. No text, model request, cancellation,
+session/high-water mutation, roster compaction or health probe occurs.
+
+The bearer device and current unrevoked actor registration must match every
+context and the request's current control-session/action-epoch header. Frozen
+context action epochs may be earlier but never later than that header. The exact
+session must still exist, match the device/current epoch, and have a heartbeat
+younger than30seconds. Missing/restarted sessions fail closed. Session inspection
+and final authority checks occur under the actual retained metadata owner.
+
+Results are exact ordered context echoes with enum-only states:
+
+- `retired`: the exact retained entry has completed Model provenance and its
+  existing actual public/private retirement predicate succeeds.
+- `closed_and_compacted`: the entry is absent, its ordinal is at/below the same
+  live session's high-water, and no retained request/turn/revision/utterance/ordinal
+  conflicts. This proves no remaining/reopenable old operation in that session;
+  it does not prove inference ran or completed. A consuming native operation must
+  separately validate its genuinely stored Model reply.
+- `busy`: the matching completed Model entry still owns preparation/output or
+  its original output opportunity remains open.
+- `private_retirement_unconfirmed`: its public output owner is gone but the
+  actual private TTS counter remains nonzero. Health-idle and elapsed time cannot
+  replace the missing retirement receipt.
+- `unknown`: any retained context/provenance conflict, missing Model completion,
+  conflicting identity or ordinal above the high-water. It is never permission.
+
+No native frontend command or unused native client is added at this checkpoint.
+The future genuine deletion coordinator must derive contexts from its protected
+ledger, retain its original authority/deadline and current TLS-pinned pairing,
+connection generation and acknowledged session across the request, strictly
+validate every echo, and discard the result on replacement/withdrawal. It must
+also retain its native mutation barrier and require actual native content owners
+to have retired. This query neither deletes history nor proves physical erasure,
+historical-session retirement, user audibility or a completed external effect.
+
 ## Driver and reply
 
 The public route requires a private configured Driver, which constructs an opaque QualifiedDeployment afresh for the exact accepted request only after the observed checks in [reasoning-adapter.md](reasoning-adapter.md). Missing reasoning configuration leaves the driver absent; invalid configuration fails startup. Existing configuration alone cannot send inference: capture, controlled new load, exact process/routing identity, reviewed terminal behavior and loaded-tokenizer capacity must all qualify. An authenticated request without that evidence returns unavailable. No frontend flag or config boolean bypasses this boundary.

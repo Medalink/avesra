@@ -380,6 +380,139 @@ pub(super) fn cancel(
     Ok(())
 }
 
+/// Read-only closure observation; never consumes an ordinal or withdraws work.
+pub(super) async fn inspect_retirement(
+    state: Shared,
+    headers: HeaderMap,
+    request: planner::retirement::Request,
+) -> Result<planner::retirement::Reply, StatusCode> {
+    use planner::retirement::{Observation, Reply, Status, VERSION};
+    let started = Instant::now();
+    request.validate().map_err(|_| StatusCode::BAD_REQUEST)?;
+    let deadline = started + Duration::from_millis(request.remaining_ms);
+    let permit = state
+        .planner_inspections
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| StatusCode::TOO_MANY_REQUESTS)?;
+    let token = headers
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .filter(|v| v.len() == 64 && v.bytes().all(|b| b.is_ascii_hexdigit()))
+        .ok_or(StatusCode::UNAUTHORIZED)?
+        .to_owned();
+    let work = tokio::task::spawn_blocking(move || {
+        // Actual metadata ownership survives a dropped/timed-out HTTP waiter.
+        let _permit = permit;
+        if Instant::now() >= deadline {
+            return Err(StatusCode::REQUEST_TIMEOUT);
+        }
+        let auth = state
+            .auth
+            .try_lock()
+            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+        let device = auth
+            .authenticate(&token)
+            .map_err(|_| StatusCode::UNAUTHORIZED)?;
+        if device != request.current.device {
+            return Err(StatusCode::FORBIDDEN);
+        }
+        // Validation requires every item to have this same device/actor/registration.
+        auth.planner_binding(&request.contexts[0])
+            .map_err(|_| StatusCode::FORBIDDEN)?;
+        let current = |session: &super::LiveSession| {
+            Instant::now() < deadline
+                && session.device == device
+                && session.action_epoch == request.current.action_epoch
+                && session.updated.elapsed() < Duration::from_secs(30)
+        };
+        let observations = {
+            let sessions = state
+                .sessions
+                .try_lock()
+                .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+            let session = sessions
+                .get(&request.current.session)
+                .ok_or(StatusCode::CONFLICT)?;
+            if !current(session) {
+                return Err(StatusCode::CONFLICT);
+            }
+            request
+                .contexts
+                .iter()
+                .map(|context| {
+                    let status = match session.planner_requests.get(&context.request) {
+                        Some(entry) if entry.context == *context => match &entry.completed {
+                            Some(completed)
+                                if matches!(completed.provenance, speech::Provenance::Model) =>
+                            {
+                                if entry.retired() {
+                                    Status::Retired
+                                } else if completed.output.as_ref().is_some_and(|output| {
+                                    output.owner.strong_count() == 0
+                                        && output.private.load(Ordering::SeqCst) != 0
+                                }) {
+                                    Status::PrivateRetirementUnconfirmed
+                                } else {
+                                    Status::Busy
+                                }
+                            }
+                            _ => Status::Unknown,
+                        },
+                        None if context.ordinal <= session.planner_ordinal
+                            && !collides(&session.planner_requests, context)
+                            && !session
+                                .planner_requests
+                                .values()
+                                .any(|entry| entry.context.ordinal == context.ordinal) =>
+                        {
+                            Status::ClosedAndCompacted
+                        }
+                        _ => Status::Unknown,
+                    };
+                    Observation {
+                        context: context.clone(),
+                        status,
+                    }
+                })
+                .collect()
+        };
+        // No session lock spans SQLite work; withdrawal never waits for this read.
+        // Retirement/ordinal closure is irreversible within the same live session.
+        auth.planner_binding(&request.contexts[0])
+            .map_err(|_| StatusCode::FORBIDDEN)?;
+        if auth
+            .authenticate(&token)
+            .map_err(|_| StatusCode::UNAUTHORIZED)?
+            != device
+        {
+            return Err(StatusCode::CONFLICT);
+        }
+        let sessions = state
+            .sessions
+            .try_lock()
+            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+        if !sessions.get(&request.current.session).is_some_and(current) {
+            return Err(StatusCode::CONFLICT);
+        }
+        let reply = Reply {
+            version: VERSION,
+            request: request.request,
+            current: request.current.clone(),
+            observations,
+        };
+        reply
+            .validate(&request)
+            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+        Ok(reply)
+    });
+    tokio::time::timeout_at(deadline.into(), work)
+        .await
+        .map_err(|_| StatusCode::REQUEST_TIMEOUT)?
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
+}
+
 fn response_digest(response: &planner::Response) -> Result<[u8; 32], ErrorCode> {
     let encoded = serde_json::to_vec(response).map_err(|_| ErrorCode::Malformed)?;
     Ok(Sha256::digest(encoded).into())

@@ -2,6 +2,8 @@
 use crate::ErrorCode;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+#[path = "planner_retirement.rs"]
+pub mod retirement;
 pub const VERSION: u16 = 4;
 pub const MAX_BUDGET_MS: u64 = 30_000;
 pub const MAX_REQUEST_BYTES: usize = 32_768;
