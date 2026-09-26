@@ -4,6 +4,18 @@ Audited against integration `2d8eb3aa5ae66897a8f15620674d1de14c8a2563`.
 This matrix is a completion gate, not a replacement for the original requirements.
 Plan 003 remains **IN PROGRESS**. Static checks do not establish live acceptance.
 
+## Reviewed implementation checkpoint: `49cf90c`
+
+PRs 28–31 add native protected prepare/confirm/cancel redraw, its optional advanced
+UI, Settings reopen recovery, and bounded native avatar/redraw timings. They were
+reviewed and merged into PR16's integration branch, not main. The source below
+was the audit baseline; redraw and native timing are now implemented at this
+checkpoint, while their successful protected-operation proof remains unrun.
+The frozen Windows static checks passed (22.362 seconds, Svelte 0 errors and 0
+warnings); the matching ARM static/release build passed. Windows release and
+installed inspection are still pending at this checkpoint. Optional continuous
+portrait observation is separate unfinished work, excluded from `49cf90c`.
+
 | Criterion | Source at audit | Required remaining evidence |
 | --- | --- | --- |
 | Genuine owner-bound avatar | Protected Personal source required; candidate selection alone is insufficient | Actual populated card from the current owner's selected microphone and saved source |
