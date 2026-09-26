@@ -15,7 +15,37 @@ use uuid::Uuid;
 const MAX_BODY: usize = 65_536;
 pub(crate) const PLAN_SCHEMA: &str = "CREATE TABLE conversation_plans(turn TEXT PRIMARY KEY NOT NULL REFERENCES accepted_conversations(id),request TEXT UNIQUE NOT NULL,actor TEXT NOT NULL,body TEXT NOT NULL CHECK(length(CAST(body AS BLOB))<=65536),state TEXT NOT NULL CHECK(state IN ('pending','replied','cancelled','suspended')))";
 pub(crate) const REPLY_SCHEMA: &str = "CREATE TABLE conversation_replies(turn TEXT PRIMARY KEY NOT NULL REFERENCES conversation_plans(turn),revision TEXT UNIQUE NOT NULL,request TEXT UNIQUE NOT NULL REFERENCES conversation_plans(request),body TEXT NOT NULL CHECK(length(CAST(body AS BLOB))<=65536))";
+pub(crate) const SEQUENCE_SCHEMA: &str = "CREATE TABLE planner_claim_sequence(id INTEGER PRIMARY KEY CHECK(id=1),value INTEGER NOT NULL CHECK(value>=0 AND value<=9007199254740991))";
 pub(super) fn check_schema(db: &Connection, version: u64) -> Result<(), ErrorCode> {
+    let objects: i64 = db.query_row("SELECT COUNT(*) FROM sqlite_master WHERE name='planner_claim_sequence' OR tbl_name='planner_claim_sequence'", [], |r| r.get(0)).map_err(|_| ErrorCode::Storage)?;
+    if version < 17 {
+        if objects != 0 {
+            return Err(ErrorCode::Malformed);
+        }
+    } else {
+        let sql: String = db.query_row("SELECT sql FROM sqlite_master WHERE type='table' AND name='planner_claim_sequence'", [], |r| r.get(0)).map_err(|_| ErrorCode::Malformed)?;
+        let (count, minimum, maximum): (i64, Option<i64>, Option<i64>) = db
+            .query_row(
+                "SELECT COUNT(*),MIN(value),MAX(value) FROM planner_claim_sequence WHERE id=1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .map_err(|_| ErrorCode::Malformed)?;
+        let rows: i64 = db
+            .query_row("SELECT COUNT(*) FROM planner_claim_sequence", [], |r| {
+                r.get(0)
+            })
+            .map_err(|_| ErrorCode::Malformed)?;
+        if objects != 1
+            || sql != SEQUENCE_SCHEMA
+            || rows != 1
+            || count != 1
+            || minimum != maximum
+            || !minimum.is_some_and(|v| (0..=9007199254740991).contains(&v))
+        {
+            return Err(ErrorCode::Malformed);
+        }
+    }
     for (table, sql, columns) in [
         (
             "conversation_plans",
@@ -182,11 +212,13 @@ impl Plan {
         // Historical records have no dialogue. This local read validation does
         // not relax the wire or construct a live claim from saved history.
         let mut request = self.request.clone();
-        if matches!(request.version, 1 | 2) {
-            if !request.dialogue.is_empty() {
+        if matches!(request.version, 1..=3) {
+            if request.context.ordinal != 0 || (request.version < 3 && !request.dialogue.is_empty())
+            {
                 return Err(ErrorCode::Malformed);
             }
             request.version = planner::VERSION;
+            request.context.ordinal = 1;
         }
         request.validate()?;
         self.binding.validate()?;
@@ -399,16 +431,19 @@ fn read_reply(db: &Connection, plan: &Plan) -> Result<Option<ReplyRecord>, Error
         return Err(ErrorCode::Version);
     }
     let mut checked = value.reply.clone();
-    if checked.version == 1 {
-        if matches!(checked.response, planner::Response::Proposal { .. }) {
+    if checked.version == 1 && matches!(checked.response, planner::Response::Proposal { .. }) {
+        return Err(ErrorCode::Malformed);
+    }
+    let mut expected = plan.request.context.clone();
+    if matches!(checked.version, 1..=3) {
+        if checked.context.ordinal != 0 || expected.ordinal != 0 {
             return Err(ErrorCode::Malformed);
         }
+        checked.context.ordinal = 1;
+        expected.ordinal = 1;
         checked.version = planner::VERSION;
     }
-    if checked.version == 2 {
-        checked.version = planner::VERSION;
-    }
-    checked.validate(&plan.request.context)?;
+    checked.validate(&expected)?;
     if value.revision.is_nil()
         || value.revision.to_string() != revision
         || request != plan.request.context.request.to_string()
@@ -533,10 +568,13 @@ impl Store {
         {
             return Err(ErrorCode::Stale);
         }
+        let ordinal: i64 = tx.query_row("UPDATE planner_claim_sequence SET value=value+1 WHERE id=1 AND value<9007199254740991 RETURNING value", [], |r| r.get(0)).optional().map_err(|_| ErrorCode::Storage)?.ok_or(ErrorCode::TooLarge)?;
+        let ordinal = u64::try_from(ordinal).map_err(|_| ErrorCode::Malformed)?;
         let plan = Plan {
             request: planner::Request {
                 version: planner::VERSION,
                 context: planner::Context {
+                    ordinal,
                     request: Uuid::new_v4(),
                     turn: record.id,
                     turn_revision: record.revision,

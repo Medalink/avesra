@@ -64,13 +64,25 @@ pub struct Request {
     pub origin: Origin,
     pub document: Candidate,
     pub message_limit: u16,
+    pub mode: Mode,
     /// Reduced from the original owner deadline; repeated status never renews it.
     pub remaining_ms: u64,
+}
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Mode {
+    Excerpt,
+    ProviderInspection { provider: super::provider::Provider },
 }
 impl Request {
     pub fn validate(&self) -> Result<(), ErrorCode> {
         self.context.validate()?;
         self.document.validate(&self.origin)?;
+        if let Mode::ProviderInspection { provider } = self.mode
+            && (self.origin.as_str() != provider.origin() || self.message_limit != 1)
+        {
+            return Err(ErrorCode::Malformed);
+        }
         if !(1..=100).contains(&self.message_limit) {
             return Err(ErrorCode::Malformed);
         }
@@ -82,12 +94,19 @@ impl Request {
     /// Correlation only. The ledger must independently claim/revalidate authority.
     pub fn matches_action(&self, action: &Action) -> Result<(), ErrorCode> {
         self.validate()?;
-        let ActionPayload::ReadPage {
-            origin,
-            message_limit,
-        } = &action.payload
-        else {
-            return Err(ErrorCode::Denied);
+        let (origin, message_limit) = match (&action.payload, &self.mode) {
+            (
+                ActionPayload::ReadPage {
+                    origin,
+                    message_limit,
+                },
+                Mode::Excerpt,
+            ) => (origin.as_str(), *message_limit),
+            (
+                ActionPayload::InspectBrowserProvider { provider },
+                Mode::ProviderInspection { provider: expected },
+            ) if provider == expected => (provider.origin(), 1),
+            _ => return Err(ErrorCode::Denied),
         };
         if action.task_id != self.context.task.uuid()
             || action.step_id != self.context.step.uuid()
@@ -97,7 +116,7 @@ impl Request {
             || action.revision != self.context.action_revision.uuid()
             || action.intent_revision != self.context.intent_revision.uuid()
             || Origin::parse(origin)? != self.origin
-            || message_limit != &self.message_limit
+            || message_limit != self.message_limit
         {
             return Err(ErrorCode::Stale);
         }
@@ -125,6 +144,7 @@ pub struct Excerpt {
 #[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Outcome {
     Excerpt { excerpt: Excerpt },
+    ProviderInspection { probe: super::provider::Probe },
     Empty,
     Changed,
     Expired,
@@ -142,6 +162,19 @@ impl Reply {
         request.validate()?;
         if self.context != request.context {
             return Err(ErrorCode::Stale);
+        }
+        match (&request.mode, &self.outcome) {
+            (Mode::Excerpt, Outcome::ProviderInspection { .. })
+            | (Mode::ProviderInspection { .. }, Outcome::Excerpt { .. } | Outcome::Empty) => {
+                return Err(ErrorCode::Malformed);
+            }
+            (Mode::ProviderInspection { provider }, Outcome::ProviderInspection { probe }) => {
+                probe.validate()?;
+                if probe.provider != *provider || probe.document != request.document {
+                    return Err(ErrorCode::Stale);
+                }
+            }
+            _ => {}
         }
         if let Outcome::Excerpt { excerpt } = &self.outcome {
             excerpt.document.validate(&request.origin)?;

@@ -243,6 +243,13 @@ fn read_link(db: &Connection, turn: Uuid) -> Result<Option<Link>, ErrorCode> {
         || !match (&link.target, &link.action.payload) {
             (
                 TaskTarget::BrowserRead { scope },
+                ActionPayload::InspectBrowserProvider { provider },
+            ) => scope.origin.as_str() == provider.origin() && scope.actor.uuid() == link.actor,
+            (TaskTarget::Vpn { profile }, ActionPayload::ConnectVpn { profile_id }) => {
+                profile.id == *profile_id && profile.actor == link.actor
+            }
+            (
+                TaskTarget::BrowserRead { scope },
                 ActionPayload::ReadPage {
                     origin,
                     message_limit,
@@ -387,6 +394,7 @@ pub struct TaskView {
     pub payload: ActionPayload,
     pub outcome: Option<avesra_contracts::Outcome>,
     pub diagnostic: Option<crate::diagnostics::Report>,
+    pub vpn: Option<crate::vpn::Report>,
     pub created_ms: u64,
 }
 fn volume_percent(text: &str) -> Option<u8> {
@@ -408,6 +416,13 @@ fn volume_percent(text: &str) -> Option<u8> {
         return None;
     }
     number.parse::<u8>().ok().filter(|v| *v <= 100)
+}
+fn vpn_request(text: &str) -> bool {
+    let text = text.trim_matches(' ').to_ascii_lowercase();
+    matches!(
+        text.as_str(),
+        "connect work vpn" | "avesra connect work vpn" | "avesra, connect work vpn"
+    )
 }
 fn diagnostic_request(text: &str) -> Option<crate::diagnostics::Catalog> {
     let text = text.trim_matches(' ').to_ascii_lowercase();
@@ -507,6 +522,34 @@ impl Store {
             } else {
                 None
             };
+            let vpn = if matches!(link.action.payload, ActionPayload::ConnectVpn { .. }) {
+                let row:Option<(Vec<u8>,String)>=self.connection.query_row("SELECT substr(CAST(o.body AS BLOB),1,8193),f.outcome FROM native_observations o JOIN native_finalizations f ON f.dispatch_id=o.dispatch_id AND f.action_revision=o.action_revision AND f.target_id=o.target_id AND f.at_ms=o.at_ms WHERE f.actor_id=?1 AND f.action_revision=?2",params![actor.to_string(),link.action.revision.to_string()],|r|Ok((r.get(0)?,r.get(1)?))).optional().map_err(|_|ErrorCode::Storage)?;
+                match row {
+                    Some((body, outcome)) if body.len() <= 8192 => {
+                        let observation: crate::execution::EffectObservation =
+                            serde_json::from_slice(&body).map_err(|_| ErrorCode::Malformed)?;
+                        observation.validate(
+                            &link.action,
+                            serde_json::from_str(&outcome).map_err(|_| ErrorCode::Malformed)?,
+                        )?;
+                        let crate::execution::EffectObservation::Vpn { report } = observation
+                        else {
+                            return Err(ErrorCode::Malformed);
+                        };
+                        let TaskTarget::Vpn { profile } = &link.target else {
+                            return Err(ErrorCode::Malformed);
+                        };
+                        if report.revision != profile.revision {
+                            return Err(ErrorCode::Malformed);
+                        }
+                        Some(*report)
+                    }
+                    Some(_) => return Err(ErrorCode::Malformed),
+                    None => None,
+                }
+            } else {
+                None
+            };
             result.push(TaskView {
                 cancellation: super::CancellationTarget {
                     actor,
@@ -524,6 +567,7 @@ impl Store {
                     .map(|value| serde_json::from_str(&value).map_err(|_| ErrorCode::Malformed))
                     .transpose()?,
                 diagnostic,
+                vpn,
                 created_ms: record.created_ms,
             });
         }
@@ -593,7 +637,14 @@ impl Store {
             .strip_prefix("Avesra, ")
             .or_else(|| record.text.trim_matches(' ').strip_prefix("Avesra "))
             .unwrap_or(record.text.trim_matches(' '));
-        let read_origin = if read_origin
+        let inspect = match read_origin.to_ascii_lowercase().as_str() {
+            "inspect gmail provider" => Some(avesra_contracts::browser::provider::Provider::Gmail),
+            "inspect x provider" => Some(avesra_contracts::browser::provider::Provider::X),
+            _ => None,
+        };
+        let read_origin = if let Some(provider) = inspect {
+            Some(avesra_contracts::browser::Origin::parse(provider.origin())?)
+        } else if read_origin
             .to_ascii_lowercase()
             .starts_with("read page at ")
         {
@@ -610,9 +661,13 @@ impl Store {
             }
             (
                 matches[0].permission.target.clone(),
-                ActionPayload::ReadPage {
-                    origin: origin.as_str().to_owned(),
-                    message_limit: 16,
+                if let Some(provider) = inspect {
+                    ActionPayload::InspectBrowserProvider { provider }
+                } else {
+                    ActionPayload::ReadPage {
+                        origin: origin.as_str().to_owned(),
+                        message_limit: 16,
+                    }
                 },
                 "browser page".to_owned(),
             )
@@ -648,6 +703,16 @@ impl Store {
                 entry.source.payload.clone(),
                 matches[0].permission.name.clone(),
             )
+        } else if vpn_request(&record.text) {
+            let matches:Vec<_>=permissions.iter().filter(|p|!p.revoked && matches!(&p.permission.target,TaskTarget::Vpn{profile} if profile.actor==record.actor)).collect();
+            if matches.len() != 1 {
+                return Ok(TaskResolution::NeedsInput(request.turn));
+            }
+            let target = matches[0].permission.target.clone();
+            let payload = ActionPayload::ConnectVpn {
+                profile_id: target.id(),
+            };
+            (target, payload, "work vpn".to_owned())
         } else if let Some(catalog) = diagnostic_request(&record.text) {
             (
                 TaskTarget::Diagnostic { catalog },

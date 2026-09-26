@@ -19,7 +19,7 @@ impl Store {
                     |r| Ok((r.get(0)?, r.get(1)?)),
                 )
                 .map_err(|_| ErrorCode::Storage)?;
-            if count != 1 || !matches!(version, Some(1..=16)) {
+            if count != 1 || !matches!(version, Some(1..=19)) {
                 return Err(ErrorCode::Unsupported);
             }
             version.ok_or(ErrorCode::Unsupported)? as u64
@@ -70,7 +70,7 @@ impl Store {
           CREATE TABLE IF NOT EXISTS native_finalizations(dispatch_id TEXT PRIMARY KEY REFERENCES dispatch_bindings(dispatch_id), target_id TEXT NOT NULL, action_revision TEXT NOT NULL REFERENCES action_revisions(revision), actor_id TEXT NOT NULL, outcome TEXT NOT NULL, at_ms INTEGER NOT NULL);
           CREATE INDEX IF NOT EXISTS native_finalization_lookup ON native_finalizations(target_id,actor_id,outcome);
           DELETE FROM schema_version;
-          INSERT INTO schema_version VALUES(16);
+          INSERT INTO schema_version VALUES(19);
         ").map_err(|_|ErrorCode::Storage)?;
         if version < 5 {
             tx.execute_batch(crate::conversations::SCHEMA)
@@ -108,10 +108,19 @@ impl Store {
                 tx.execute_batch(schema).map_err(|_| ErrorCode::Storage)?;
             }
         }
+        if version < 17 {
+            tx.execute_batch(crate::conversations::SEQUENCE_SCHEMA)
+                .map_err(|_| ErrorCode::Storage)?;
+            tx.execute(
+                "INSERT INTO planner_claim_sequence(id,value) VALUES(1,0)",
+                [],
+            )
+            .map_err(|_| ErrorCode::Storage)?;
+        }
         crate::notifications::check_schema(&tx, 15)?;
         crate::memory::check_schema(&tx, 13)?;
         crate::action_permissions::check_schema(&tx, 12)?;
-        crate::conversations::check_schema(&tx, 12)?;
+        crate::conversations::check_schema(&tx, 19)?;
         crate::browser_jobs::check_schema(&tx, 12)?;
         crate::observation_schema::check(&tx, 12)?;
         crate::browser_jobs::current(&tx)?;

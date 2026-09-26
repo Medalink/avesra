@@ -89,6 +89,7 @@ struct LiveSession {
     action_permission: tokio::sync::watch::Sender<(u64, bool)>,
     actor_attempts: std::collections::HashMap<Uuid, (u64, bool)>,
     planner_requests: std::collections::HashMap<Uuid, planner_ingress::Entry>,
+    planner_ordinal: u64,
     enabled: bool,
     output_enabled: bool,
     output_permission: tokio::sync::watch::Sender<(u64, bool)>,
@@ -1141,6 +1142,7 @@ async fn session(
                 action_permission: tokio::sync::watch::channel((envelope.action_epoch, !mode.2)).0,
                 actor_attempts: std::collections::HashMap::new(),
                 planner_requests: std::collections::HashMap::new(),
+                planner_ordinal: 0,
                 enabled: !mode.0 && !mode.1 && !mode.2,
                 output_enabled: !mode.1 && !mode.2,
                 output_permission: tokio::sync::watch::channel((

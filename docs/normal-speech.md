@@ -1,5 +1,16 @@
 # Accepted reply speech transport
 
+Current speech wire version3 preserves version2 segmentation and carries the
+planner-v4 durable ordinal in every source/context. This is a coordinated
+native/controller change; older peers reject, without downgrade or replay.
+The planner roster retains an output entry while its actual public preparation
+or any private TTS retirement is pending. Definitively unsent private work,
+validated terminal completion or correlated cancellation acknowledgment can
+retire that work. Lost cancellation, task/runtime loss or the bounded cleanup
+timer cannot; the entry remains uncertain until its original control session
+ends, independently of the private model admission/uncertainty owner. See
+[planner ingress](planner-ingress.md) for the permanent session replay boundary.
+
 Normal answer speech is separate from explicit generated-reference preview and the bounded editable Settings voice test in [generated-voices.md](generated-voices.md). Its native entry point consumes the actual published reply from native-planner.md; it never accepts arbitrary frontend text, a saved row, browser output, an imported response or a mere reply UUID. This source slice must preserve the inactive qualified voice/owner boundary and must not generate, select or play a voice while implementing it.
 
 ## Source ownership and admission

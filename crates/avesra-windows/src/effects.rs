@@ -339,6 +339,7 @@ impl Drop for WorkerOwnership {
 }
 
 struct NativeAdapter {
+    vpns: HashMap<Uuid, Box<avesra_core::vpn::Profile>>,
     targets: HashMap<Uuid, VolumeTarget>,
     apps: avesra_core::apps::AppCatalog,
     prompts: HashMap<Uuid, Box<avesra_core::workflows::PromptBinding>>,
@@ -349,6 +350,21 @@ impl EffectAdapter for NativeAdapter {
         permit: &DispatchPermit,
         authority: &mut avesra_core::execution::EffectAuthority<'_>,
     ) -> Result<EffectResult, ErrorCode> {
+        if let ActionPayload::ConnectVpn { profile_id } = permit.action.payload {
+            let profile = self.vpns.get(&profile_id).ok_or(ErrorCode::Stale)?;
+            let report = crate::vpn::connect(profile, &permit.action, authority)?;
+            let outcome = if report.state == avesra_core::vpn::State::Connected {
+                Outcome::Success
+            } else {
+                Outcome::NeedsInput
+            };
+            return Ok(EffectResult {
+                outcome,
+                observation: Some(EffectObservation::Vpn {
+                    report: Box::new(report),
+                }),
+            });
+        }
         if let ActionPayload::FillPrompt {
             app_id,
             project_id,
@@ -905,7 +921,9 @@ impl NativeEffects {
                     return;
                 };
                 let mut prompts=HashMap::new();
+                let mut vpns=HashMap::new();
                 for permission in permissions.into_iter().filter(|v| !v.revoked) {
+                    if let TaskTarget::Vpn{profile}=&permission.permission.target {vpns.insert(profile.id,profile.clone());}
                     if let TaskTarget::Prompt{binding}=&permission.permission.target {prompts.insert(binding.id,binding.clone());}
                     if let TaskTarget::Volume { target, endpoint } = permission.permission.target {
                         let Ok(target) = VolumeTarget::new(target, endpoint) else {
@@ -925,6 +943,7 @@ impl NativeEffects {
                 );
                 let mut controller = ExecutionController::new(store);
                 let mut adapter = NativeAdapter {
+                    vpns,
                     targets: registry,
                     apps,
                     prompts,
@@ -1049,15 +1068,23 @@ impl NativeEffects {
                                         selection,
                                         mut authorize,
                                     } => {
+                                        if let Selection::Vpn{profile}=&selection {
+                                            crate::vpn::current(profile)?;
+                                        }
                                         if let Selection::Volume { endpoint } = &selection {
                                             VolumeTarget::new(Uuid::new_v4(), endpoint.clone())?;
                                         }
+                                        let expected_vpn=if let Selection::Vpn{profile}=&selection{Some(profile.clone())}else{None};
                                         let permission = controller.management().grant_action(
                                             actor,
                                             selection,
                                             &adapter.apps,
-                                            &mut authorize,
+                                            &mut ||{
+                                                if let Some(profile)=&expected_vpn{crate::vpn::current(profile)?;}
+                                                authorize()
+                                            },
                                         )?;
+                                        if let TaskTarget::Vpn{profile}=&permission.target {adapter.vpns.insert(profile.id,profile.clone());}
                                         if let TaskTarget::Volume { target, endpoint } =
                                             permission.target
                                         {

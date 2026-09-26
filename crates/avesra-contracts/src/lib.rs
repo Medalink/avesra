@@ -154,7 +154,6 @@ impl Operation {
                 | Self::Spend
                 | Self::ChangePermission
                 | Self::ChangeConfiguration
-                | Self::ConnectVpn
         )
     }
 }
@@ -175,6 +174,9 @@ pub enum ActionPayload {
     ReadPage {
         origin: String,
         message_limit: u16,
+    },
+    InspectBrowserProvider {
+        provider: browser::provider::Provider,
     },
     FillPrompt {
         app_id: Uuid,
@@ -208,6 +210,7 @@ impl ActionPayload {
             Self::SetVolume { .. } => Operation::SetVolume,
             Self::Navigate { .. } => Operation::Navigate,
             Self::ReadPage { .. } => Operation::ReadPage,
+            Self::InspectBrowserProvider { .. } => Operation::ReadPage,
             Self::FillPrompt { .. } => Operation::FillPrompt,
             Self::SubmitPrompt { .. } => Operation::SubmitPrompt,
             Self::Diagnostic { .. } => Operation::Diagnostic,
@@ -224,6 +227,7 @@ impl ActionPayload {
                 origin,
                 message_limit,
             } => canonical_https(origin, true) && (1..=100).contains(message_limit),
+            Self::InspectBrowserProvider { .. } => true,
             Self::FillPrompt {
                 app_id,
                 project_id,

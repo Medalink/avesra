@@ -156,6 +156,9 @@ impl Entry {
                 app == app_id
             }
             (TaskTarget::Volume { .. }, ActionPayload::SetVolume { percent }) => *percent <= 100,
+            (TaskTarget::Vpn { profile }, ActionPayload::ConnectVpn { profile_id }) => {
+                profile.id == *profile_id
+            }
             (TaskTarget::Diagnostic { catalog }, ActionPayload::Diagnostic { catalog_entry }) => {
                 catalog.id() == *catalog_entry
             }

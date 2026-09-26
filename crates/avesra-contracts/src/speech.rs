@@ -2,7 +2,7 @@
 use crate::{ErrorCode, browser::MAX_SAFE_COUNTER, planner, voice::VoiceIdentity};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-pub const VERSION: u16 = 2;
+pub const VERSION: u16 = 3;
 pub const MAX_TEXT_BYTES: usize = 8192;
 pub const MAX_SEGMENT_BYTES: usize = 512;
 pub const MAX_SEGMENTS: usize = 64;

@@ -12,6 +12,7 @@ pub mod sound;
 pub mod state;
 pub mod store;
 pub mod voice;
+pub mod vpn;
 pub mod workflows;
 
 pub mod apps;

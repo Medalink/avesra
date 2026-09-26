@@ -5,8 +5,8 @@ use axum::http::{HeaderMap, StatusCode};
 use sha2::{Digest, Sha256};
 use std::{
     sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
+        Arc, Weak,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -15,6 +15,7 @@ pub(super) struct Entry {
     context: planner::Context,
     live: Arc<AtomicBool>,
     completed: Option<Completed>,
+    owner: Weak<tokio::sync::OwnedSemaphorePermit>,
 }
 struct Completed {
     digest: [u8; 32],
@@ -24,16 +25,40 @@ struct Completed {
 struct Output {
     context: speech::Context,
     live: Arc<AtomicBool>,
+    owner: Weak<tokio::sync::OwnedSemaphorePermit>,
+    private: Arc<AtomicUsize>,
 }
-pub(super) struct SpeechLease(Arc<AtomicBool>);
+pub(super) struct SpeechLease {
+    live: Arc<AtomicBool>,
+    pub(super) private: Arc<AtomicUsize>,
+}
 impl Drop for SpeechLease {
     fn drop(&mut self) {
-        self.0.store(false, Ordering::SeqCst);
+        self.live.store(false, Ordering::SeqCst);
     }
 }
 impl Entry {
     pub(super) fn withdraw(&self) {
         self.live.store(false, Ordering::SeqCst);
+    }
+    fn retired(&self) -> bool {
+        if self.owner.strong_count() != 0 {
+            return false;
+        }
+        match &self.completed {
+            None => !self.live.load(Ordering::SeqCst),
+            Some(completed) => match &completed.output {
+                Some(output) => {
+                    !output.live.load(Ordering::SeqCst)
+                        && output.owner.strong_count() == 0
+                        && output.private.load(Ordering::SeqCst) == 0
+                }
+                None => {
+                    !self.live.load(Ordering::SeqCst)
+                        || completed.at.elapsed() >= Duration::from_secs(10)
+                }
+            },
+        }
     }
 }
 struct Lease {
@@ -86,6 +111,7 @@ fn collides(
     entries.values().any(|entry| {
         entry.context.request == context.request
             || entry.context.turn == context.turn
+            || entry.context.turn_revision == context.turn_revision
             || entry.context.utterance == context.utterance
     })
 }
@@ -144,22 +170,26 @@ pub(super) async fn operation(
         let session = sessions
             .get_mut(&context.session)
             .ok_or(StatusCode::CONFLICT)?;
+        session.planner_requests.retain(|_, entry| !entry.retired());
         if session.device != device
             || session.action_epoch != context.action_epoch
             || !session.action_enabled
             || session.updated.elapsed() >= Duration::from_secs(30)
             || session.planner_requests.len() >= 64
+            || context.ordinal <= session.planner_ordinal
             || collides(&session.planner_requests, &context)
         {
             return Err(StatusCode::CONFLICT);
         }
         let live = Arc::new(AtomicBool::new(true));
+        session.planner_ordinal = context.ordinal;
         session.planner_requests.insert(
             context.request,
             Entry {
                 context: context.clone(),
                 live: live.clone(),
                 completed: None,
+                owner: Arc::downgrade(&admission),
             },
         );
         Lease {
@@ -303,18 +333,22 @@ pub(super) fn cancel(
         }
         entry.live.store(false, Ordering::SeqCst);
     } else {
+        session.planner_requests.retain(|_, entry| !entry.retired());
         if session.action_epoch != context.action_epoch
             || session.planner_requests.len() >= 64
+            || context.ordinal <= session.planner_ordinal
             || collides(&session.planner_requests, &context)
         {
             return Err(StatusCode::CONFLICT);
         }
+        session.planner_ordinal = context.ordinal;
         session.planner_requests.insert(
             context.request,
             Entry {
                 context,
                 live: Arc::new(AtomicBool::new(false)),
                 completed: None,
+                owner: Weak::new(),
             },
         );
     }
@@ -331,6 +365,7 @@ pub(super) fn reserve_speech(
     state: &Shared,
     device: uuid::Uuid,
     request: &speech::Request,
+    owner: &Arc<tokio::sync::OwnedSemaphorePermit>,
 ) -> Result<SpeechLease, ErrorCode> {
     request.validate()?;
     let context = &request.source.planner;
@@ -371,11 +406,14 @@ pub(super) fn reserve_speech(
         return Err(ErrorCode::Stale);
     }
     let live = Arc::new(AtomicBool::new(true));
+    let private = Arc::new(AtomicUsize::new(0));
     completed.output = Some(Output {
         context: request.stream_context(),
         live: live.clone(),
+        owner: Arc::downgrade(owner),
+        private: private.clone(),
     });
-    Ok(SpeechLease(live))
+    Ok(SpeechLease { live, private })
 }
 pub(super) fn speech_current(state: &Shared, context: &speech::Context) -> bool {
     state.sessions.lock().is_ok_and(|sessions| {

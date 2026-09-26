@@ -10,6 +10,7 @@ serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
 [target.'cfg(windows)'.dependencies]
+quick-xml = "=0.42.0"
 tokio.workspace = true
 ring = "=0.17.14"
 zeroize = "=1.9.0"

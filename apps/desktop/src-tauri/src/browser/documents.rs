@@ -167,8 +167,10 @@ pub(super) fn reserve_target(
         return Err(ErrorCode::Denied);
     }
     let target = resolve_target(state, local, inner, reference, action.actor_id)?;
-    let avesra_contracts::ActionPayload::ReadPage { origin, .. } = &action.payload else {
-        return Err(ErrorCode::Denied);
+    let origin = match &action.payload {
+        avesra_contracts::ActionPayload::ReadPage { origin, .. } => origin.as_str(),
+        avesra_contracts::ActionPayload::InspectBrowserProvider { provider } => provider.origin(),
+        _ => return Err(ErrorCode::Denied),
     };
     if avesra_contracts::browser::Origin::parse(origin)? != target.grant.origin {
         return Err(ErrorCode::Stale);
@@ -233,10 +235,15 @@ impl PreparedTarget {
         permit: &avesra_core::ledger::DispatchPermit,
         remaining_ms: u64,
     ) -> Result<avesra_contracts::browser::reading::Request, ErrorCode> {
-        use avesra_contracts::browser::reading::{Context, Request, Source};
-        let avesra_contracts::ActionPayload::ReadPage { message_limit, .. } = permit.action.payload
-        else {
-            return Err(ErrorCode::Denied);
+        use avesra_contracts::browser::reading::{Context, Mode, Request, Source};
+        let (message_limit, mode) = match permit.action.payload {
+            avesra_contracts::ActionPayload::ReadPage { message_limit, .. } => {
+                (message_limit, Mode::Excerpt)
+            }
+            avesra_contracts::ActionPayload::InspectBrowserProvider { provider } => {
+                (1, Mode::ProviderInspection { provider })
+            }
+            _ => return Err(ErrorCode::Denied),
         };
         let action = &permit.action;
         let target = &self.target;
@@ -278,6 +285,7 @@ impl PreparedTarget {
             origin: grant.origin.clone(),
             document: target.candidate.clone(),
             message_limit,
+            mode,
             remaining_ms,
         };
         avesra_core::browser_reading::validate_dispatch(&request, permit)?;

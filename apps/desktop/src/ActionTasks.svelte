@@ -5,13 +5,15 @@
   import { command, native, type Runtime } from "./runtime";
   let { runtime }: { runtime: Runtime | null } = $props();
   type Catalog = "host_resources" | "cisco_vpn_status";
+  type VpnProfile = { id:string; revision:string; name:string; address:string };
   type Scope = { id:string; revision:string; origin:string; operations:string[] };
-  type Page = { task:string; origin:string; blocks:string[]; truncated:boolean; excluded_content:boolean; remaining_ms:number };
-  type Target = { kind: "browser_read"; scope:Scope } | { kind: "application"; app: string; app_revision: string; alias: string; alias_revision: string } | { kind: "volume"; target: string; endpoint: string } | { kind: "diagnostic"; catalog: Catalog } | { kind: "prompt"; binding: { id: string; project: string; app_name: string } };
+  type ProviderProbe = { provider:"gmail"|"x"; complete:boolean; choices:{id:string;parent:string|null;role:string;label:string;attributes:{name:string;value:string}[]}[] };
+  type Page = { task:string; origin:string; blocks:string[]; truncated:boolean; excluded_content:boolean; remaining_ms:number; provider:ProviderProbe|null };
+  type Target = {kind:"vpn";profile:VpnProfile} | { kind: "browser_read"; scope:Scope } | { kind: "application"; app: string; app_revision: string; alias: string; alias_revision: string } | { kind: "volume"; target: string; endpoint: string } | { kind: "diagnostic"; catalog: Catalog } | { kind: "prompt"; binding: { id: string; project: string; app_name: string } };
   type Reading<T> = { state: "available"; value: T } | { state: "unavailable"; reason: string };
   type Diagnostic = { kind: "cisco_vpn_status"; state: Reading<string> } | { kind: "host_resources"; interval_ms: number; cpu_busy_basis_points: Reading<number>; network: Reading<{ name: string; interface_type: number; operational_status: number; receive_link_bits_per_second: number; transmit_link_bits_per_second: number; receive_bytes_per_second: Reading<number>; transmit_bytes_per_second: Reading<number> }[]>; system_drive_space: Reading<{ drive: string; caller_available_bytes: number; caller_total_bytes: number }>; disk_pressure: Reading<number> };
   type Permission = { permission: { id: string; actor: string; name: string; target: Target }; revoked: boolean };
-  type Task = { task: string; turn: string; revision: string; state: string; target: Target; payload: { kind: string; percent?: number }; outcome: string | null; diagnostic: Diagnostic | null; created_ms: number };
+  type Task = { task: string; turn: string; revision: string; state: string; target: Target; payload: { kind: string; percent?: number }; outcome: string | null; diagnostic: Diagnostic | null; vpn:{state:string;command_issued:boolean;target_matched:boolean;observed:Reading<string>;owner_step:string|null}|null; created_ms: number };
   type Snapshot = { sequence: number; permissions: Permission[]; aliases: { id: string; revision: string; phrase: string; name: string }[]; tasks: Task[] };
   type Output = { id: string; name: string };
   let panel = $state<string | null>(null);
@@ -23,6 +25,9 @@
   let alias = $state("");
   let endpoint = $state("");
   let catalog = $state<Catalog>("host_resources");
+  let vpnProfile=$state<VpnProfile|null>(null);
+  type VpnChannel={step:string;dispatch:string;authenticated:boolean;checked_ms:number};
+  let vpnChannel=$state<VpnChannel|null>(null);
   let busy = $state(false);
   let cancelling = $state("");
   let error = $state("");
@@ -40,7 +45,7 @@
   const hasVolume = $derived(activePermissions.some(p => p.permission.target.kind === "volume"));
   const hasDiagnostic = $derived(activePermissions.some(p => p.permission.target.kind === "diagnostic" && p.permission.target.catalog === catalog));
   function applySnapshot(value: Snapshot) { if (Number.isSafeInteger(value.sequence) && value.sequence > 0 && (!snapshot || value.sequence >= snapshot.sequence)) snapshot = value; }
-  function invalidate() { clearTimeout(pageTimer); page=null; scopes=[]; scope=""; const previous = panel; generation++; panel = null; snapshot = null; promptSurface = null; outputs = []; alias = ""; endpoint = ""; if (previous && native) void command("close_action_panel", { panel: previous }).catch(() => {}); }
+  function invalidate() { vpnProfile=null; vpnChannel=null; clearTimeout(pageTimer); page=null; scopes=[]; scope=""; const previous = panel; generation++; panel = null; snapshot = null; promptSurface = null; outputs = []; alias = ""; endpoint = ""; if (previous && native) void command("close_action_panel", { panel: previous }).catch(() => {}); }
   $effect(() => {
     const next = `${runtime?.connected}:${runtime?.locked}:${runtime?.action_epoch}`;
     if (next !== context) { context = next; invalidate(); }
@@ -62,8 +67,8 @@
   function refresh() { return run(async current => {
     const active = await open(current); if (!active) return;
     const started=performance.now();
-    const value = await command<{ snapshot: Snapshot; outputs: Output[]; scopes:Scope[]; page:Page|null }>("action_status", { panel: active });
-    if (mounted && current === generation) { applySnapshot(value.snapshot); outputs = value.outputs; scopes=value.scopes; clearTimeout(pageTimer); const remaining=(value.page?.remaining_ms??0)-(performance.now()-started); page=remaining>0?value.page:null; if(page) pageTimer=setTimeout(()=>{page=null;},remaining); }
+    const value = await command<{ snapshot: Snapshot; outputs: Output[]; scopes:Scope[]; page:Page|null; vpn_channel:VpnChannel|null }>("action_status", { panel: active });
+    if (mounted && current === generation) { applySnapshot(value.snapshot); vpnChannel=value.vpn_channel; outputs = value.outputs; scopes=value.scopes; clearTimeout(pageTimer); const remaining=(value.page?.remaining_ms??0)-(performance.now()-started); page=remaining>0?value.page:null; if(page) pageTimer=setTimeout(()=>{page=null;},remaining); }
   }); }
   function allowApp() { return run(async current => {
     const selected = snapshot?.aliases.find(a => a.id === alias); if (!panel || !selected) return;
@@ -102,6 +107,16 @@
     const value = await command<Snapshot>("grant_diagnostic_action", { panel, catalog });
     if (mounted && current === generation) { applySnapshot(value); notice = "Read permission saved for this fixed diagnostic. It cannot change settings or connect the VPN."; }
   }, true); }
+  function inspectVpn(){return run(async current=>{
+    const active=await open(current);if(!active)return;
+    const value=await command<VpnProfile>("inspect_vpn_profile",{panel:active});
+    if(mounted&&current===generation){vpnProfile=value;notice="Saved Cisco target inspected. Review it before allowing connection.";}
+  });}
+  function allowVpn(){return run(async current=>{
+    if(!panel||!vpnProfile)return;
+    const value=await command<Snapshot>("grant_vpn_action",{panel,id:vpnProfile.id,revision:vpnProfile.revision});
+    if(mounted&&current===generation){applySnapshot(value);vpnProfile=null;notice="Existing VPN target allowed. Say connect work VPN; Cisco retains authentication and MFA.";}
+  },true);}
   async function cancel(task: Task) {
     if (!panel || cancelling) return;
     const active = panel;
@@ -113,6 +128,7 @@
     finally { cancelling = ""; }
   }
   function label(task: Task) {
+    if(task.vpn?.state==="already_connected")return "Already connected to the selected VPN · no command issued";
     if (task.outcome === "success") return task.diagnostic ? "Diagnostic finished · see available measurements" : "Verified effect";
     if (task.outcome === "unsupported") return "Unsupported target";
     if (task.outcome === "needs_input" || task.state === "waiting_for_user") return "Needs your input";
@@ -120,6 +136,7 @@
     return task.state.replaceAll("_", " ");
   }
   function targetName(task: Task) {
+    if(task.target.kind==="vpn")return task.target.profile.name;
     if (task.target.kind === "browser_read") return task.target.scope.origin;
     if (task.target.kind === "diagnostic") return task.target.catalog === "host_resources" ? "Computer performance" : "Cisco VPN status";
     if (task.target.kind === "prompt") return `${task.target.binding.app_name} · ${task.target.binding.project}`;
@@ -154,15 +171,26 @@
   <label class="av-label" for="action-browser">Allow a partial page read</label>
   <div class="flex gap-2"><select id="action-browser" class="av-select flex-1" bind:value={scope} disabled={!enabled || busy}><option value="">Choose an existing browser Read scope</option>{#each scopes.filter(s=>s.operations.includes("read")) as item}<option value={item.id}>{item.origin}</option>{/each}</select><button class="av-btn av-btn-secondary" disabled={!enabled || busy || !panel || !scope || activePermissions.some(p=>p.permission.target.kind==="browser_read"&&p.permission.target.scope.id===scope)} onclick={allowBrowser}>Allow page read</button></div>
   <p class="av-hint">Select the exact document in Browser setup, then say “Read page at https://example.com” using your saved origin. This reads a partial excerpt; it cannot count emails or verify an account. Refresh here to view the temporary result.</p>
-  {#if page}<div class="av-card p-4"><h3>Partial page excerpt · {page.origin}</h3><p class="av-hint">Untrusted page text · {page.truncated ? "truncated" : "bounded excerpt"}{page.excluded_content ? " · some content excluded" : ""}. Cleared within one minute. This does not establish mailbox completeness.</p>{#each page.blocks as block}<p class="whitespace-pre-wrap break-words text-sm">{block}</p>{:else}<p class="av-hint">No eligible text was returned. This does not prove the page or mailbox is empty.</p>{/each}</div>{/if}
+  {#if page}<div class="av-card p-4">
+    {#if page.provider}
+      <h3>Observed {page.provider.provider === "gmail" ? "Gmail" : "X"} controls</h3>
+      <p class="av-hint">{page.provider.complete ? "Application header inspection complete" : "Application header inspection incomplete"}. Untrusted metadata, cleared within one minute. This does not prove account identity, message completeness or readiness.</p>
+      <details><summary>Observed metadata</summary>{#each page.provider.choices as choice}<p class="whitespace-pre-wrap break-words text-sm">{choice.role}: {choice.label || "Unnamed"}{#each choice.attributes as attribute}<span class="block av-hint">{attribute.name}: {attribute.value}</span>{/each}</p>{/each}</details>
+    {:else}
+      <h3>Partial page excerpt · {page.origin}</h3><p class="av-hint">Untrusted page text · {page.truncated ? "truncated" : "bounded excerpt"}{page.excluded_content ? " · some content excluded" : ""}. Cleared within one minute. This does not establish mailbox completeness.</p>{#each page.blocks as block}<p class="whitespace-pre-wrap break-words text-sm">{block}</p>{:else}<p class="av-hint">No eligible text was returned. This does not prove the page or mailbox is empty.</p>{/each}
+    {/if}
+  </div>{/if}
   <div class="flex gap-2"><select id="action-output" class="av-select flex-1" bind:value={endpoint} disabled={!enabled || busy || hasVolume}><option value="">Choose an output</option>{#each outputs as item}<option value={item.id}>{item.name}</option>{/each}</select><button class="av-btn av-btn-secondary" disabled={!enabled || busy || !endpoint || hasVolume} onclick={allowVolume}>Allow volume</button></div>
   <p class="av-hint">Exact request: “Avesra set speakers volume to 50 percent”. To change the permitted output, revoke its permission first.</p>
+  <div class="av-card p-4"><h3>Existing work VPN</h3><p class="av-hint">Inspect the current saved Cisco target, then allow that exact connection. Connecting can interrupt Spark access. Avesra never changes VPN policy, enters credentials or disconnects an existing VPN.</p><button class="av-btn av-btn-secondary" disabled={!enabled || busy} onclick={inspectVpn}>Inspect saved Cisco target</button>{#if vpnProfile}<p class="av-hint">{vpnProfile.name} · {vpnProfile.address} · TLS port 443</p><button class="av-btn av-btn-secondary" disabled={!enabled || busy || activePermissions.some(p=>p.permission.target.kind==="vpn")} onclick={allowVpn}>Allow this existing VPN</button><p class="av-hint">Selection expires after 30 seconds. Windows verification protects this permission; routine connections use the saved grant.</p>{/if}</div>
   <label class="av-label" for="action-diagnostic">Allow a fixed read-only diagnostic</label>
   <div class="flex gap-2"><select id="action-diagnostic" class="av-select flex-1" bind:value={catalog} disabled={!enabled || busy}><option value="host_resources">Computer performance</option><option value="cisco_vpn_status">Cisco VPN status</option></select><button class="av-btn av-btn-secondary" disabled={!enabled || busy || !panel || hasDiagnostic} onclick={allowDiagnostic}>Allow read</button></div>
   <p class="av-hint">Accepted requests: “Check computer performance” or “Check VPN status”. These observe bounded system counters or Cisco status; they do not run scripts or change settings.</p>
-  {#each activePermissions as item}<div class="row"><div><h3>{item.permission.name}</h3><p class="av-hint">{item.permission.target.kind === "browser_read" ? `Partial excerpt from ${item.permission.target.scope.origin}` : item.permission.target.kind === "prompt" ? `Prepare unsubmitted drafts in ${item.permission.target.binding.app_name}` : item.permission.target.kind === "diagnostic" ? "Fixed read-only diagnostic; no configuration changes" : item.permission.target.kind === "application" ? "Open this exact saved application" : outputs.find(o => o.id === (item.permission.target.kind === "volume" ? item.permission.target.endpoint : ""))?.name ?? "Saved speakers endpoint"}</p></div><button class="av-btn av-btn-ghost av-btn-sm" disabled={!enabled || busy} onclick={() => revoke(item.permission.id)}>Revoke</button></div>{/each}
+  {#each activePermissions as item}<div class="row"><div><h3>{item.permission.name}</h3><p class="av-hint">{item.permission.target.kind === "vpn" ? `Connect existing Cisco target ${item.permission.target.profile.name} (${item.permission.target.profile.address})` : item.permission.target.kind === "browser_read" ? `Partial excerpt from ${item.permission.target.scope.origin}` : item.permission.target.kind === "prompt" ? `Prepare unsubmitted drafts in ${item.permission.target.binding.app_name}` : item.permission.target.kind === "diagnostic" ? "Fixed read-only diagnostic; no configuration changes" : item.permission.target.kind === "application" ? "Open this exact saved application" : outputs.find(o => o.id === (item.permission.target.kind === "volume" ? item.permission.target.endpoint : ""))?.name ?? "Saved speakers endpoint"}</p></div><button class="av-btn av-btn-ghost av-btn-sm" disabled={!enabled || busy} onclick={() => revoke(item.permission.id)}>Revoke</button></div>{/each}
+  {#if vpnChannel}<p class="av-hint">Post-VPN Spark check at {new Date(vpnChannel.checked_ms).toLocaleTimeString()}: {vpnChannel.authenticated ? "paired server authenticated" : "unavailable within 3 seconds; routing cause is not established"}. This is a separate channel observation, not proof of VPN connection.</p>{/if}
   <div class="line"></div><h2>Recent accepted actions</h2>
-  {#if !snapshot}<p class="av-hint">Refresh to inspect durable task state.</p>{:else if snapshot.tasks.length === 0}<p class="av-hint">No accepted action tasks for the current owner.</p>{:else}{#each snapshot.tasks as task}<div class="row"><div><h3>{task.payload.kind === "read_page" ? `Read partial page at ${targetName(task)}` : task.payload.kind === "fill_prompt" ? `Prepare unsubmitted draft in ${targetName(task)}` : task.payload.kind === "diagnostic" ? targetName(task) : task.payload.kind === "set_volume" ? `Set ${targetName(task)} to ${task.payload.percent}%` : `Open ${targetName(task)}`}</h3><p class="av-hint">{label(task)} · {new Date(task.created_ms).toLocaleString()}</p>
+  {#if !snapshot}<p class="av-hint">Refresh to inspect durable task state.</p>{:else if snapshot.tasks.length === 0}<p class="av-hint">No accepted action tasks for the current owner.</p>{:else}{#each snapshot.tasks as task}<div class="row"><div><h3>{task.payload.kind === "connect_vpn" ? `Connect ${targetName(task)}` : task.payload.kind === "read_page" ? `Read partial page at ${targetName(task)}` : task.payload.kind === "fill_prompt" ? `Prepare unsubmitted draft in ${targetName(task)}` : task.payload.kind === "diagnostic" ? targetName(task) : task.payload.kind === "set_volume" ? `Set ${targetName(task)} to ${task.payload.percent}%` : `Open ${targetName(task)}`}</h3><p class="av-hint">{label(task)} · {new Date(task.created_ms).toLocaleString()}</p>
+      {#if task.vpn}<p class="av-hint">Cisco: {measured(task.vpn.observed, state=>state.replaceAll("_"," "))} · {task.vpn.target_matched ? "selected peer matched" : "selected peer not verified"}. {task.vpn.command_issued ? "A connection command may have reached the VPN agent; it is not retried automatically." : "No connection command issued."}</p>{#if task.vpn.owner_step}<p class="av-hint">Your next step: {task.vpn.owner_step.replaceAll("_"," ")}. Continue in Cisco yourself, then inspect status. Avesra does not receive your credentials or MFA response.</p>{/if}{/if}
       {#if task.diagnostic}
         {#if task.diagnostic.kind === "cisco_vpn_status"}
           <p class="av-hint">Cisco: {measured(task.diagnostic.state, state => state.replaceAll("_", " "))}. This does not establish Spark reachability.</p>

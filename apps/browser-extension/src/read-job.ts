@@ -3,6 +3,7 @@ import * as r from "./reading.js";
 import { acquireBrowserJob, type BrowserJob } from "./browser-job.js";
 import { ObservationAuthority } from "./authority.js";
 import { beginPageExcerpt, finishPageExcerpt, type Extracted } from "./page-excerpt.js";
+import { probe } from "./provider.js";
 
 // Survives connection-owner disposal, but never persists or retains page text.
 // The lease also excludes metadata until durable native acknowledgement.
@@ -29,6 +30,11 @@ function text(value: unknown, maximum: number): value is string {
     && !/[\p{Cc}\p{Cs}]/u.test(value.replace(/[\n\t]/g, ""));
 }
 function extracted(value: unknown, request: r.Request): value is Extracted {
+  if (p.object(value,["started","state","dom_revision","provider","complete","choices"])) {
+    return value.started === true && value.state === "provider_inspection" && request.mode.kind === "provider_inspection"
+      && value.provider === request.mode.provider && probe({provider:value.provider,scope:"provider_header",document:request.document,
+        dom_revision:value.dom_revision,complete:value.complete,choices:value.choices});
+  }
   if (p.object(value, ["started", "state", "request", "url", "guard_absent"])) {
     return value.started === false && value.state === "unavailable" && value.guard_absent === true
       && value.request === request.context.request && value.url === request.document.url;
@@ -38,10 +44,10 @@ function extracted(value: unknown, request: r.Request): value is Extracted {
       || (value.started === true && ["changed", "unavailable"].includes(String(value.state)));
   }
   if (p.object(value, ["started", "state", "dom_revision"])) {
-    return value.started === true && value.state === "empty" && p.counter(value.dom_revision);
+    return request.mode.kind === "excerpt" && value.started === true && value.state === "empty" && p.counter(value.dom_revision);
   }
   if (!p.object(value, ["started", "state", "dom_revision", "title", "blocks", "truncated", "excluded_content"])
-    || value.started !== true || value.state !== "excerpt" || !p.counter(value.dom_revision)
+    || request.mode.kind !== "excerpt" || value.started !== true || value.state !== "excerpt" || !p.counter(value.dom_revision)
     || !text(value.title, 256) || !Array.isArray(value.blocks) || !value.blocks.length
     || value.blocks.length > Math.min(16, request.message_limit) || typeof value.truncated !== "boolean"
     || typeof value.excluded_content !== "boolean") return false;
@@ -100,7 +106,7 @@ export class ReadJob {
       const job = this.job;
       if (!r.sameContext(job.request.context, value.context) || job.request.origin !== value.origin
         || JSON.stringify(job.request.document) !== JSON.stringify(value.document)
-        || job.request.message_limit !== value.message_limit) throw new Error("Read request changed");
+        || job.request.message_limit !== value.message_limit || JSON.stringify(job.request.mode) !== JSON.stringify(value.mode)) throw new Error("Read request changed");
       job.deadline = Math.min(job.deadline, performance.now() + value.remaining_ms);
       if (!this.current(job)) this.invalidate();
       else this.arm(job);
@@ -160,7 +166,8 @@ export class ReadJob {
         target: { tabId: job.request.document.tab, documentIds: [job.request.document.document] },
         world: "ISOLATED", func: beginPageExcerpt,
         args: [{ request: job.request.context.request, url: job.request.document.url,
-          maxBlocks: Math.min(16, job.request.message_limit), budgetMs: Math.max(1, Math.floor(job.deadline - performance.now())) }],
+          maxBlocks: Math.min(16, job.request.message_limit), budgetMs: Math.max(1, Math.floor(job.deadline - performance.now())),
+          provider: job.request.mode.kind === "provider_inspection" ? job.request.mode.provider : null }],
       });
       const value = result(values, job);
       if (!extracted(value, job.request)) throw new Error("Malformed read result");
@@ -196,6 +203,10 @@ export class ReadJob {
             dom_revision: value.dom_revision, title: value.title, blocks: value.blocks,
             truncated: value.truncated, excluded_content: value.excluded_content } };
         } else if (value.state === "empty" && value.dom_revision === finish.dom_revision) outcome = { state: "empty" };
+        else if (value.state === "provider_inspection" && value.dom_revision === finish.dom_revision) {
+          outcome = {state:"provider_inspection",probe:{provider:value.provider,scope:"provider_header",document:job.request.document,
+            dom_revision:value.dom_revision,complete:value.complete,choices:value.choices}};
+        }
       } else if (value?.started === true) outcome = { state: "changed" };
     }
     // No injection occurred, or exact cleanup/absence has completed. Every API

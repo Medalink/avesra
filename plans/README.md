@@ -31,12 +31,18 @@ Handoff and next-step boundaries: [Plan 001 handoff](001-handoff.md). The owner 
 
 ## Execution order
 
+The owner resumed full completion on 2026-09-26. The current
+[acceptance ledger](001-acceptance-2026-09-26.md) supersedes stale implementation
+and activation claims in the historical tables below. All required live outcomes
+remain explicit; successful preview/build evidence does not close them.
+
 Latest owner priority: ship working development features promptly for the owner's
 own testing. The large voice corpus remains release validation and must no longer
 block initial use for hours. Follow the explicit development-admission override
 in [Plan001](001-single-spark-assistant.md#later-owner-override-ship-development-features-for-owner-testing).
-Saved enrollment plus a short genuine live check, explicit listening consent and
-existing action grants remain required; do not claim completed release evidence.
+The later simple Personal conversation override removes the mandatory short-check
+ritual. Preserve saved local controls, native owner identity and existing action
+grants; do not claim completed release evidence.
 
 | Plan | Outcome | Priority | Effort | Dependencies | Status |
 | --- | --- | --- | --- | --- | --- |

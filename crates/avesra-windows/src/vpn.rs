@@ -1,11 +1,14 @@
-//! Read-only Cisco stats for one observed signed build. No connect or credentials.
+//! Cisco observations and exact configured connection for one signed build.
+#[path = "vpn_connect.rs"]
+mod connection;
 use avesra_contracts::ErrorCode;
 use avesra_core::diagnostics::{Reading, Report, Unavailable, VpnState};
+pub use connection::{connect, current, discover};
 use sha2::{Digest, Sha256};
 use std::{
     fs::{File, OpenOptions},
     io::Read,
-    os::windows::{fs::OpenOptionsExt, process::CommandExt},
+    os::windows::{fs::OpenOptionsExt, io::AsRawHandle, process::CommandExt},
     process::{Child, Command, Stdio},
     sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
@@ -49,11 +52,46 @@ fn identity(deadline: Instant) -> Result<File, Unavailable> {
     }
     Ok(file)
 }
-fn drain(mut pipe: impl Read, overflow: &AtomicBool) -> Result<Vec<u8>, Unavailable> {
+fn drain(
+    mut pipe: impl Read + AsRawHandle,
+    overflow: &AtomicBool,
+    retired: &AtomicBool,
+) -> Result<Vec<u8>, Unavailable> {
     let mut output = Vec::with_capacity(LIMIT);
     let mut buffer = [0u8; 1024];
     loop {
-        let count = pipe.read(&mut buffer).map_err(|_| {
+        let mut available = 0;
+        if let Err(error) = unsafe {
+            windows::Win32::System::Pipes::PeekNamedPipe(
+                windows::Win32::Foundation::HANDLE(pipe.as_raw_handle()),
+                None,
+                0,
+                None,
+                Some(&mut available),
+                None,
+            )
+        } {
+            if error.code()
+                == windows::core::HRESULT::from_win32(
+                    windows::Win32::Foundation::ERROR_BROKEN_PIPE.0,
+                )
+            {
+                break;
+            }
+            overflow.store(true, Ordering::SeqCst);
+            return Err(Unavailable::CommandFailed);
+        }
+        if available == 0 {
+            // Another process retaining an inherited writer cannot hold this
+            // reader forever after our actual child exits. No EOF is invented.
+            if retired.load(Ordering::SeqCst) {
+                return Err(Unavailable::CommandFailed);
+            }
+            std::thread::sleep(Duration::from_millis(10));
+            continue;
+        }
+        let count = (available as usize).min(buffer.len());
+        let count = pipe.read(&mut buffer[..count]).map_err(|_| {
             overflow.store(true, Ordering::SeqCst);
             Unavailable::CommandFailed
         })?;
@@ -64,6 +102,7 @@ fn drain(mut pipe: impl Read, overflow: &AtomicBool) -> Result<Vec<u8>, Unavaila
             output.extend_from_slice(&buffer[..count]);
         } else {
             overflow.store(true, Ordering::SeqCst);
+            return Err(Unavailable::OutputLimit);
         }
     }
     if overflow.load(Ordering::SeqCst) {
@@ -89,7 +128,11 @@ impl Drop for OwnedChild {
         }
     }
 }
-fn parsed(output: &[u8]) -> Result<VpnState, Unavailable> {
+struct Status {
+    state: VpnState,
+    server: Option<std::net::IpAddr>,
+}
+fn parsed(output: &[u8]) -> Result<Status, Unavailable> {
     let text = std::str::from_utf8(output).map_err(|_| Unavailable::UnrecognizedOutput)?;
     if text
         .chars()
@@ -99,10 +142,22 @@ fn parsed(output: &[u8]) -> Result<VpnState, Unavailable> {
     }
     let mut state = None;
     let mut tunnel = false;
+    let mut in_tunnel = false;
+    let mut server = None;
     for line in text.lines() {
         let line = line.trim().to_ascii_lowercase();
-        if line == "[tunnel information]" {
-            tunnel = true;
+        if line.starts_with('[') {
+            in_tunnel = line == "[tunnel information]";
+            tunnel |= in_tunnel;
+        }
+        if in_tunnel && let Some(address) = line.strip_prefix("server address:") {
+            let address = address
+                .trim()
+                .parse()
+                .map_err(|_| Unavailable::UnrecognizedOutput)?;
+            if server.replace(address).is_some() {
+                return Err(Unavailable::UnrecognizedOutput);
+            }
         }
         let Some(event) = line.strip_prefix(">>").map(str::trim) else {
             continue;
@@ -122,15 +177,17 @@ fn parsed(output: &[u8]) -> Result<VpnState, Unavailable> {
         }
     }
     match state {
-        Some(VpnState::Connected) if !tunnel => Err(Unavailable::UnrecognizedOutput),
-        Some(value) => Ok(value),
+        Some(VpnState::Connected) if !tunnel || server.is_none() => {
+            Err(Unavailable::UnrecognizedOutput)
+        }
+        Some(state) => Ok(Status { state, server }),
         None => Err(Unavailable::UnrecognizedOutput),
     }
 }
 fn stats(
     deadline: Instant,
     authorize: &mut dyn FnMut() -> Result<(), ErrorCode>,
-) -> Result<VpnState, Unavailable> {
+) -> Result<Status, Unavailable> {
     let _identity = identity(deadline)?;
     if authorize().is_err() {
         return Err(Unavailable::Cancelled);
@@ -139,6 +196,7 @@ fn stats(
         return Err(Unavailable::Expired);
     }
     let overflow = AtomicBool::new(false);
+    let retired = AtomicBool::new(false);
     std::thread::scope(|scope| {
         let child = Command::new(PATH)
             .arg("stats")
@@ -164,8 +222,9 @@ fn stats(
             .take()
             .ok_or(Unavailable::CommandFailed)?;
         let shared = &overflow;
-        let out = scope.spawn(move || drain(stdout, shared));
-        let err = scope.spawn(move || drain(stderr, shared));
+        let stopped = &retired;
+        let out = scope.spawn(move || drain(stdout, shared, stopped));
+        let err = scope.spawn(move || drain(stderr, shared, stopped));
         let mut failure = None;
         let status = loop {
             if failure.is_none() {
@@ -194,7 +253,9 @@ fn stats(
             }
             std::thread::sleep(Duration::from_millis(20));
         };
-        // Readers remain owned until actual EOF, including cancellation paths.
+        retired.store(true, Ordering::SeqCst);
+        // Readers require actual EOF for success; inherited writers after our
+        // child exits are unavailable rather than an unbounded join.
         let output = out.join().map_err(|_| Unavailable::CommandFailed)??;
         let errors = err.join().map_err(|_| Unavailable::CommandFailed)??;
         if let Some(reason) = failure {
@@ -217,7 +278,7 @@ pub(crate) fn observe(
     authorize: &mut dyn FnMut() -> Result<(), ErrorCode>,
 ) -> Result<Report, ErrorCode> {
     let state = match stats(deadline, authorize) {
-        Ok(value) => Reading::Available { value },
+        Ok(value) => Reading::Available { value: value.state },
         Err(reason) => Reading::Unavailable { reason },
     };
 

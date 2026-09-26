@@ -23,6 +23,9 @@ pub struct VolumeLevel {
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum EffectObservation {
+    Vpn {
+        report: Box<crate::vpn::Report>,
+    },
     PromptDraft {
         app_id: uuid::Uuid,
         project_id: uuid::Uuid,
@@ -78,6 +81,7 @@ impl EffectObservation {
             return Err(ErrorCode::TooLarge);
         }
         match self {
+            Self::Vpn { report } => report.validate(action, outcome),
             Self::PromptDraft {
                 app_id,
                 project_id,
@@ -246,6 +250,7 @@ impl EffectAuthority<'_> {
         if matches!(
             self.permit.action.payload,
             avesra_contracts::ActionPayload::ReadPage { .. }
+                | avesra_contracts::ActionPayload::InspectBrowserProvider { .. }
         ) {
             return Err(ErrorCode::Unsupported);
         }

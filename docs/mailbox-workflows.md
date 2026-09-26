@@ -48,6 +48,10 @@ send, archive, delete or posting operation is part of this consumer.
 ## Provider binding and operation boundary
 
 Gmail currently has no inspected provider binding in this source checkpoint.
+The wire7 accepted provider-header inspector is now a concrete C4 consumer;
+`browser-provider-operations.md` specifies its bounded scope and transient
+delivery. A complete header probe does not require scanning message/feed content
+and does not prove mailbox ordering, bodies, account identity or readiness.
 There are no guessed CSS selectors, private Gmail API calls or synthetic DOM
 fixtures. A provider must bind actually observed account, Inbox, individual
 message identity/date/body, thread expansion and pagination semantics through
@@ -74,7 +78,8 @@ Unsupported. No text entry or submission follows from a readiness request.
 | Core mailbox accumulator | Pure bounded evidence consumer; cannot create browser authority |
 | Extension mailbox batch validation | Strict untrusted observation validation; no DOM operation |
 | C4 `beginPageExcerpt` / `ReadJob` | Unchanged partial excerpt only; cannot enter mailbox consumer |
-| Accepted native browser task / provider binding | Requires concrete protected binding and actual owned job integration before activation |
+| Accepted provider-header inspection | Uses the actual C4 job and delivered transient probe; no provider mutation or completeness inference |
+| Protected provider binding / Gmail or X workflow | Requires independently checked account semantics and separate operation grants before activation |
 | Task receipt / model summary | Only bounded source references and conclusions; no raw mailbox body telemetry |
 
 No tests or harnesses are added under the owner's execution override. Root owns

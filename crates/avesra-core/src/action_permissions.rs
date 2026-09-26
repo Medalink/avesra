@@ -55,6 +55,9 @@ pub(crate) fn check_schema(db: &Connection, version: u64) -> Result<(), ErrorCod
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TaskTarget {
+    Vpn {
+        profile: Box<crate::vpn::Profile>,
+    },
     BrowserRead {
         scope: Box<crate::browser_scopes::Grant>,
     },
@@ -78,6 +81,7 @@ pub enum TaskTarget {
 impl TaskTarget {
     pub fn id(&self) -> Uuid {
         match self {
+            Self::Vpn { profile } => profile.id,
             Self::BrowserRead { scope } => scope.id.uuid(),
             Self::Prompt { binding } => binding.id,
             Self::Diagnostic { catalog } => catalog.id(),
@@ -87,6 +91,7 @@ impl TaskTarget {
     }
     pub fn operation(&self) -> Operation {
         match self {
+            Self::Vpn { .. } => Operation::ConnectVpn,
             Self::BrowserRead { .. } => Operation::ReadPage,
             Self::Prompt { .. } => Operation::FillPrompt,
             Self::Diagnostic { .. } => Operation::Diagnostic,
@@ -96,6 +101,7 @@ impl TaskTarget {
     }
     pub fn validate(&self) -> Result<(), ErrorCode> {
         let valid = match self {
+            Self::Vpn { profile } => profile.validate().is_ok(),
             Self::BrowserRead { scope } => {
                 scope.validate().is_ok()
                     && scope
@@ -144,6 +150,7 @@ impl Permission {
         self.target.validate()?;
         if self.id.is_nil()
             || self.actor.is_nil()
+            || matches!(&self.target,TaskTarget::Vpn{profile} if profile.actor!=self.actor || self.name!="work vpn")
             || crate::apps::alias_phrase(&self.name).ok().as_ref() != Some(&self.name)
             || matches!(&self.target, TaskTarget::BrowserRead { scope } if scope.actor.uuid()!=self.actor || self.name!="browser page")
             || matches!(self.target, TaskTarget::Volume { .. }) && self.name != "speakers"
@@ -156,6 +163,9 @@ impl Permission {
     }
 }
 pub enum Selection {
+    Vpn {
+        profile: Box<crate::vpn::Profile>,
+    },
     BrowserRead {
         scope: Box<crate::browser_scopes::Grant>,
     },
@@ -242,6 +252,13 @@ impl Store {
             return Err(ErrorCode::TooLarge);
         }
         let (name, target) = match selection {
+            Selection::Vpn { profile } => {
+                profile.validate()?;
+                if profile.actor != actor {
+                    return Err(ErrorCode::Denied);
+                }
+                ("work vpn".to_owned(), TaskTarget::Vpn { profile })
+            }
             Selection::BrowserRead { scope } => {
                 scope.validate()?;
                 let app = apps.get(scope.browser_app.uuid())?;
@@ -306,6 +323,10 @@ impl Store {
                 && v.permission.actor == actor
                 && (v.permission.target == target
                     || matches!((&v.permission.target,&target),(TaskTarget::Prompt{binding:a},TaskTarget::Prompt{binding:b}) if a.app==b.app && a.project==b.project)
+                    || matches!(
+                        (&v.permission.target, &target),
+                        (TaskTarget::Vpn { .. }, TaskTarget::Vpn { .. })
+                    )
                     || matches!(
                         (&v.permission.target, &target),
                         (TaskTarget::Volume { .. }, TaskTarget::Volume { .. })

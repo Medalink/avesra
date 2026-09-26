@@ -14,7 +14,7 @@ use axum::{
     response::Response,
 };
 use std::{
-    sync::Arc,
+    sync::{Arc, atomic::AtomicUsize},
     time::{Duration, Instant},
 };
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
@@ -105,6 +105,7 @@ async fn send(
 struct Inspector {
     admission: Arc<OwnedSemaphorePermit>,
     gate: Arc<Semaphore>,
+    private: Arc<AtomicUsize>,
 }
 async fn inspect(
     auth: &Shared,
@@ -142,7 +143,7 @@ async fn start(
         serde_json::from_str(&read(socket, Duration::from_secs(3)).await?)
             .map_err(|_| ErrorCode::Malformed)?;
     request.validate()?;
-    let _reservation = planner_ingress::reserve_speech(&auth, device, &request)?;
+    let reservation = planner_ingress::reserve_speech(&auth, device, &request, &admission)?;
     let context = request.stream_context();
     let (mut action, mut output) = {
         let sessions = auth.sessions.lock().map_err(|_| ErrorCode::Unavailable)?;
@@ -157,6 +158,7 @@ async fn start(
     let inspector = Inspector {
         admission,
         gate: Arc::new(Semaphore::new(1)),
+        private: reservation.private.clone(),
     };
     let monitor = async {
         loop {
@@ -190,6 +192,7 @@ async fn produce<F, Fut>(
     lane: Arc<AudioClient>,
     request: &speech::Request,
     tx: mpsc::Sender<Piece>,
+    private: Arc<AtomicUsize>,
     mut authorize: F,
 ) -> Result<(), ErrorCode>
 where
@@ -202,7 +205,14 @@ where
         // Fresh private identity per actual job; the single public source and
         // output reservation remain owned by start/stream across every segment.
         let mut source = lane
-            .synthesize(1, Uuid::new_v4(), &request.voice, text, &mut authorize)
+            .synthesize(
+                1,
+                Uuid::new_v4(),
+                &request.voice,
+                text,
+                Some(private.clone()),
+                &mut authorize,
+            )
             .await?;
         let mut segment_samples = 0usize;
         loop {
@@ -270,7 +280,7 @@ async fn stream(
     let producer = async {
         tokio::time::timeout_at(
             synth_deadline,
-            produce(lane, request, tx, || {
+            produce(lane, request, tx, inspector.private.clone(), || {
                 inspect(auth, context, inspector, deadline)
             }),
         )

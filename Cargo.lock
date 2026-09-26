@@ -381,6 +381,7 @@ dependencies = [
  "avesra-core",
  "cpal",
  "fundsp",
+ "quick-xml",
  "ring",
  "rubato",
  "serde",

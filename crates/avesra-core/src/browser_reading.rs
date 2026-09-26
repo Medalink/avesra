@@ -29,6 +29,15 @@ pub struct Observation {
     pub truncated: bool,
     pub excluded_content: bool,
     pub coverage: avesra_contracts::browser::reading::Coverage,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<ProviderObservation>,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderObservation {
+    pub provider: avesra_contracts::browser::provider::Provider,
+    pub choices: u16,
+    pub complete: bool,
 }
 impl Observation {
     pub(crate) fn from_reply(request: &Request, reply: &Reply) -> Result<Self, ErrorCode> {
@@ -44,6 +53,9 @@ impl Observation {
                     excerpt.excluded_content,
                 ),
                 avesra_contracts::browser::reading::Outcome::Empty => (None, 0, 0, 0, false, false),
+                avesra_contracts::browser::reading::Outcome::ProviderInspection { probe } => {
+                    (Some(probe.dom_revision), 0, 0, 0, !probe.complete, false)
+                }
                 _ => return Err(ErrorCode::Denied),
             };
         let body = serde_json::to_vec(reply).map_err(|_| ErrorCode::Malformed)?;
@@ -62,16 +74,44 @@ impl Observation {
             truncated,
             excluded_content,
             coverage: avesra_contracts::browser::reading::Coverage::Partial,
+            provider: match &reply.outcome {
+                avesra_contracts::browser::reading::Outcome::ProviderInspection { probe } => {
+                    Some(ProviderObservation {
+                        provider: probe.provider,
+                        choices: probe.choices.len() as u16,
+                        complete: probe.complete,
+                    })
+                }
+                _ => None,
+            },
         })
     }
     pub fn validate(&self, action: &Action, outcome: Outcome) -> Result<(), ErrorCode> {
         self.context.validate()?;
-        let ActionPayload::ReadPage {
-            origin,
-            message_limit,
-        } = &action.payload
-        else {
-            return Err(ErrorCode::Denied);
+        let (origin, message_limit) = match (&action.payload, &self.provider) {
+            (
+                ActionPayload::ReadPage {
+                    origin,
+                    message_limit,
+                },
+                None,
+            ) => (origin.as_str(), *message_limit),
+            (ActionPayload::InspectBrowserProvider { provider }, Some(observation))
+                if *provider == observation.provider =>
+            {
+                if observation.choices > 64
+                    || self.dom_revision.is_none()
+                    || self.blocks != 0
+                    || self.text_bytes != 0
+                    || self.title_bytes != 0
+                    || self.excluded_content
+                    || self.truncated == observation.complete
+                {
+                    return Err(ErrorCode::Malformed);
+                }
+                (provider.origin(), 1)
+            }
+            _ => return Err(ErrorCode::Denied),
         };
         let context = &self.context;
         if outcome != Outcome::Success
@@ -87,13 +127,14 @@ impl Observation {
             || self.tab > i32::MAX as u32
             || self.window == 0
             || self.window > i32::MAX as u32
-            || self.blocks > 16u16.min(*message_limit)
+            || self.blocks > 16u16.min(message_limit)
             || self.text_bytes > 4096
             || self.title_bytes > 256
             || self
                 .dom_revision
                 .is_some_and(|v| v == 0 || v > avesra_contracts::browser::MAX_SAFE_COUNTER)
-            || (self.blocks == 0
+            || (self.provider.is_none()
+                && self.blocks == 0
                 && (self.dom_revision.is_some()
                     || self.text_bytes != 0
                     || self.title_bytes != 0

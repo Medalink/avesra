@@ -2,7 +2,7 @@
 use crate::ErrorCode;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-pub const VERSION: u16 = 3;
+pub const VERSION: u16 = 4;
 pub const MAX_BUDGET_MS: u64 = 30_000;
 pub const MAX_REQUEST_BYTES: usize = 32_768;
 pub const MAX_DIALOGUE_PAIRS: usize = 3;
@@ -10,6 +10,9 @@ pub const MAX_DIALOGUE_BYTES: usize = 4096;
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Context {
+    /// Durable native claim order. Zero exists only in read-only legacy history.
+    #[serde(default)]
+    pub ordinal: u64,
     pub request: Uuid,
     pub turn: Uuid,
     pub turn_revision: Uuid,
@@ -35,7 +38,7 @@ impl Context {
         ]
         .iter()
         .any(Uuid::is_nil)
-            || [self.capture_epoch, self.action_epoch]
+            || [self.ordinal, self.capture_epoch, self.action_epoch]
                 .iter()
                 .any(|v| *v == 0 || *v > crate::browser::MAX_SAFE_COUNTER)
         {

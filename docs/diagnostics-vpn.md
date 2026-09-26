@@ -1,5 +1,52 @@
 # Bounded diagnostics and VPN observations
 
+## Configured connection contract
+
+The native Settings owner may inspect only the saved Cisco default host name and
+address from the bounded global preferences document. Discovery is read-only and
+does not grant an action. The visible owner confirms the exact observed host with
+Windows verification; a changed selected field invalidates that selection. No
+username, password, group, certificate decision or MFA response is imported.
+The inspected document is transient and zeroed; only the selected name/address
+and their canonical digest persist. Unrelated Cisco preference changes do not
+silently change the selected target or unnecessarily invalidate its identity.
+
+The closed accepted request `connect work vpn` selects the one current saved
+target. Plan 001 section 3 treats this existing configured connection as a routine
+within its explicit grant: no additional per-connection Windows verification is
+required. The prior blanket `ConnectVpn.needs_approval` flag conflicted with that
+rule and is removed only for this routine operation. Profile/grant management
+remains protected, MFA remains with Cisco, and configuration changes still require
+exact fresh approval. Dispatch binds the original task, step, target, payload,
+action/intent revision, actor, session and deadline. Cancellation, expiry, changed
+target or revoked permission prevents dispatch.
+
+Before first write the worker checks signed executable identity, current selected
+fields, current authority and actual Cisco state. An already connected different
+VPN is left intact. This installed surface has a numeric saved peer with explicit
+default TLS port 443; both bare numeric addresses and numeric socket addresses
+with port 443 normalize to that same peer. Hostnames, non-default ports and group
+URLs remain unsupported until their routing/identity contracts are implemented.
+The CLI receives the canonical numeric address as one argument,
+with closed stdin, no shell, bounded output, original action budget and no retry.
+
+After the first connect command, killing/reaping vpncli is not proof that the VPN
+agent cancelled connection. Authentication, MFA, banners/certificate decisions,
+timeout and routing loss remain needs-owner/uncertain observations. Avesra never
+answers prompts, records their content, disconnects, changes policy or retries a
+possibly issued connect automatically. Fresh actual VPN state is required before
+any later explicitly requested attempt. Final connected success requires the
+observed server address to match the selected numeric target. Paired Spark
+reachability is reported independently; VPN connection
+does not prove the control channel survived.
+
+Entry points: native saved-host inspection and protected selection; exact durable
+accepted resolver; original action and permission projection; existing
+effect worker; fixed Cisco stats/connect; task result projection.
+Model-generated scripts, arbitrary host input, credential forwarding, disconnect
+and policy changes are outside these entry points. The owner's no-tests override
+applies: source/static/build checks precede separately authorized direct proof.
+
 Plan 001 sections 9/12 and C7 govern this adapter. Diagnostics do not accept model
 command strings. Supported operations form a fixed native catalog with typed
 arguments, fixed output shapes, explicit units, size limits and original deadlines.
@@ -57,10 +104,18 @@ until reviewed. The only argument is `stats`, with no shell or inherited stdin,
 hidden console, fixed working directory, 16 KiB each stdout/stderr and five-second
 original budget. Readers drain concurrently and remain joined through actual exit.
 Failed termination retains worker ownership until the owned process is reaped.
+The five-/thirty-second operation budgets trigger cancellation; they cannot
+guarantee retirement if Windows itself cannot kill/reap the process. In that
+exceptional case the existing effect worker remains unavailable rather than
+detaching or admitting a replacement. Pipe readers use bounded nonblocking
+availability polling: inherited writer handles after actual child exit produce
+unavailable output, never an invented EOF or an indefinite reader join.
 Raw output is transient; only the final recognized state escapes. Any error line,
 stderr, nonzero exit, invalid encoding, unknown state or incomplete/oversized
 output is unavailable. Connected additionally requires the documented tunnel
-information section. No connect/disconnect/authentication command is implemented.
+information section and one numeric server address. This catalog entry only reads
+stats. The separate granted routine uses connect as specified above; disconnect
+and automated authentication remain absent.
 
 The native source uses Microsoft's documented [interface table ownership](https://learn.microsoft.com/en-us/windows/win32/api/netioapi/nf-netioapi-getiftable2),
 [CPU timing scope](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getsystemtimes)
@@ -119,9 +174,20 @@ bounded reachability of the already paired Spark; neither implies the other.
 The owner selects an existing VPN profile/control surface. A connection routine
 uses ordinary typed steps bound to that exact target, never imports credentials
 or edits corporate policy. Authentication, MFA, certificate warnings and banners
-requiring a human decision produce needs-input; Avesra must not answer them or
-persist their contents. The present background-work restriction prevents opening
-those interactive surfaces while the owner is using the PC.
+requiring a human decision produce needs-owner evidence; Avesra must not answer
+them or persist their contents. A postcommit incomplete connection remains an
+unknown effect in the ledger even when its report identifies an owner step.
+This implementation does not open interactive authentication surfaces on behalf
+of the owner. The owner continues in Cisco directly.
+
+The native accepted coordinator makes one independent three-second, certificate-
+pinned authenticated Status request to its already paired Spark after the VPN
+worker returns. The exact actor registration must match. A failed check means
+unavailable, not proof that VPN policy caused routing loss. The channel observation
+is owner/session scoped, displayed with its actual timestamp for up to one minute,
+and is separate from the durable Cisco result. No reconnect or connection replay
+occurs on failure. Reopening Settings can show this observation after connectivity
+returns; original uncertain action history remains durable.
 
 Any configuration-changing proposal states exact target/parameters, expected
 effect, disruption and rollback. Its fresh approval is bound to the actual task,
@@ -134,7 +200,14 @@ uncertainty and does not retry a possibly completed connection or change.
 ## Verification boundary
 
 The inventory and direct `stats` observation establish a usable installed read
-surface only. Product integration, grounded slow-download diagnosis, exact
+surface only. The native saved-target/grant/connect source path now exists, but
+its successful real connection/MFA remains unexecuted. Grounded slow-download diagnosis, exact
 approval handling, successful VPN connection/MFA/routing-loss recovery and A18/A19
 remain separately required. Use source review, static/build checks and direct
 product observations under the owner's no-tests/no-harness instruction.
+
+Read-only inventory repeated on 2026-09-26 confirmed the same size/version/hash
+and valid signature. The 746-byte global preferences document has one nonempty
+default name and one numeric IPv4 peer with explicit port 443. No actual values
+or other preference fields were printed or retained. This inspection did not
+invoke connect, authentication, routing changes or credential operations.

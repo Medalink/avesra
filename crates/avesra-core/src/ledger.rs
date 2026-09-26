@@ -78,7 +78,10 @@ impl Store {
         if action.step_id != step {
             return Err(ErrorCode::Malformed);
         }
-        Ok(matches!(action.payload, ActionPayload::ReadPage { .. }))
+        Ok(matches!(
+            action.payload,
+            ActionPayload::ReadPage { .. } | ActionPayload::InspectBrowserProvider { .. }
+        ))
     }
     /// Historical evidence only. Never authorizes a new effect or claims that a
     /// process/window is still present. Use the existing ledger owner.

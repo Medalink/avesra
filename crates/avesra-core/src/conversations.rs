@@ -9,7 +9,7 @@ use uuid::Uuid;
 mod planner;
 #[path = "conversation_tasks.rs"]
 mod tasks;
-pub(crate) use planner::{PLAN_SCHEMA, REPLY_SCHEMA};
+pub(crate) use planner::{PLAN_SCHEMA, REPLY_SCHEMA, SEQUENCE_SCHEMA};
 pub use planner::{
     PlannerAuthority, PlannerCancellation, PlannerClaim, PlannerRequest, PlannerRetirement,
     PlannerSummary, StoredReply,

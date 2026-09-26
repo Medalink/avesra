@@ -172,7 +172,10 @@ impl<'a> ReadExecution<'a> {
         let admitted_ms = now_ms()?;
         let started = Instant::now();
         let permit = store.claim_action(step, session, admitted_ms)?;
-        if !matches!(permit.action.payload, ActionPayload::ReadPage { .. }) {
+        if !matches!(
+            permit.action.payload,
+            ActionPayload::ReadPage { .. } | ActionPayload::InspectBrowserProvider { .. }
+        ) {
             store.finish_action(permit.dispatch_id, session, Outcome::Unsupported, now_ms()?)?;
             return Err(ErrorCode::Unsupported);
         }

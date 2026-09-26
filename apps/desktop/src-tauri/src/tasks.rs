@@ -22,6 +22,8 @@ use uuid::Uuid;
 
 #[derive(Default)]
 pub struct State {
+    vpn_channel: Mutex<Option<(Uuid, connection::SessionIdentity, Instant, VpnChannel)>>,
+    vpn: Mutex<Option<(Uuid, Instant, avesra_core::vpn::Profile)>>,
     panel: Mutex<Option<Panel>>,
     reader: Arc<tokio::sync::Mutex<()>>,
     management: Arc<tokio::sync::Mutex<()>>,
@@ -29,6 +31,13 @@ pub struct State {
     accepted: Arc<tokio::sync::Mutex<()>>,
     page: Mutex<Option<PageResult>>,
     page_timer: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
+}
+#[derive(Clone, Serialize)]
+pub struct VpnChannel {
+    step: Uuid,
+    dispatch: Uuid,
+    authenticated: bool,
+    checked_ms: u64,
 }
 struct PageResult {
     actor: Uuid,
@@ -48,6 +57,7 @@ pub struct PageView {
     truncated: bool,
     excluded_content: bool,
     remaining_ms: u64,
+    provider: Option<avesra_contracts::browser::provider::Probe>,
 }
 struct Panel {
     id: Uuid,
@@ -58,6 +68,9 @@ struct Panel {
 }
 impl State {
     pub fn invalidate(&self) {
+        if let Ok(mut vpn) = self.vpn.lock() {
+            *vpn = None;
+        }
         if let Ok(mut page) = self.page.lock() {
             *page = None;
         }
@@ -194,6 +207,7 @@ fn publish(
 }
 #[derive(Serialize)]
 pub struct Status {
+    vpn_channel: Option<VpnChannel>,
     snapshot: ActionSnapshot,
     outputs: Vec<avesra_windows::AudioDevice>,
     scopes: Vec<avesra_core::browser_scopes::Grant>,
@@ -284,6 +298,23 @@ pub async fn action_status(
             .take(64)
             .collect();
         Ok(Status {
+            vpn_channel: {
+                let state = app.state::<Runtime>();
+                let local = state.local.lock().map_err(|_| "Local state unavailable")?;
+                state
+                    .tasks
+                    .vpn_channel
+                    .lock()
+                    .map_err(|_| "VPN observation unavailable")?
+                    .as_ref()
+                    .filter(|(owner, session, at, _)| {
+                        *owner == actor
+                            && at.elapsed() < Duration::from_secs(60)
+                            && session.action_epoch == local.action_epoch
+                            && !local.locked
+                    })
+                    .map(|(_, _, _, value)| value.clone())
+            },
             snapshot: publish(&app, panel, actor, snapshot)?,
             outputs,
             scopes,
@@ -482,6 +513,71 @@ pub async fn grant_diagnostic_action(
     visible(&window)?;
     current(&app, panel)?;
     grant(app, panel, Selection::Diagnostic { catalog }).await
+}
+#[tauri::command]
+pub async fn inspect_vpn_profile(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    panel: Uuid,
+) -> Result<avesra_core::vpn::Profile, String> {
+    visible(&window)?;
+    current(&app, panel)?;
+    let guard = app
+        .state::<Runtime>()
+        .tasks
+        .reader
+        .clone()
+        .try_lock_owned()
+        .map_err(|_| "Action reader is busy")?;
+    tauri::async_runtime::spawn(async move{
+        let _guard=guard;
+        let actor=crate::owner::current_actor(&app).await?;
+        current(&app,panel)?;
+        let profile=tokio::task::spawn_blocking(move||avesra_windows::vpn::discover(actor)).await.map_err(|_|"VPN reader stopped")?.map_err(|_|"Supported saved Cisco default unavailable; select an existing numeric peer using Cisco first")?;
+        current(&app,panel)?;
+        *app.state::<Runtime>().tasks.vpn.lock().map_err(|_|"VPN selection unavailable")?=Some((panel,Instant::now(),profile.clone()));
+        Ok(profile)
+    }).await.map_err(|_|"VPN inspection coordinator stopped")?
+}
+#[tauri::command]
+pub async fn grant_vpn_action(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    panel: Uuid,
+    id: Uuid,
+    revision: Uuid,
+) -> Result<ActionSnapshot, String> {
+    visible(&window)?;
+    current(&app, panel)?;
+    let profile = {
+        let state = app.state::<Runtime>();
+        let mut saved = state
+            .tasks
+            .vpn
+            .lock()
+            .map_err(|_| "VPN selection unavailable")?;
+        let (observed, started, profile) = saved
+            .as_ref()
+            .ok_or("Inspect the current saved Cisco target first")?;
+        if *observed != panel
+            || started.elapsed() >= Duration::from_secs(30)
+            || profile.id != id
+            || profile.revision != revision
+        {
+            return Err("VPN selection expired; inspect it again".into());
+        }
+        let profile = profile.clone();
+        *saved = None;
+        profile
+    };
+    grant(
+        app,
+        panel,
+        Selection::Vpn {
+            profile: Box::new(profile),
+        },
+    )
+    .await
 }
 #[tauri::command]
 pub async fn bind_prompt_project(
@@ -808,6 +904,10 @@ async fn execute_accepted(
     let _ = project(app, context.target.actor).await;
     check().map_err(|_| "Task queued but context changed; inspect task status")?;
     let state = app.state::<Runtime>();
+    let vpn = matches!(
+        &target,
+        avesra_core::action_permissions::TaskTarget::Vpn { .. }
+    );
     let consumer =
         if let avesra_core::action_permissions::TaskTarget::BrowserRead { scope } = target {
             let expected = context.clone();
@@ -860,6 +960,23 @@ async fn execute_accepted(
                 let receipt=value.map_err(|_| "Effect reader stopped")?
                     .map_err(|_| "Effect owner stopped")?
                     .map_err(|e| format!("Effect unresolved ({e:?}); inspect task status"))?;
+                if vpn {
+                    let directory=app.path().app_data_dir().map_err(|_|"Owner directory unavailable")?;
+                    let paired=crate::planner::paired_owner(&directory,&context.binding,context.session);
+                    let authenticated=if let Ok(pairing)=paired {
+                        let request=actors::Request{version:actors::VERSION,request:Uuid::new_v4(),attempt:Uuid::new_v4(),session:context.session.id,action_epoch:context.session.action_epoch,command:actors::Command::Status};
+                        matches!(tokio::time::timeout(Duration::from_secs(3),connection::actor_operation(&pairing,&request)).await,Ok(Ok(status)) if status.binding.as_ref()==Some(&context.binding))
+                    }else{false};
+                    let checked_ms=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|_|"Clock unavailable")?.as_millis() as u64;
+                    let view=VpnChannel{step,dispatch:receipt.dispatch_id,authenticated,checked_ms};
+                    let state=app.state::<Runtime>();
+                    let local=state.local.lock().map_err(|_|"Local state unavailable")?;
+                    if !local.locked && local.action_epoch==context.session.action_epoch {
+                        *state.tasks.vpn_channel.lock().map_err(|_|"VPN observation unavailable")?=Some((context.target.actor,context.session,Instant::now(),view.clone()));
+                        let _=app.emit("vpn-channel-observation",view);
+                        if !authenticated {let _=app.emit("runtime-error","VPN observation finished, but the paired Spark could not be authenticated within 3 seconds. The connection is not retried; inspect Cisco and network routing without changing corporate policy.");}
+                    }
+                }
                 return Ok(AcceptedResult::Action(receipt));
             }
             _ = tokio::time::sleep(Duration::from_millis(25)) => {
@@ -888,11 +1005,15 @@ fn retain_page(
     {
         return Err("Page result source changed".into());
     }
-    let (blocks, truncated, excluded_content) = match reply.outcome {
-        Outcome::Excerpt { excerpt } => {
-            (excerpt.blocks, excerpt.truncated, excerpt.excluded_content)
-        }
-        Outcome::Empty => (Vec::new(), false, false),
+    let (blocks, truncated, excluded_content, provider) = match reply.outcome {
+        Outcome::Excerpt { excerpt } => (
+            excerpt.blocks,
+            excerpt.truncated,
+            excerpt.excluded_content,
+            None,
+        ),
+        Outcome::Empty => (Vec::new(), false, false, None),
+        Outcome::ProviderInspection { probe } => (Vec::new(), !probe.complete, false, Some(probe)),
         _ => return Err("Page observation incomplete".into()),
     };
     // Only the synchronous actual borrowed consumer calls this function. Its
@@ -932,6 +1053,7 @@ fn retain_page(
             truncated,
             excluded_content,
             remaining_ms: 60_000,
+            provider,
         },
     });
     drop(page);

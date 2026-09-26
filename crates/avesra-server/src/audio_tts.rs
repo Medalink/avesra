@@ -4,7 +4,10 @@ use avesra_contracts::voice::VoiceIdentity;
 use base64::Engine;
 use serde::Deserialize;
 use std::{
-    sync::{Arc, atomic::Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
@@ -99,6 +102,40 @@ pub struct TtsStream {
     failed: bool,
     complete: bool,
     voice: VoiceIdentity,
+    retirement: Retirement,
+}
+// The source roster may compact only after actual private retirement. A failed
+// cancellation intentionally leaves a nonzero uncertainty count, without leaking
+// the stream/permit or treating its bounded cleanup wait as terminal evidence.
+#[derive(Default)]
+struct Retirement {
+    counter: Option<Arc<AtomicUsize>>,
+    retired: bool,
+}
+impl Retirement {
+    fn new(counter: Option<Arc<AtomicUsize>>) -> Result<Self, ErrorCode> {
+        if let Some(value) = &counter {
+            value
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_add(1))
+                .map_err(|_| ErrorCode::TooLarge)?;
+        }
+        Ok(Self {
+            counter,
+            retired: true,
+        })
+    }
+    fn confirm(&mut self) {
+        self.retired = true;
+    }
+}
+impl Drop for Retirement {
+    fn drop(&mut self) {
+        if self.retired
+            && let Some(value) = self.counter.take()
+        {
+            value.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
 }
 impl AudioClient {
     pub async fn synthesize<F, Fut>(
@@ -107,12 +144,14 @@ impl AudioClient {
         utterance_id: Uuid,
         voice: &VoiceIdentity,
         text: &str,
+        retirement: Option<Arc<AtomicUsize>>,
         authorize: F,
     ) -> Result<TtsStream, ErrorCode>
     where
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = Result<(), ErrorCode>>,
     {
+        let retirement = Retirement::new(retirement)?;
         voice.validate()?;
         if utterance_id.is_nil() || epoch != self.epoch.load(Ordering::SeqCst) {
             return Err(ErrorCode::Stale);
@@ -173,6 +212,7 @@ impl AudioClient {
             failed: false,
             complete: false,
             voice: voice.clone(),
+            retirement,
         };
         tokio::time::timeout(Duration::from_secs(3), async {
             let mut socket = UnixStream::connect(&self.socket)
@@ -186,6 +226,7 @@ impl AudioClient {
             authorize().await?;
             stream.current()?;
             stream.sent = true;
+            stream.retirement.retired = false;
             socket
                 .write_u32(encoded.len() as u32)
                 .await
@@ -318,6 +359,8 @@ impl TtsStream {
                 self.complete = true;
                 self.socket.take();
                 self.permit.take();
+                self.retirement.confirm();
+                self.retirement = Retirement::default();
                 SpeechEvent::End {
                     utterance_id: self.utterance_id,
                     session_id: session,
@@ -344,6 +387,7 @@ impl Drop for TtsStream {
         let client = self.client.clone();
         let request = self.request_id;
         let remaining = Duration::from_secs(31).saturating_sub(self.started.elapsed());
+        let mut retirement = std::mem::take(&mut self.retirement);
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             runtime.spawn(async move {
                 let _permit = permit;
@@ -351,6 +395,8 @@ impl Drop for TtsStream {
                 // completed kill/reap; mere socket closure never releases this permit.
                 if client.cancel(request).await.is_err() {
                     tokio::time::sleep(remaining).await;
+                } else {
+                    retirement.confirm();
                 }
             });
         } else {

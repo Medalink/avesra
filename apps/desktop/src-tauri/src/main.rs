@@ -938,6 +938,8 @@ fn main() {
             tasks::grant_app_action,
             tasks::grant_volume_action,
             tasks::grant_diagnostic_action,
+            tasks::inspect_vpn_profile,
+            tasks::grant_vpn_action,
             tasks::grant_browser_read_action,
             tasks::change_private_memory,
             tasks::inspect_prompt_surface,

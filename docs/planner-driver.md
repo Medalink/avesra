@@ -2,9 +2,16 @@
 
 ## Current conversation context
 
-Planner wire version 3 adds `dialogue`, a chronological list of at most three
+Current planner wire version4 retains the bounded dialogue below and adds the
+durable native claim ordinal described in [planner ingress](planner-ingress.md).
+The immutable ordinal is echoed through reply, cancellation and speech. Schema17
+introduces its protected singleton counter; the integrated store uses schema19
+including VPN/provider compatibility markers. Legacy v1–v3 history stays readable
+without gaining a live claim or output handle. No old wire version is accepted.
+
+Planner wire version 3 introduced `dialogue`, a chronological list of at most three
 completed user/assistant pairs, totaling at most 4096 UTF-8 bytes of plain text.
-An omitted list is empty; version 1/2 requests are not admitted on the wire.
+An omitted list is empty; version 1/2/3 requests are not admitted on the wire.
 Only the actual native ledger claim worker selects these pairs, from at most
 16 preceding accepted records in the same actor/device/control session. It
 revalidates each original record, plan, reply and exact registration binding,
