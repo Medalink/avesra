@@ -57,6 +57,25 @@
   onMount(() => draft.mount());
   const saving = $derived(draft.blocked);
   const update = (patch: Parameters<PreferenceDraft["edit"]>[0]) => draft.edit(patch);
+  const profiles: { id: Settings["profile"]; name: string; description: string }[] = [
+    { id: "single-spark", name: "Single Spark", description: "All inference on Spark; this PC handles voice, screen and control." },
+    { id: "accelerated", name: "Accelerated", description: "Client inference is unavailable until capability and performance are verified." },
+    { id: "gaming", name: "Gaming", description: "Spark inference; optional passive app observation is deferred." },
+  ];
+  const profileTabStop = $derived(draft.settings?.profile === "gaming" ? "gaming" : "single-spark");
+  function navigateProfile(event: KeyboardEvent) {
+    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)
+      || event.altKey || event.ctrlKey || event.metaKey) return;
+    const current = event.currentTarget;
+    if (!(current instanceof HTMLButtonElement)) return;
+    const cards = Array.from(current.parentElement?.querySelectorAll<HTMLButtonElement>('button[role="radio"]:not(:disabled)') ?? []);
+    const index = cards.indexOf(current);
+    if (index < 0 || !cards.length) return;
+    const target = event.key === "Home" ? 0 : event.key === "End" ? cards.length - 1
+      : (index + (["ArrowLeft", "ArrowUp"].includes(event.key) ? -1 : 1) + cards.length) % cards.length;
+    event.preventDefault();
+    cards[target].focus(); cards[target].click();
+  }
   const voice = $derived(personalVoiceView(runtime));
   const spark = $derived(sparkConnection(runtime));
   function restoredSection() {
@@ -539,23 +558,29 @@
               </div>{/each}
           </div>
         {:else if section === "profiles"}
-          <section class="section">
+          <section class="flex flex-col gap-2.5">
             <span class="av-kicker">Profiles</span>
-            <div class="grid grid-cols-3 gap-2">
-              {#each [["single-spark", "Single Spark", "All inference on Spark."], ["accelerated", "Accelerated", "Qualified client lanes."], ["gaming", "Gaming", "Spark inference; passive app learning deferred."]] as profile}<button
-                  class="flex flex-col gap-2 p-3 text-left ring-1 ring-inset disabled:opacity-45 {s?.profile ===
-                  profile[0]
+            <div class="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Profiles" aria-describedby="profile-selection-help">
+              {#each profiles as profile}<button
+                  type="button"
+                  role="radio"
+                  aria-checked={s?.profile === profile.id}
+                  tabindex={profileTabStop === profile.id ? 0 : -1}
+                  class="flex cursor-pointer flex-col gap-1.5 p-3 text-left ring-1 ring-inset transition-colors focus-visible:outline-1 focus-visible:outline-offset-2 focus-visible:outline-av-400 disabled:cursor-default disabled:opacity-45 {s?.profile === profile.id
                     ? 'bg-white/[0.06] ring-av-500 shadow-[inset_0_-2px_0_var(--color-av-500)]'
-                    : 'bg-white/[0.02] ring-white/10'}"
-                  disabled={!s || saving || profile[0] === "accelerated"}
-                  aria-pressed={s?.profile === profile[0]}
-                  onclick={() =>
-                    update({ profile: profile[0] as Settings["profile"] })}
-                  ><strong class="text-[12.5px] font-medium"
-                    >{profile[1]}</strong
-                  ><span class="av-hint">{profile[2]}</span></button
-                >{/each}
+                    : 'bg-white/[0.02] ring-white/[0.08] enabled:hover:bg-white/[0.04]'}"
+                  disabled={!s || saving || profile.id === "accelerated"}
+                  onkeydown={navigateProfile}
+                  onclick={() => update({ profile: profile.id })}
+                >
+                  <span class="flex items-center justify-between gap-2">
+                    <span class="truncate text-[13px] font-medium text-zinc-50">{profile.name}</span>
+                    <span class="av-chip shrink-0 {runtime?.settings.profile === profile.id ? 'bg-av-500/10 text-av-300 ring-av-500/40' : profile.id === 'accelerated' ? 'border border-dashed border-white/25 text-zinc-400 ring-0' : 'text-zinc-200 ring-white/20'}">{runtime?.settings.profile === profile.id ? "Active" : profile.id === "accelerated" ? "Unavailable" : "Available"}</span>
+                  </span>
+                  <span class="text-[11.5px] leading-4 text-zinc-400">{profile.description}</span>
+                </button>{/each}
             </div>
+            <p id="profile-selection-help" class="av-hint">{draft.changes.profile ? "Your profile selection is unsaved. Save changes to apply it; Active shows the profile currently in use." : "Select a profile, then Save changes to apply it. Active shows the profile currently in use."}</p>
             <p class="av-hint">
               Single Spark and Gaming preserve your current conversation. Gaming
               stops optional passive app observation; explicit teaching remains available.
