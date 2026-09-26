@@ -111,3 +111,38 @@ Portrait-domain timing owner when integrated, with failed/withdrawn/abandoned
 outcomes. Until then, a measured IPC round-trip is not separate native phase
 evidence. No source identity, ring, digest, parameter, vector, word or feature may
 enter those observations. Capture/extraction have no implementation in this slice.
+
+## People card presentation and source disclosure
+
+The authoritative Settings mock supplies the 148px card avatar, 240-unit viewbox,
+44/108-unit guide circles, 192 contour points and 96 radial lines. The renderer
+periodically interpolates the native 24 quantized shape values; those display
+points are not 192 measured features. No synthetic shape appears when unavailable.
+The stored ring and optional portrait fields are not rendered as new geometry.
+
+The nested avatar response has explicit version 1 and an optional candidate
+reference (ID/revision) taken only from the validated immutable native source.
+Missing/unsupported response versions are unavailable, never inferred from a
+selected or first candidate. The six phrase markers and source metadata require
+that reference to match an actual six-segment summary. Independent Personal
+learning has no phrase markers. Neither candidate references nor parameters enter
+metrics. This optional presentation response does not change the vault format.
+
+The card shows current owner display name only for a matching actual owner actor.
+It never fabricates enrollment dates, similarity, held-out success, live voice
+matching, tempo or waveform activity. Signal space rests empty and match is
+unavailable until a genuine correlated observation exists. Test my voice opens
+existing explicit protected diagnostics; Re-enroll opens optional advanced tools.
+Neither button starts capture. Existing owner/registration, recording, selection,
+delete and audio controls retain their original authorization. Lock, hidden page,
+owner/action/device context changes clear avatar data and reject old read results.
+The speaker_candidates response, strict frontend decoder, renderer and Enrollment
+host are the affected entry points; normal startup/capture and Settings shell are
+unchanged. Static review/checks follow the owner's no-tests instruction. Visual
+runtime comparison remains separate evidence, not a claim of this source change.
+
+The native settings-hidden event clears cached source/owner data immediately;
+reads resume only after ordinary visibility/focus. A capture-only epoch transition
+clears avatar presentation but retains the actual diagnostic component/source
+through its own recording. Owner/action/device/lock/hide transitions still retire
+that diagnostic. Owner-name editing remains inside advanced tools.

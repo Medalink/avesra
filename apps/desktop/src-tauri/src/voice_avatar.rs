@@ -61,7 +61,25 @@ impl Drop for Vault {
     }
 }
 #[derive(Serialize)]
+struct CandidateReference {
+    id: Uuid,
+    revision: Uuid,
+}
+impl Source {
+    fn candidate(&self) -> Option<CandidateReference> {
+        match self {
+            Self::Candidate { id, revision } => Some(CandidateReference {
+                id: *id,
+                revision: *revision,
+            }),
+            Self::Personal { .. } => None,
+        }
+    }
+}
+#[derive(Serialize)]
 pub(crate) struct View {
+    version: u16,
+    candidate: Option<CandidateReference>,
     state: &'static str,
     parameters: Option<Parameters>,
     reason: Option<String>,
@@ -69,13 +87,15 @@ pub(crate) struct View {
 impl View {
     pub(crate) fn unavailable(reason: String) -> Self {
         Self {
+            version: 1,
+            candidate: None,
             state: "unavailable",
             parameters: None,
             reason: Some(reason),
         }
     }
     fn missing() -> Self {
-        Self { state:"source_unavailable", parameters:None, reason:Some("Your avatar will be available after Avesra has saved real voice observations for this owner and microphone. You can keep talking normally.".into()) }
+        Self { version: 1, candidate: None, state:"source_unavailable", parameters:None, reason:Some("Your avatar will be available after Avesra has saved real voice observations for this owner and microphone. You can keep talking normally.".into()) }
     }
 }
 fn hash(bytes: &[u8]) -> String {
@@ -308,6 +328,8 @@ pub(crate) fn current(
         }
         authorize()?;
         return Ok(View {
+            version: 1,
+            candidate: record.source.candidate(),
             state: "ready_without_portrait",
             parameters: Some(record.parameters.clone()),
             reason: None,
@@ -346,6 +368,7 @@ pub(crate) fn current(
         vault.actors[index].ring.clone(),
         vault.actors[index].rotation,
     )?;
+    let candidate = source.source.candidate();
     vault.actors[index].record = Some(Record {
         owner_revision: source.revision,
         source: source.source,
@@ -364,6 +387,8 @@ pub(crate) fn current(
     })?;
     authorize()?;
     Ok(View {
+        version: 1,
+        candidate,
         state: "ready_without_portrait",
         parameters: Some(parameters),
         reason: None,
