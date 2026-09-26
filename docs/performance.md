@@ -1,3 +1,35 @@
+## Performance presentation contract
+
+The Performance content follows the authoritative `design/mockups/SettingsMemory.dc.html`
+import of `Settings.dc.html`: compact status strip, three equal summary cards,
+36-pixel stage rows with Stage / Model · device / p50 / p95 / p99 / max / err,
+and a concise footer. Existing shared design tokens supply typography and surfaces.
+The mock's simulated data, passing gates, attribution and comparison result are
+never product measurements. The Settings shell is outside this content change.
+
+The first card displays only successful, retained PC `endpoint_response_submission`
+attempts from the existing explicit accepted-trace read, only when every endpoint
+record belongs to one actual process and one complete model/image/config identity.
+Missing identity or multiple cohorts suppresses the card percentiles and gives a
+reason and source count; no current-build/profile identity is inferred. Its label is therefore
+“Endpoint → first submitted speech”, not speech-end/useful/audible reply. The
+quiet tail is excluded; repeated attempts are not unique turns. Counts, failed or
+missing outcomes, bounded query coverage and observer loss remain visible in the
+trace details. There is no new protected read, automatic inference or Hello request.
+The projection clears with its native view context. Verified-action and verified-
+completion endpoint cards remain unavailable until those exact measurements exist.
+No sample count is a release gate; all displayed tails are descriptive.
+
+The local stage table retains actual preview/greeting/activity summaries, including
+failure/abandonment durations and all original outcome/missing counts. This source
+has no model deployment identity: the source column says unavailable model / PC
+observer rather than borrowing current configuration. Empty, loading and error
+states are distinct. App timing rows retain separate outcome and frontend page-
+clock cohorts; no failed-fast attempt is merged with successful latency. Detailed
+scope, retention, registration/loss, diagnostic mode and exports remain accessible
+in disclosures. The real saved-comparison flow remains in accepted-trace details;
+there is no simulated Compare button. No runtime or pixel-parity proof is implied.
+
 # App timing foundation
 
 Separate installation-scoped startup, UI and history-worker timings now use bounded durable storage and explicit local export; see [app-timing.md](app-timing.md). Coverage is partial and distinct from the voice aggregates below.

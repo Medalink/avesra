@@ -1,4 +1,5 @@
 <script lang="ts">
+  import PerformanceTable from "./PerformanceTable.svelte";
   import { timingAvailability } from "./app-timing";
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
@@ -21,9 +22,10 @@
     return [...grouped].map(([key, rows]) => {
       const values = rows.map(row => row.duration_us / 1000).sort((a,b) => a-b);
       const percentile = (p: number) => values[Math.ceil(values.length * p) - 1];
-      return { key, outcome: rows[0].outcome, count: rows.length, complete: rows.filter(r => r.outcome === "complete").length, p50: percentile(.5), p95: percentile(.95), p99: percentile(.99), max: values[values.length-1] };
+      return { key, row: rows[0], outcome: rows[0].outcome, count: rows.length, complete: rows.filter(r => r.outcome === "complete").length, p50: percentile(.5), p95: percentile(.95), p99: percentile(.99), max: values[values.length-1] };
     });
   });
+  const tableRows = $derived(groups.map(group => ({ key: group.key, stage: `${group.row.operation.name ?? group.row.operation.kind} / ${group.row.stage} / ${group.outcome}`.replaceAll("_", " "), source: `${group.row.origin.kind === "frontend" ? `UI ${group.row.origin.window ?? "window"}` : "Native"} · this PC`, detail: `${group.key}; ${group.count} attempts; separate outcome and page-clock cohort`, p50: group.p50, p95: group.p95, p99: group.p99, max: group.max, errors: group.outcome === "failed" ? String(group.count) : "0" })));
   async function read(exportFile = false) {
     if (!native || !runtime || runtime.locked || busy) return;
     busy = true; message = ""; frontend = timingAvailability(); const token = ++generation;
@@ -40,18 +42,24 @@
   });
 </script>
 <section class="section">
-  <span class="av-kicker">App timings</span>
-  <p class="av-hint">Local measurements for this Windows user's installation. These are separate from accepted conversations and do not prove work on Spark.</p>
-  <div class="flex gap-2"><button class="av-btn av-btn-ghost av-btn-sm" disabled={!native || busy || !runtime || runtime.locked} onclick={() => read()}>Read app timings</button><button class="av-btn av-btn-ghost av-btn-sm" disabled={!native || busy || !runtime || runtime.locked} onclick={() => read(true)}>Export retained timings</button></div>
-  <p class="av-hint">This page timing collector: {frontend.registration}. {frontend.pending} buffered | {frontend.unreported_loss} unreported losses. A failed page registration requires reopening this app window; no automatic observer retry occurs.</p>
-  {#if snapshot}
-    <p class="av-hint">{snapshot.records.length} / {snapshot.capacity} retained | {snapshot.retention_days} days maximum | {snapshot.evicted} evicted | {snapshot.native_observer_loss} native observer losses | {snapshot.frontend_reported_loss} frontend-reported losses.</p>
-    <p class="av-hint">Rows below show this native process only, separating frontend page clocks. The export also contains retained older processes. Exact build fingerprint and profile identity are unavailable; package version alone cannot establish comparable builds.</p>
-    {#if groups.length === 0}<p class="av-hint">No retained timings from this process.</p>{/if}
-    {#each groups as group (group.key)}
-      <div class="av-card p-3"><p class="av-hint break-all">{group.key.replaceAll("_", " ")}</p><p class="font-mono text-xs">p50 {group.p50.toFixed(1)} | p95 {group.p95.toFixed(1)} | p99 {group.p99.toFixed(1)} | max {group.max.toFixed(1)} ms</p><p class="av-hint">{group.count} measured attempts | {group.complete} complete | {group.count-group.complete} other outcomes{group.count<30 ? " | provisional" : ""}</p></div>
-    {/each}
-  {/if}
-  <p class="av-hint">Each outcome has separate percentiles. Failure and abandonment timings are time to that outcome, not successful latency. UI waits are not worker retirement; next-frame observations are not physical display presentation. All percentiles are descriptive retained-sample summaries, including p95/p99; sample count never certifies a tail-latency target. Internal timing coverage remains partial.</p>
+  <div class="flex items-center justify-between gap-2">
+    <span class="av-kicker">App timings</span>
+    <div class="flex gap-2"><button class="av-btn av-btn-ghost av-btn-sm" disabled={!native || busy || !runtime || runtime.locked} onclick={() => read()}>{busy ? "Reading…" : "Read timings"}</button><button class="av-btn av-btn-secondary av-btn-sm" disabled={!native || busy || !runtime || runtime.locked} onclick={() => read(true)}>Export</button></div>
+  </div>
+  <p class="av-hint">This Windows user's installation · current native process · each outcome and page clock kept separate. These measurements do not prove work on Spark.</p>
+  <PerformanceTable rows={tableRows} label="App operation timings" empty={busy ? "Reading retained app timings…" : snapshot ? "No retained timings from this process." : "Read timings to inspect retained app observations."} />
+  <p class="av-hint">Successful latency and time to failure remain separate. Descriptive p95/p99 values do not certify release targets.</p>
+  <details>
+    <summary class="cursor-pointer text-[12px] text-zinc-400">Cohorts, collection &amp; retention</summary>
+    <div class="mt-2 flex flex-col gap-2">
+      <p class="av-hint">This page timing collector: {frontend.registration}. {frontend.pending} buffered | {frontend.unreported_loss} unreported losses. A failed page registration requires reopening this app window; no automatic observer retry occurs.</p>
+      {#if snapshot}
+        <p class="av-hint">{snapshot.records.length} / {snapshot.capacity} retained | {snapshot.retention_days} days maximum | {snapshot.evicted} evicted | {snapshot.native_observer_loss} native observer losses | {snapshot.frontend_reported_loss} frontend-reported losses.</p>
+        <p class="av-hint">The export includes retained older processes. Exact build fingerprint and profile identity are unavailable; package version alone cannot establish comparable builds. Model attribution is unavailable for these local operations; the table identifies their observer origin.</p>
+        {#each groups as group (group.key)}<p class="av-hint break-all">{group.key.replaceAll("_", " ")}: {group.count} {group.outcome} attempts{group.count < 30 ? " | provisional" : ""}.</p>{/each}
+      {/if}
+      <p class="av-hint">Each outcome has separate percentiles. Failure and abandonment timings are time to that outcome, not successful latency. UI waits are not worker retirement; next-frame observations are not physical display presentation. All percentiles are descriptive retained-sample summaries; sample count never certifies a tail-latency target. Internal timing coverage remains partial.</p>
+    </div>
+  </details>
   {#if message}<p class="av-hint break-all" role="status">{message}</p>{/if}
 </section>

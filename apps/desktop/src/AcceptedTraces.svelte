@@ -2,9 +2,11 @@
   import EngineReadings from "./EngineReadings.svelte";
   import SavedComparisons from "./SavedComparisons.svelte";
   import ResourceReadings from "./ResourceReadings.svelte";
-  import type { ComponentProps } from "svelte";
+  import { onMount, type ComponentProps } from "svelte";
+  import { listen } from "@tauri-apps/api/event";
   import { command, native, type Runtime } from "./runtime";
-  let { runtime }: { runtime: Runtime | null } = $props();
+  type Endpoint = { p50: number | null; p95: number | null; measured: number; total: number; failed: number; truncated: boolean; sourceCount: number; reason: string | null };
+  let { runtime, onEndpoint }: { runtime: Runtime | null; onEndpoint?: (value: Endpoint | null) => void } = $props();
   type Span = { id:string; link:{turn:string;operation:string;parent:string|null}; host:string; process:string; stage:string; outcome:string; error:string|null; duration_us:number; queue_us:number|null; retries:number; deployment:{model:string|null;image:string|null;config:string|null}; analysis?:{request:string;receipts:{worker:string;host:string;process:string;lane:string;model_revision:string;duration_us:number}[]}|null };
   type Snapshot = { records:Span[]; trace_days:number; observer_loss:number; evicted:number; collector_starts:number; truncated:boolean; resources:ComponentProps<typeof ResourceReadings>["value"]; engine:ComponentProps<typeof EngineReadings>["value"] };
   type View = { local:Snapshot; controller:Snapshot|null; controller_error:string|null };
@@ -14,10 +16,27 @@
   let message = $state("");
   let days = $state(7);
   let generation=0;
+  let mounted = false;
+  function clear() { generation++; view = null; selected = ""; message = ""; onEndpoint?.(null); }
+  onMount(() => {
+    mounted = true; let stop: (() => void) | undefined;
+    if (native) void listen("settings-hidden", clear).then(value => { if (mounted) stop = value; else value(); });
+    return () => { mounted = false; clear(); stop?.(); };
+  });
   let traceContext = "";
   $effect(() => {
     const next = JSON.stringify([runtime?.locked, runtime?.connected, runtime?.action_epoch, runtime?.settings.owner_name?.actor]);
     if (next !== traceContext) { traceContext = next; generation++; view = null; selected = ""; message = ""; }
+  });
+  $effect(() => {
+    if (!view) { onEndpoint?.(null); return; }
+    const attempts = view.local.records.filter(span => span.stage === "endpoint_response_submission");
+    const sources = new Set(attempts.map(span => JSON.stringify([span.process, span.deployment.model, span.deployment.image, span.deployment.config])));
+    const missingIdentity = attempts.some(span => !span.process || !span.deployment.model || !span.deployment.image || !span.deployment.config);
+    const reason = attempts.length === 0 ? "No retained endpoint attempts" : sources.size !== 1 ? "Multiple retained process/deployment cohorts" : missingIdentity ? "Deployment identity unavailable" : null;
+    const values = reason === null ? attempts.filter(span => span.outcome === "complete").map(span => span.duration_us / 1000).sort((a,b) => a-b) : [];
+    const percentile = (p:number) => values.length ? values[Math.ceil(values.length*p)-1] : null;
+    onEndpoint?.({ p50: percentile(.5), p95: percentile(.95), measured: values.length, total: attempts.length, failed: attempts.filter(span => span.outcome === "failed").length, truncated: view.local.truncated, sourceCount: sources.size, reason: reason ?? (values.length === 0 ? "No completed endpoint attempts in this cohort" : null) });
   });
   const spans=$derived([...(view?.local.records??[]),...(view?.controller?.records??[])]);
   const turns=$derived([...new Set([...spans.map(s=>s.link.turn),...(view?.controller?.engine.queues??[]).map(q=>q.link.turn),...(view?.controller?.engine.live??[]).map(q=>q.link.turn)])]);
@@ -36,14 +55,14 @@
   async function inspect(retention=false){
     if(busy||!native||!runtime||runtime.locked)return;
     busy=true;message="";const current=++generation;
-    try{const result=await command<View>(retention?"set_trace_retention":"accepted_traces",retention?{days:Number(days)}:{turn:null});if(current===generation){view=result;days=result.local.trace_days;if(!turns.includes(selected))selected="";}}
-    catch(e){if(current===generation)message=String(e);}finally{busy=false;}
+    try{const result=await command<View>(retention?"set_trace_retention":"accepted_traces",retention?{days:Number(days)}:{turn:null});if(mounted&&current===generation){view=result;days=result.local.trace_days;if(!turns.includes(selected))selected="";}}
+    catch(e){if(mounted&&current===generation)message=String(e);}finally{busy=false;}
   }
   async function exportTrace(){
     if(busy||!native||!runtime||runtime.locked)return;
     busy=true;message="";const current=++generation;
-    try{const path=await command<string>("export_accepted_traces",{turn:selected||null});if(current===generation)message=`Saved redacted trace export: ${path}`;}
-    catch(e){if(current===generation)message=String(e);}finally{busy=false;}
+    try{const path=await command<string>("export_accepted_traces",{turn:selected||null});if(mounted&&current===generation)message=`Saved redacted trace export: ${path}`;}
+    catch(e){if(mounted&&current===generation)message=String(e);}finally{busy=false;}
   }
 </script>
 <section class="section">
