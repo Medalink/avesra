@@ -74,6 +74,25 @@ only permits an explicit DOM expression and optional new screenshot; it neither
 creates application state nor supplies a visual assertion. See
 `background-evidence.md` for commands and evidence boundaries.
 
+## People wrapper follow-up
+
+The People section places the existing Windows verification banner before the
+Your voice card. The banner reads current verification status; Windows Hello
+runs only from its explicit button or an existing protected management action.
+The remembered-name editor belongs inside the voice card's Advanced section,
+not a separate duplicate outside the card. This wrapper change must be integrated
+with the EnrollmentView change that owns that editor.
+
+Other people uses the reference header/action and card spacing, while the enroll
+action remains visibly unavailable because there is no supported additional-person
+flow. It must not invent a person, grant or successful enrollment. Rules use the
+reference divided card, with current Personal policy from `docs/enrollment.md`:
+initial natural speech may establish the owner's provisional voice association;
+it is not truthful to claim all unknown voices are ignored during that phase.
+Voice association never grants permissions or proves identity. Source entry points
+are the SettingsView People wrapper and existing SetupLock; enrollment, protected
+verification and speaker persistence commands are unchanged.
+
 ## Observed production proof for 7690fc1
 
 On 2026-09-26 the separately operated, installed production package was inspected

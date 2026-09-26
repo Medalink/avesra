@@ -12,7 +12,7 @@
   import VoiceAtmosphere from "./VoiceAtmosphere.svelte";
   import ShortcutSettings from "./ShortcutSettings.svelte";
   import EnrollmentView from "./EnrollmentView.svelte";
-  import OwnerName from "./OwnerName.svelte";
+  import SetupLock from "./SetupLock.svelte";
   import MicrophoneMeter from "./MicrophoneMeter.svelte";
   import AppCatalog from "./AppCatalog.svelte";
   import ActionTasks from "./ActionTasks.svelte";
@@ -574,19 +574,27 @@
             </div>
           </section>
         {:else if section === "people"}
+          <SetupLock {runtime} />
           <EnrollmentView {runtime} {navigate} {control} />
-          <OwnerName {runtime} />
-          <section class="section">
-            <span class="av-kicker">Other people</span>
-            <p class="av-hint">
-              No additional people are enrolled. Only the authenticated owner
-              can add people or change permissions.
-            </p>
+          <section class="flex flex-col gap-2.5">
+            <div class="flex items-center justify-between">
+              <span class="av-kicker">Other people</span>
+              <button type="button" class="av-btn av-btn-ghost av-btn-sm" disabled title="Additional-person enrollment is not available in this build">Enroll a person</button>
+            </div>
+            <div class="av-card flex flex-col gap-2.5 p-3.5">
+              <span class="text-[13px] font-medium text-zinc-50">Additional people are not available yet</span>
+              <p class="av-hint">Personal conversation uses the current Windows owner's voice association. Additional-person enrollment and permissions are not available in this build.</p>
+            </div>
           </section>
-          <div class="warning">
-            A voice match alone cannot change ownership or approve high-impact
-            actions.
-          </div>
+          <section class="flex flex-col gap-2">
+            <span class="av-kicker">Rules that don’t change</span>
+            <div class="av-card flex flex-col divide-y divide-white/[0.06]">
+              <div class="px-3.5 py-2.5 text-[12.5px] text-zinc-300">For a new Personal voice, the first accepted natural utterance is treated as the Windows owner's provisional voice. After that initial association, mismatching voices do not update it.</div>
+              <div class="px-3.5 py-2.5 text-[12.5px] text-zinc-300">A voice match never grants permissions or changes ownership. Protected management requires Windows verification.</div>
+              <div class="px-3.5 py-2.5 text-[12.5px] text-zinc-300">Voice ID is not secure authentication. Recordings, synthesis or illness can fool it; a voice association is not identity verification.</div>
+              <div class="px-3.5 py-2.5 text-[12.5px] text-zinc-300">Raw enrollment audio stays in memory. Saved voice features are protected on this PC; selected advanced profiles are not retuned by Personal learning.</div>
+            </div>
+          </section>
         {:else if section === "awareness"}
           <section class="section">
             <span class="av-kicker">Observation scope</span>
