@@ -248,7 +248,7 @@ TTS. Evidence is retained under
 
 - `cancel.wav` is the **completed default preview**, 9.52 seconds, despite its
   earlier chosen filename. It is not cancellation evidence.
-- In a fresh diagnostic process, the 367-byte preview started at
+- In a fresh diagnostic process, the 366-byte preview started at
   `06:47:22.825Z`; navigating to Models at `06:47:30.701Z` unmounted VoiceDesigner.
   `interrupted.wav` finalized at 7.58 seconds with `stream_disposed` and hardware
   silence. `tts-after-interrupt.json` reports loaded, idle TTS with the successful
