@@ -37,6 +37,7 @@
     && status.candidates.some(c => c.state === "available" && sameVoice(c.identity, status?.selected)));
   const selected = $derived(status?.candidates.find(c => c.identity?.id === status?.selected?.id && c.identity?.revision === status?.selected?.revision) ?? null);
   const shown = $derived(candidate ?? selected);
+  const shownReference = $derived(busy === "preview" ? previewText : shown?.text ?? "");
   const available = $derived(native && !!panel && !!runtime?.connected && !runtime?.locked);
   const count = $derived(description.length);
   const isSelected = $derived(!!candidate?.identity && candidate.identity.id === status?.selected?.id && candidate.identity.revision === status?.selected?.revision);
@@ -61,7 +62,7 @@
       if (raw.length > 8192) throw new Error("Invalid draft");
       const draft = JSON.parse(raw);
       if (draft.version !== 1 || typeof draft.description !== "string" || draft.description.length > 4096 || typeof draft.hasDescription !== "boolean" || typeof draft.open !== "boolean" || typeof draft.candidate !== "string" || (draft.candidate !== "" && !/^[0-9a-f-]{36}:[0-9a-f-]{36}$/.test(draft.candidate))) throw new Error("Invalid draft");
-      description = draft.description; hasDraft = draft.hasDescription; rememberedCandidate = draft.candidate; designerOpen = draft.open;
+      description = draft.description; hasDraft = draft.hasDescription; rememberedCandidate = draft.candidate;
     } catch { storageError = "The saved voice draft could not be restored. Saved voices can still be loaded from Spark."; }
   }
   function acceptStatus(value: VoiceStatus) {
@@ -72,7 +73,6 @@
       if (candidate) {
         description = candidate.description ?? "";
         rememberedCandidate = `${candidate.id}:${candidate.revision}`;
-        designerOpen = true;
         saveDraft();
       }
     } else if (rememberedCandidate && !candidate) {
@@ -180,20 +180,21 @@
     <button type="button" class={`av-btn av-btn-sm ${repeating ? "av-btn-primary" : "av-btn-secondary"}`} disabled={!repeating && (!available || !!busy || !shown?.identity || !!playbackBlock)} onclick={() => { if (repeating) repeating = false; else void preview(true); }}>{repeating ? "Stop repeating" : "Repeat preview"}</button>
     <span class="av-hint">{repeating ? "Tune below while it repeats. Stop finishes this take." : "Reuses this saved take. No voice regeneration."}</span>
   </div>
-  <div class="av-card flex flex-col gap-2.5 p-3.5">
+  <div class={`flex h-11 items-center gap-3 px-3 ring-1 ring-inset transition-colors ${busy === "preview" ? "bg-red-500/[0.06] ring-red-500/30" : "bg-black/20 ring-white/[0.06]"}`}>
+    <span class="min-w-0 flex-1 truncate text-[12px] leading-[17px] text-zinc-300" title={shownReference}>{shownReference ? `“${shownReference}”` : "Saved reference text unavailable"}</span>
+    <span class="shrink-0 font-mono text-[10.5px] text-zinc-400">{busy === "preview" ? "Preview in progress" : "Saved reference"}</span>
+  </div>
+  <div class="flex flex-col gap-1.5">
     <label class="av-label" for="voice-test-text">Test selected voice</label>
-    <textarea id="voice-test-text" rows="3" maxlength="512" class={`av-input av-textarea resize-none${testTextError ? " av-invalid" : ""}`} bind:value={testText} disabled={!!busy} aria-invalid={!!testTextError} aria-describedby="voice-test-help voice-test-count"></textarea>
-    <div class="flex items-center justify-between gap-3">
-      <span id="voice-test-help" class={`text-[11.5px] leading-4 ${testTextError ? "text-red-400" : "text-zinc-400"}`}>{testTextError || "Uses your selected voice with its effects and atmosphere. Doesn’t change your saved voice."}</span>
-      <span id="voice-test-count" class={`shrink-0 font-mono text-[10.5px] ${testBytes > 512 ? "text-red-400" : "text-zinc-400"}`}>{testBytes} / 512 bytes</span>
-    </div>
+    <textarea id="voice-test-text" rows="2" maxlength="512" class={`av-input av-textarea resize-none${testTextError ? " av-invalid" : ""}`} bind:value={testText} disabled={!!busy} aria-invalid={!!testTextError} aria-describedby="voice-test-help voice-test-count"></textarea>
     <div class="flex flex-wrap items-center gap-2">
-      <span class="av-hint flex-1">{!testVoiceReady ? "Select an available voice and refresh status to test it." : playbackBlock}</span>
+      <span id="voice-test-help" class={`min-w-0 flex-1 text-[11.5px] leading-4 ${testTextError ? "text-red-400" : "text-zinc-400"}`}>{testTextError || "Uses your selected voice, effects and atmosphere."}</span>
+      <span id="voice-test-count" class={`shrink-0 font-mono text-[10.5px] ${testBytes > 512 ? "text-red-400" : "text-zinc-400"}`}>{testBytes} / 512 bytes</span>
       <button type="button" class="av-btn av-btn-ghost av-btn-sm" disabled={!!busy} onclick={() => { testText = referenceText; }}>Use default</button>
       <button type="button" class="av-btn av-btn-secondary av-btn-sm" disabled={!available || !!busy || !!playbackBlock || !testVoiceReady || !!testTextError} onclick={playText}>{busy === "test" ? "Synthesizing and playing…" : "Play text"}</button>
     </div>
+    {#if !testVoiceReady || playbackBlock}<span class="av-hint">{!testVoiceReady ? "Select an available voice and refresh status to test it." : playbackBlock}</span>{/if}
   </div>
-  {#if previewText}<div class={`flex h-11 items-center gap-3 px-3 ring-1 ring-inset transition-colors ${busy === "preview" ? "bg-red-500/[0.06] ring-red-500/30" : "bg-black/20 ring-white/[0.06]"}`}><span class="min-w-0 flex-1 truncate text-[12px] leading-[17px] text-zinc-300" title={previewText}>“{previewText}”</span><span class="shrink-0 font-mono text-[10.5px] text-zinc-400">{busy === "preview" ? "Reference preview" : "Generated reference"}</span></div>{/if}
   {#if designerOpen}
     <div class="av-rise av-card flex flex-col gap-2.5 p-3.5">
       <label class="av-label" for="vdesc">Describe the voice</label>
