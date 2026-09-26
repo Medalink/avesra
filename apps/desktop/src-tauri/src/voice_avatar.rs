@@ -1,12 +1,16 @@
 //! Optional actor-bound presentation. This module never creates voice authority.
 #[path = "voice_avatar_shape.rs"]
 mod shape;
-use avesra_core::voice::personal::Voice;
+use avesra_core::{
+    app_timing::{Operation, Outcome, Portrait, Span, Stage},
+    voice::personal::Voice,
+};
 use ring::rand::{SecureRandom, SystemRandom};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 pub(crate) use shape::Parameters;
 use std::{
+    cell::Cell,
     io::{Read, Write},
     path::Path,
 };
@@ -16,6 +20,50 @@ use zeroize::{Zeroize, Zeroizing};
 const SPEAKER: &str = "0f99f2d0ebe89ac095bcc5903c4dd8f72b367286";
 const MAX_ACTORS: usize = 128;
 const MAX_RECORDS: usize = 32;
+
+/// Per-call observer identity only; never reuse an actor, source or record UUID.
+struct Timings {
+    operation: Uuid,
+    withdrawn: Cell<bool>,
+}
+impl Timings {
+    fn phase<T>(
+        &self,
+        phase: Portrait,
+        work: impl FnOnce() -> Result<T, String>,
+    ) -> Result<T, String> {
+        let span = Span::with_operation(
+            Operation::Portrait(phase),
+            Stage::Work,
+            Some(self.operation),
+        );
+        let result = work();
+        span.finish(match &result {
+            Ok(_) => Outcome::Complete,
+            Err(_) if self.withdrawn.get() => Outcome::Withdrawn,
+            Err(_) => Outcome::Failed,
+        });
+        result
+    }
+}
+fn observed<T>(
+    phase: Portrait,
+    authorize: &mut dyn FnMut() -> Result<(), String>,
+    work: impl FnOnce(&Timings, &mut dyn FnMut() -> Result<(), String>) -> Result<T, String>,
+) -> Result<T, String> {
+    let timings = Timings {
+        operation: Uuid::new_v4(),
+        withdrawn: Cell::new(false),
+    };
+    let mut checked = || {
+        let result = authorize();
+        if result.is_err() {
+            timings.withdrawn.set(true);
+        }
+        result
+    };
+    timings.phase(phase, || work(&timings, &mut checked))
+}
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum Source {
@@ -294,13 +342,24 @@ pub(crate) fn current(
     microphone: &str,
     authorize: &mut dyn FnMut() -> Result<(), String>,
 ) -> Result<View, String> {
+    observed(Portrait::Prepare, authorize, |timings, authorize| {
+        current_observed(directory, microphone, authorize, timings)
+    })
+}
+fn current_observed(
+    directory: &Path,
+    microphone: &str,
+    authorize: &mut dyn FnMut() -> Result<(), String>,
+    timings: &Timings,
+) -> Result<View, String> {
     let _candidates = super::lock_directory(&directory.join("speaker-candidates"))?;
     authorize()?;
-    let Some(source) = resolve(directory, microphone)? else {
+    let Some(source) = timings.phase(Portrait::SourceLoad, || resolve(directory, microphone))?
+    else {
         return Ok(View::missing());
     };
     let _avatars = super::lock_directory(&directory.join("voice-avatars"))?;
-    let saved = load(directory)?;
+    let saved = timings.phase(Portrait::VaultLoad, || load(directory))?;
     let initialize = saved.is_none();
     let mut vault = if let Some(vault) = saved {
         vault
@@ -362,12 +421,14 @@ pub(crate) fn current(
         });
         vault.actors.len() - 1
     };
-    let parameters = shape::build(
-        &vault.key,
-        &source.representation,
-        vault.actors[index].ring.clone(),
-        vault.actors[index].rotation,
-    )?;
+    let parameters = timings.phase(Portrait::Derive, || {
+        shape::build(
+            &vault.key,
+            &source.representation,
+            vault.actors[index].ring.clone(),
+            vault.actors[index].rotation,
+        )
+    })?;
     let candidate = source.source.candidate();
     vault.actors[index].record = Some(Record {
         owner_revision: source.revision,
@@ -376,14 +437,17 @@ pub(crate) fn current(
         source_digest: source.source_digest,
         parameters: parameters.clone(),
     });
-    publish(directory, &vault, initialize, &mut || {
-        authorize()?;
-        if crate::owner::identity(directory).map_err(|_| "Avatar owner unavailable")?
-            != (source.actor, source.revision)
-        {
-            return Err("Avatar owner changed".into());
-        }
-        Ok(())
+    timings.phase(Portrait::Publish, || {
+        publish(directory, &vault, initialize, &mut || {
+            authorize()?;
+            if crate::owner::identity(directory).map_err(|_| "Avatar owner unavailable")?
+                != (source.actor, source.revision)
+            {
+                timings.withdrawn.set(true);
+                return Err("Avatar owner changed".into());
+            }
+            Ok(())
+        })
     })?;
     authorize()?;
     Ok(View {
@@ -401,8 +465,19 @@ pub(super) fn remove_candidate(
     revision: Uuid,
     authorize: &mut dyn FnMut() -> Result<(), String>,
 ) -> Result<(), String> {
+    observed(Portrait::Remove, authorize, |timings, authorize| {
+        remove_candidate_observed(directory, id, revision, authorize, timings)
+    })
+}
+fn remove_candidate_observed(
+    directory: &Path,
+    id: Uuid,
+    revision: Uuid,
+    authorize: &mut dyn FnMut() -> Result<(), String>,
+    timings: &Timings,
+) -> Result<(), String> {
     let _lock = super::lock_directory(&directory.join("voice-avatars"))?;
-    let Some(mut vault) = load(directory)? else {
+    let Some(mut vault) = timings.phase(Portrait::VaultLoad, || load(directory))? else {
         return Ok(());
     };
     let source = Source::Candidate { id, revision };
@@ -414,7 +489,9 @@ pub(super) fn remove_candidate(
         }
     }
     if changed {
-        publish(directory, &vault, false, authorize)?;
+        timings.phase(Portrait::Publish, || {
+            publish(directory, &vault, false, authorize)
+        })?;
     }
     Ok(())
 }

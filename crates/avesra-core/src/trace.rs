@@ -259,7 +259,7 @@ pub fn initialize(directory: &Path, host: Host) -> Result<(), ErrorCode> {
         if occupied {
             return Err(ErrorCode::Malformed);
         }
-    } else if !matches!(version, 1..=7) {
+    } else if !matches!(version, 1..=8) {
         return Err(ErrorCode::Unsupported);
     }
 
@@ -268,7 +268,7 @@ pub fn initialize(directory: &Path, host: Host) -> Result<(), ErrorCode> {
     crate::resource_observer::initialize(&db)?;
     crate::engine_observer::initialize(&db)?;
     crate::app_timing::initialize(&db)?;
-    sql(db.execute_batch("PRAGMA user_version=7;"))?;
+    sql(db.execute_batch("PRAGMA user_version=8;"))?;
     let loss = Arc::new(AtomicU64::new(0));
     let process = Uuid::new_v4();
     let losses = loss.clone();
