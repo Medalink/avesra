@@ -11,6 +11,10 @@ The avatar is a portrait, not a password. It makes the owner's voice identity vi
 
 ## Owner delivery requirements (2026-09-26)
 
+The [acceptance matrix](003-acceptance-matrix.md) separates implementation from
+live proof for each remaining criterion. It was audited at integration `2d8eb3a`;
+no unfinished criterion is waived by the current mock's geometry override.
+
 The owner requires complete functional implementation, exact matching to the authoritative design mockups in the real app, actual evidence, and PRs as work proceeds. Compare matching states at the same scale. Simulated mock data must be replaced with actual native state, never copied as success evidence. Preserve the simple Personal conversation startup: optional portrait creation must not become a new prerequisite to talking. Instrument portrait capture/extraction/render preparation with bounded content-free timings, including failures/cancellation; biometric inputs and render parameters are excluded from metrics. Live capture and repeatability evidence remain unrun.
 
 
