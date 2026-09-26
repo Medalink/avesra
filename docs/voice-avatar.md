@@ -112,6 +112,8 @@ operation names use the existing `work` stage:
 
 | Operation | Actual measured boundary |
 | --- | --- |
+| `redraw_prepare` | Native `prepare_redraw` helper through proposal construction; excludes command admission, ticket installation and caller receipt |
+| `redraw_confirm` | Native `confirm_redraw` helper through replacement/cleanup; excludes later command context checks and caller receipt |
 | `prepare` | Entire retained `voice_avatar::current` call, including source/vault locking and preparation; not the Settings IPC or worker retirement |
 | `source_load` | Native current-owner/Personal/candidate source resolution |
 | `vault_load` | Protected vault/key read, decode and validation, including a legitimate absent vault |
@@ -119,13 +121,18 @@ operation names use the existing `work` stage:
 | `publish` | Protected encoding, staging, sync, final authorization and atomic publication, including pending-file cleanup |
 | `remove` | Source-bound avatar cleanup during candidate deletion; not subsequent candidate/selection deletion |
 
-Each preparation or removal call creates a fresh random timing operation UUID,
-unrelated to its actor, profile, candidate, source, display digest or ring. Nested
-phases share only that timing UUID. Existing authorization-check rejection and an
-publication-time owner mismatch produce `withdrawn`; other returned errors produce
-`failed`. A returned successful phase produces `complete`; a dropped unfinished
-span produces `abandoned`. Missing source/vault or an already-absent cleanup is a
-successful lookup/no-op, not proof of a populated avatar or a deleted profile.
+Each preparation, removal or redraw helper call creates a fresh random timing
+operation UUID, unrelated to its actor, profile, candidate, source, display digest or ring. Nested
+phases share only that timing UUID. Existing authorization-check rejection and a
+publication-time owner mismatch produce `withdrawn`; redraw confirmation also
+marks missing/changed expected source, registry actor or previous record as
+withdrawn. The locked finalization callback distinguishes context withdrawal from
+publication failure with an internal typed result, preserving the original error
+and authority behavior. Other returned errors produce `failed`. A returned successful phase produces `complete`; a dropped unfinished
+span produces `abandoned`. An ordinary read with no source/vault or an
+already-absent cleanup is a successful lookup/no-op, not proof of a populated
+avatar or deleted profile. Redraw preparation requires a source/vault, so absence
+fails; confirmation treats a missing expected source/registry actor as withdrawn.
 No new authorization checks, retries or result changes are introduced by timing.
 
 A phase that completed before later withdrawal keeps its actual outcome. In
@@ -143,8 +150,8 @@ product Store schema 30 and accepted trace query version 3 remain unchanged.
 Older telemetry writers must not reopen the newer store. Installed migration and
 retained timing/export proof remain unrun.
 
-Capture/extraction and redraw have no implementation in this slice. Frontend SVG
-preparation, GPU presentation, owner qualification and end-to-end latency are not
+Capture/extraction remain unimplemented. Redraw helper phases are covered below.
+Frontend SVG preparation, GPU presentation, owner qualification and end-to-end latency are not
 measured by these native phases. Timing does not enable capture, create authority,
 make the portrait required for conversation or establish Plan 003 completion.
 
@@ -223,9 +230,18 @@ removed actor registry or changes another actor's record.
 Affected entry points are these three commands, Setup invalidation, and the native
 avatar prepare/replace helpers. Existing avatar reading/initial creation, source
 selection/deletion and Personal startup remain unchanged. Optional acoustic
-capture and additional-person management remain outside this slice. Native phase
-timing is integrated separately with the shared content-free observer; parameters,
-digests, tickets and biometric sources are never timing attributes.
+capture and additional-person management remain outside this slice. The shared
+content-free observer records distinct `redraw_prepare` and `redraw_confirm`
+roots. Preparation measures source/vault loading and actual derivation;
+confirmation measures exact expected source/vault validation and publication,
+without pretending to derive the retained proposal again. The two explicit calls
+have independent fresh timing UUIDs; ticket/source identity never links them.
+Success is local helper completion, not proof of ticket installation, later
+command acceptance or UI receipt. Early command admission/cancellation and work
+outside these helpers remain outside native phase coverage (frontend round trips
+remain separate). Parameters, digests, tickets, source IDs and error details never
+enter observations. These finite roots join unreleased telemetry schema 8; no
+additional schema bump or accepted-query change is introduced.
 
 Manual proof remains unrun: with a genuine saved source and explicit owner Hello,
 inspect pending preview, cancel without publication, save, and reopen/restart to

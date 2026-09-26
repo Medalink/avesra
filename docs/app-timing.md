@@ -54,7 +54,7 @@ never completion. Caller withdrawal does not imply actual worker retirement.
 | `SettingsView::navigate` | Selected finite view commit/next-frame; superseded work abandoned |
 | Native `main::setup`, `Store::open` + settings read | Native initialization and actual synchronous store work |
 | `NativeEffects::conversation_history`, `Command::History` | Original queue wait, actual work and content-owner retirement |
-| `voice_avatar::current`, source/vault load, derivation/publication and candidate avatar cleanup | Native finite portrait phases; see [the phase boundaries](voice-avatar.md#native-portrait-timing-contract) |
+| `voice_avatar::current`, redraw prepare/confirm, source/vault load, derivation/publication and candidate avatar cleanup | Native finite portrait phases; see [the phase boundaries](voice-avatar.md#native-portrait-timing-contract) |
 | App timing ingress/read/export | Observer-only; excluded from command instrumentation |
 | Preview/normal voice/planner/actions | Existing performance/accepted trace observers unchanged |
 | Other native commands' internals, model load/health, protected writes, browser/provider phases | Frontend round trip only; internal stage instrumentation remains pending |
@@ -103,8 +103,8 @@ cannot prove an installed upgrade or observed timings for these new commands.
 ## Portrait operation compatibility (telemetry schema 8)
 
 `Operation::Portrait` carries only `prepare`, `source_load`, `vault_load`,
-`derive`, `publish` or `remove`, using the existing native `work` stage. The
-Settings frontend ingress rejects these native-only operations. App timings UI
+`derive`, `publish`, `remove`, `redraw_prepare` or `redraw_confirm`, using the
+existing native `work` stage. The Settings frontend ingress rejects these native-only operations. App timings UI
 and export retain operation kind/name and outcome; no source or biometric fields
 are added. Nested native phases share a fresh per-call timing UUID and overlap;
 their durations must not be summed or subtracted from frontend clocks.
